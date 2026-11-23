@@ -849,7 +849,8 @@ fn the_small_speed_division_links_no_wide_path_and_divides_like_the_hot_one() {
 /// with seven load/store pairs; every cold program at -O1..-O3 that divides a
 /// signed long linked them (`compound_assignment_types`: +15 B over sdcc). The
 /// lean variant, which those programs call, moves it in an indexed loop over
-/// the eight-byte chain in 15 B; the small one, which -Os chooses, is unchanged.
+/// the eight-byte chain in 15 B; the small one, which -Os chooses, is
+/// unchanged.
 #[test]
 fn the_lean_speed_signed_division_links_in_few_bytes() {
     let linked = |name: &str, call: &str| {
@@ -904,6 +905,134 @@ fn the_wide_path_saves_a_call_what_the_hot_threshold_assumes() {
         shapes.iter().map(|&(a, b)| clocks("__udivsi3_fast_small", a, b) - clocks("__udivsi3_fast", a, b)).sum();
     let mean = saved as f64 / shapes.len() as f64;
     assert!(mean >= llrm_6502::hotdivision::SAVED_CLOCKS * 0.9, "the wide path saves {mean} clocks a call");
+}
+
+/// `__mulsi3_fast` tested for the end of the multiplier once a byte: a 17-bit
+/// multiplier walked 24 bits, 1,828 clocks for 1664525 where llvm-mos's
+/// `__mulsi3`, which stops after the top set bit, ran 1,618 (mul_constants
+/// O1 x1.16 over llvm-mos, 78% of it in this routine). One bit more of
+/// multiplier is one more trip, about 115 clocks, not a byte's worth (8 trips,
+/// about 480).
+#[test]
+fn the_fast_multiply_ends_the_walk_at_the_top_set_bit() {
+    let call = |b: u32| {
+        let setup = common::long_args("__mulsi3_fast", 0x9E37_79B9, b);
+        common::cycles_with(&format!("mulbit-{b:x}"), &format!("{setup}  jsr __mulsi3_fast\n"), "")
+            - common::cycles_with(&format!("mulbit-none-{b:x}"), &setup, "")
+    };
+    let (sixteen, seventeen) = (call(0x0000_FFFF), call(0x0001_FFFF));
+    assert!(seventeen - sixteen < 300, "a 17th bit of the multiplier costs {} clocks", seventeen - sixteen);
+}
+
+/// The exit test of the bit walk reads the four multiplier bytes from the top:
+/// every pair of 8-bit factors against the compact walk (eight programs of 32
+/// first factors each: a program is capped at 50 million clocks).
+#[test]
+fn the_fast_multiply_is_exact_for_every_pair_of_bytes() {
+    let call = |routine: &str| {
+        format!(
+            "  lda #0\n  sta rc5\n  sta rc6\n  sta rc7\n  sta rc2\n  sta rc3\n  lda rc12\n  sta rc4\n  ldx #0\n  lda rc14\n  jsr {routine}\n"
+        )
+    };
+    for slice in 0..8u32 {
+        let main = format!(
+            "  lda #{}\n  sta rc12\n@outer:\n  lda #0\n  sta rc14\n@inner:\n{}  sta rc8\n  stx rc9\n{}  cmp rc8\n  bne @bad\n  cpx rc9\n  bne @bad\n  lda rc2\n  ora rc3\n  bne @bad\n  inc rc14\n  bne @inner\n  inc rc12\n  lda rc12\n  and #31\n  bne @outer\n  lda #0\n  rts\n@bad:\n  lda #1\n",
+            slice * 32,
+            call("__mulsi3_fast"),
+            call("__mulsi3")
+        );
+        assert_eq!(
+            common::run_with(&format!("mulfast-bytes-{slice}"), &main, ""),
+            0,
+            "first factors {}..{}",
+            slice * 32,
+            slice * 32 + 31
+        );
+    }
+}
+
+/// Twenty-five hundred pairs of 32-bit factors, the multiplier cut to a random
+/// width so that the exit comes at every bit: `__mulsi3_fast` against the
+/// compact `__mulsi3`, both orders of the operands. The pairs come from `s = s
+/// * 69069 + 1` (the compact routine; the generator's quality does not matter,
+/// only that the two routines see the same operands).
+#[test]
+fn the_fast_multiply_matches_the_compact_walk_on_random_longs() {
+    // cells: a rc8.., b rc12.., s rc16.., fast product rc20.., shift count rc24
+    let cell = |base: u32, at: u32| format!("rc{}", base + at);
+    let load_args = |x: u32, y: u32| {
+        let mut t = String::new();
+        for at in 0..4 {
+            t += &format!("  lda {}\n  sta rc{}\n", cell(y, at), 4 + at);
+        }
+        t += &format!(
+            "  lda {}\n  sta rc2\n  lda {}\n  sta rc3\n  ldx {}\n  lda {}\n",
+            cell(x, 2),
+            cell(x, 3),
+            cell(x, 1),
+            cell(x, 0)
+        );
+        t
+    };
+    let save = |base: u32| {
+        format!(
+            "  sta {}\n  stx {}\n  lda rc2\n  sta {}\n  lda rc3\n  sta {}\n",
+            cell(base, 0),
+            cell(base, 1),
+            cell(base, 2),
+            cell(base, 3)
+        )
+    };
+    // s = s * 69069 + 1
+    let mut step = String::new();
+    for (at, byte) in [0xCDu32, 0x0D, 0x01, 0x00].into_iter().enumerate() {
+        step += &format!("  lda #{byte}\n  sta rc{}\n", 4 + at);
+    }
+    step += &format!(
+        "  lda {}\n  sta rc2\n  lda {}\n  sta rc3\n  ldx {}\n  lda {}\n  jsr __mulsi3\n",
+        cell(16, 2),
+        cell(16, 3),
+        cell(16, 1),
+        cell(16, 0)
+    );
+    step += &format!(
+        "  clc\n  adc #1\n  sta {}\n  txa\n  adc #0\n  sta {}\n  lda rc2\n  adc #0\n  sta {}\n  lda rc3\n  adc #0\n  sta {}\n",
+        cell(16, 0),
+        cell(16, 1),
+        cell(16, 2),
+        cell(16, 3)
+    );
+    let copy = |from: u32, to: u32| {
+        (0..4).map(|at| format!("  lda {}\n  sta {}\n", cell(from, at), cell(to, at))).collect::<String>()
+    };
+    let mut main = String::from(
+        "  lda #$9E\n  sta rc16\n  lda #$37\n  sta rc17\n  lda #$79\n  sta rc18\n  lda #$B9\n  sta rc19\n  lda #<2500\n  sta rc0\n  lda #>2500\n  sta rc1\n@trial:\n",
+    );
+    main += &step;
+    main += &copy(16, 8);
+    main += &step;
+    main += &copy(16, 12);
+    // cut b to a width of (s mod 32) bits: shift it down that many times
+    main += "  lda rc16\n  and #31\n  sta rc24\n  beq @cut_done\n@cut:\n  lsr rc15\n  ror rc14\n  ror rc13\n  ror rc12\n  dec rc24\n  bne @cut\n@cut_done:\n";
+    for (x, y) in [(8, 12), (12, 8)] {
+        main += &load_args(x, y);
+        main += "  jsr __mulsi3_fast\n";
+        main += &save(20);
+        main += &load_args(x, y);
+        main += "  jsr __mulsi3\n";
+        let check = |a: String, n: u32| format!("  {a}\n  beq @ok{n}\n  jmp @bad\n@ok{n}:\n");
+        let at = main.len() as u32;
+        main += &format!("  cmp {}\n", cell(20, 0));
+        main += &check(String::new(), at);
+        main += &format!("  cpx {}\n", cell(20, 1));
+        main += &check(String::new(), at + 1);
+        main += &format!("  lda rc2\n  cmp {}\n", cell(20, 2));
+        main += &check(String::new(), at + 2);
+        main += &format!("  lda rc3\n  cmp {}\n", cell(20, 3));
+        main += &check(String::new(), at + 3);
+    }
+    main += "  lda rc0\n  bne @dec\n  dec rc1\n@dec:\n  dec rc0\n  lda rc0\n  ora rc1\n  beq @ok\n  jmp @trial\n@ok:\n  lda #0\n  rts\n@bad:\n  lda #1\n";
+    assert_eq!(common::run_with("mulfast-random", &main, ""), 0);
 }
 
 /// `hotmultiply::SAVED_CLOCKS`: what `__mulsi3_fast` saves a call, averaged

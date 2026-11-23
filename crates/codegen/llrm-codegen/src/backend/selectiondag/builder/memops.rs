@@ -469,17 +469,16 @@ impl Builder<'_> {
         MAX_INLINE_SIZE.max(speed)
     }
 
-    /// `-Oz` is `rep movsb` whatever the size; REP-MOVS-OS keeps a block
-    /// narrower than a dword to the target's limit (the pin's 128 bytes on
-    /// m32), past which the call copies by dwords.
+    /// `-Oz` is `rep movsb` whatever the size; REP-MOVS-OS keeps a block of
+    /// any alignment to the target's limit (the pin's 128 bytes on m32), past
+    /// which the call copies by dwords. A longer `rep movs` fixes ESI/EDI/ECX
+    /// over the copy, which a whole-function value cannot then use (exec.c's
+    /// interpreter pc spilled in every handler).
     fn rep_movs_within_limit(
         &self,
         bytes: u64,
-        alignment: u64,
     ) -> bool {
-        self.has_min_size()
-            || alignment >= 4
-            || self.target.tti.as_ref().is_none_or(|tti| bytes <= tti.0.rep_movs_at_size_max())
+        self.has_min_size() || self.target.tti.as_ref().is_none_or(|tti| bytes <= tti.0.rep_movs_at_size_max())
     }
 
     /// DEVIATE REP-MOVS-OS keeps `rep movs` up to the target's limit at `-Os`,
@@ -1388,7 +1387,7 @@ impl Builder<'_> {
                     (Some(chain), _, _) => chain,
                     (None, Intrinsic::MemCpy, _) if hooked.is_some() => hooked.expect("checked"),
                     (None, Intrinsic::MemCpy, Some(bytes))
-                        if strings_exist && self.rep_movsb_copy() && self.rep_movs_within_limit(bytes, alignment) =>
+                        if strings_exist && self.rep_movsb_copy() && self.rep_movs_within_limit(bytes) =>
                     {
                         self.rep_movs(root, dst, other, bytes, dst_align.min(src_align), dst_align, src_align)?
                     }

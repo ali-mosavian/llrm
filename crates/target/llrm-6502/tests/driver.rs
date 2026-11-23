@@ -3303,7 +3303,7 @@ fn an_os_word_divide_takes_the_speed_routine_only_where_its_clocks_repay_the_byt
 
 /// At -Os the long multiply is the 32-step compact walk (mul_constants: 42.0M
 /// clocks in 200-trip loops, llvm-mos 13.6M); `__mulsi3_fast` stops at the
-/// multiplier's last byte and is 19 B larger, linked once. A module takes
+/// multiplier's top set bit and is 9 B larger, linked once. A module takes
 /// it where the share of its clocks it saves is worth the share of its bytes it
 /// adds: multiplies in its loops, not one beside loops of other work.
 #[test]
@@ -3327,7 +3327,7 @@ fn a_module_takes_the_speed_multiply_where_the_clocks_it_saves_are_its_own() {
     let work = "store volatile i32 %x, ptr @g0\n  ".repeat(12);
     let beside = multiplies(
         &format!("{work}%r2 = shl i32 %x, 3"),
-        "%p1 = mul i32 %t3, %b\n  %p2 = mul i32 %p1, %a\n  %p3 = mul i32 %p2, %b\n  %r3 = mul i32 %p3, %t3",
+        "%r3 = mul i32 %t3, %b",
     );
     let text = assembly(&beside, &Request::new(Level::Os)).unwrap();
     assert!(text.contains("__mulsi3\n") && !text.contains("__mulsi3_fast"), "{text}");
@@ -3399,4 +3399,30 @@ out:
     let ((o2, _), (os, text)) = (bytes(Level::O2), bytes(Level::Os));
     assert!(os <= o2, "-Os is {os} B, -O2 {o2} B:\n{text}");
     assert_eq!(exit_code_of(&text, "sum4"), 10, "{text}");
+}
+
+/// A 256-trip byte walk with a pointer and a word counter stayed a `(p)`
+/// pointer bump (`inc rc; bne; inc rc+1`) at -O3: the counted page-walk variant
+/// was priced only after the plain page walk had won, and on the 65C02 that one
+/// loses by 7 bytes alone. switch_table_holes O3 65c02: 55,171 clocks against
+/// 51,402 once the counted variant is tried on its own.
+#[test]
+fn a_byte_walk_is_indexed_on_the_65c02_as_on_the_6502() {
+    let ir = module(
+        "@buf = internal global [256 x i8] zeroinitializer\n\
+         define i32 @walk(i32 %seed) {\n\
+         entry:\n  br label %loop\n\
+         loop:\n  %p = phi ptr [@buf, %entry], [%p1, %loop]\n  %n = phi i16 [256, %entry], [%n1, %loop]\n  \
+         %s = phi i32 [%seed, %entry], [%s1, %loop]\n  %m = mul nsw i32 %s, 7\n  %b = load i8, ptr %p\n  \
+         %e = zext i8 %b to i32\n  %s1 = add nsw i32 %m, %e\n  %n1 = add nsw i16 %n, -1\n  \
+         %p1 = getelementptr i8, ptr %p, i16 1\n  %done = icmp eq i16 %n1, 0\n  \
+         br i1 %done, label %exit, label %loop\n\
+         exit:\n  ret i32 %s1\n}",
+    );
+    for cpu in [llrm_6502::dagisel::hooks::Cpu::Mos6502, llrm_6502::dagisel::hooks::Cpu::W65c02] {
+        let mut request = Request::new(Level::O3);
+        request.cpu = cpu;
+        let text = assembly(&ir, &request).unwrap();
+        assert!(text.contains("iny") || text.contains("inx"), "{cpu:?} bumps a pointer:\n{text}");
+    }
 }

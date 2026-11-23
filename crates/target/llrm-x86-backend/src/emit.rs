@@ -137,6 +137,8 @@ struct Emitter<'a, 'd> {
     /// The carry a flag producer made, saved in a byte before another unit
     /// wrote the flags, for the `adc`/`sbb` that still reads it.
     saved_carry: HashMap<u32, Held>,
+    saved_condition: HashMap<(u32, usize), Held>,
+    condition_tested: HashMap<u32, usize>,
     /// The machine nodes emitted: the scheduler's clone of a unit emits its
     /// node again.
     machine_emitted: llrm_support::hash::HashSet<u32>,
@@ -208,6 +210,8 @@ pub fn emit_in(
         last_select: None,
         flag_insns: HashMap::default(),
         saved_carry: HashMap::default(),
+        saved_condition: HashMap::default(),
+        condition_tested: HashMap::default(),
         machine_emitted: Default::default(),
         cloned_nodes: {
             let mut seen = llrm_support::hash::HashSet::default();
@@ -835,6 +839,7 @@ fn based_areas(
 }
 
 /// `X86::CondCode` order, the jump on each.
+const NE: usize = 5;
 const CONDITIONS: [&str; 16] =
     ["jo", "jno", "jb", "jae", "je", "jne", "jbe", "ja", "js", "jns", "jp", "jnp", "jl", "jge", "jle", "jg"];
 
@@ -1211,6 +1216,7 @@ impl Emitter<'_, '_> {
         self.machine_in(n, opcode)?;
         if writes_flags && let Some(previous) = previous {
             self.save_carry(previous, before);
+            self.save_conditions(previous, before);
         }
         // What it left in EFLAGS: a compare with no result is cheap to make
         // again where a consumer needs it (`ensure_flags`).
@@ -1296,6 +1302,87 @@ impl Emitter<'_, '_> {
         })
     }
 
+    /// The condition code the node `user` reads, when it reads one.
+    fn condition_read(
+        &self,
+        user: u32,
+    ) -> Option<usize> {
+        let ISD::Machine(op) = self.dag.opcode(SDValue { node: user, res: 0 }) else { return None };
+        let name = self.ctx.names.get(&(op as u16)).copied()?.split('|').next()?;
+        let node = self.dag.node(SDValue { node: user, res: 0 });
+        let at = match name {
+            "SETCCr" | "JCC_1" => return node.ops.iter().find_map(|op| self.dag.constant(*op)).map(|cc| cc as usize),
+            "SETCCm" => 5,
+            "CMOV16rm" | "CMOV32rm" | "CMOV64rm" => 6,
+            "CMOV16rr" | "CMOV32rr" | "CMOV64rr" => 2,
+            _ if name.starts_with("CMOV_") => 2,
+            _ => return None,
+        };
+        node.ops.get(at).and_then(|op| self.dag.constant(*op)).map(|cc| cc as usize)
+    }
+
+    /// The one condition every unit glued after the flags copy `copy` reads.
+    fn consumers_condition(
+        &self,
+        copy: u32,
+    ) -> Option<usize> {
+        let users = self.glue_users.get(&SDValue { node: copy, res: 1 })?;
+        let mut conditions = users.iter().map(|&user| self.condition_read(user));
+        let first = conditions.next()??;
+        conditions.all(|condition| condition == Some(first)).then_some(first)
+    }
+
+    /// The condition code `n` reads: `ne` when a byte saved from the flags is
+    /// tested again for it.
+    fn condition_of(
+        &self,
+        n: u32,
+        read: usize,
+    ) -> usize {
+        self.condition_tested.get(&n).copied().unwrap_or(read)
+    }
+
+    /// X86FlagsCopyLowering for the flags a unit that writes them is about to
+    /// overwrite while a consumer is still to come (the scheduler's EFLAGS
+    /// copy): the condition the consumer reads goes in a byte (`setcc`) put
+    /// before the unit, and `ensure_flags` tests the byte again. Producers that
+    /// are made again or whose carry alone is read are left to those paths.
+    fn save_conditions(
+        &mut self,
+        previous: u32,
+        before: (usize, usize),
+    ) {
+        if self.flag_insns.contains_key(&previous) {
+            return;
+        }
+        let copies: Vec<u32> = (0..self.dag.node(SDValue { node: previous, res: 0 }).values.len() as u8)
+            .flat_map(|res| self.glue_users.get(&SDValue { node: previous, res }).into_iter().flatten().copied())
+            .filter(|&user| {
+                self.dag.opcode(SDValue { node: user, res: 0 }) == ISD::CopyToReg
+                    && self.writes_flags(self.dag.node(SDValue { node: user, res: 0 }).ops[1])
+                    && !self.flag_copies_done.contains(&user)
+                    && !(self.saved_carry.contains_key(&previous) && self.reads_only_carry(user))
+            })
+            .collect();
+        for copy in copies {
+            let Some(condition) = self.consumers_condition(copy) else { continue };
+            if self.saved_condition.contains_key(&(previous, condition)) {
+                continue;
+            }
+            let held = self.fresh(1);
+            let name = format!("set{}", &CONDITIONS[condition][1..]);
+            let what =
+                Semantics { name: Some(name.into()), dests: vec![Loc::Held(held)], ..Semantics::new(Operation::Unary) };
+            let at = self.next_address();
+            let insn = Arc::new(Insn::new(at, Some((at, at)), Some(what), vec![held.value], vec![]));
+            let (block, place) = before;
+            if let Some(target) = self.blocks.get_mut(block) {
+                target.insns.insert(place.min(target.insns.len()), insn);
+                self.saved_condition.insert((previous, condition), held);
+            }
+        }
+    }
+
     /// The carry `previous` made, put in a byte before the insns node `before`
     /// pushed when a flags copy of it is still to come: the unit being emitted
     /// writes the flags first.
@@ -1362,6 +1449,19 @@ impl Emitter<'_, '_> {
             let all_ones = Imm { value: 0xFF, width: 1, address: None };
             self.push(Operation::Binary, "add", vec![Loc::Held(restored)], vec![Loc::Held(saved), Loc::Imm(all_ones)]);
             self.flags_now = Some(producer);
+            return Ok(());
+        }
+        if !self.flag_insns.contains_key(&producer)
+            && let Some(condition) = self.consumers_condition(copy)
+            && let Some(&saved) = self.saved_condition.get(&(producer, condition))
+        {
+            // The pin's X86FlagsCopyLowering: the condition saved in a byte
+            // is tested again and its readers read `ne`.
+            self.push(Operation::Compare, "test", Vec::new(), vec![Loc::Held(saved), Loc::Held(saved)]);
+            for &user in self.glue_users.get(&SDValue { node: copy, res: 1 }).into_iter().flatten() {
+                self.condition_tested.insert(user, NE);
+            }
+            self.flags_now = None;
             return Ok(());
         }
         let Some(compare) = self.flag_insns.get(&producer).cloned() else {
@@ -1791,6 +1891,7 @@ impl Emitter<'_, '_> {
             Some(cc) => cc,
             None => self.constant(node.ops[2])? as usize,
         };
+        let cc = self.condition_of(n, cc);
         let jump = *CONDITIONS.get(cc).ok_or_else(|| EmitError::Unsupported(format!("condition code {cc}")))?;
         // `CreateVirtualRegisters`: a result only exported by a `CopyToReg` is
         // made in that register, so the export emits no copy between this
@@ -3512,7 +3613,7 @@ impl Emitter<'_, '_> {
             // source replaces the first, tied to the result, when the
             // condition holds.
             "CMOV16rr" | "CMOV32rr" | "CMOV64rr" => {
-                let cc = self.constant(node.ops[2])? as usize;
+                let cc = self.condition_of(n, self.constant(node.ops[2])? as usize);
                 let jump = CONDITIONS.get(cc).ok_or_else(|| EmitError::Unsupported(format!("condition code {cc}")))?;
                 let (Loc::Held(when_false), Loc::Held(when_true)) =
                     (self.operand(node.ops[0])?, self.operand(node.ops[1])?)
@@ -3533,7 +3634,7 @@ impl Emitter<'_, '_> {
             // The same from memory: the second source is the cell, read only
             // when the condition holds (`CMOV64rm src1, [mem], cc`).
             "CMOV16rm" | "CMOV32rm" | "CMOV64rm" => {
-                let cc = self.constant(node.ops[6])? as usize;
+                let cc = self.condition_of(n, self.constant(node.ops[6])? as usize);
                 let jump = CONDITIONS.get(cc).ok_or_else(|| EmitError::Unsupported(format!("condition code {cc}")))?;
                 let Loc::Held(when_false) = self.operand(node.ops[0])? else {
                     return Err(EmitError::Unsupported("a conditional move of a non-register".to_owned()));
@@ -3553,6 +3654,7 @@ impl Emitter<'_, '_> {
                     .find_map(|op| self.dag.constant(*op))
                     .ok_or_else(|| EmitError::Unsupported("a setcc without a condition".to_owned()))?
                     as usize;
+                let cc = self.condition_of(n, cc);
                 let jump = CONDITIONS.get(cc).ok_or_else(|| EmitError::Unsupported(format!("condition code {cc}")))?;
                 let held = self.result_register(SDValue { node: n, res: 0 }, 1);
                 self.values.insert(SDValue { node: n, res: 0 }, held.value);
@@ -3569,6 +3671,7 @@ impl Emitter<'_, '_> {
                     .and_then(|op| self.dag.constant(*op))
                     .ok_or_else(|| EmitError::Unsupported("a setcc without a condition".to_owned()))?
                     as usize;
+                let cc = self.condition_of(n, cc);
                 let jump = CONDITIONS.get(cc).ok_or_else(|| EmitError::Unsupported(format!("condition code {cc}")))?;
                 let cell = self.cell(group, 1)?;
                 let name = format!("set{}", &jump[1..]);
@@ -3845,6 +3948,7 @@ impl Emitter<'_, '_> {
                 .find_map(|op| self.dag.constant(*op))
                 .ok_or_else(|| EmitError::Unsupported("a branch without a condition".to_owned()))?
                 as usize;
+            let cc = self.condition_of(n, cc);
             (
                 Operation::Branch,
                 *CONDITIONS.get(cc).ok_or_else(|| EmitError::Unsupported(format!("condition code {cc}")))?,

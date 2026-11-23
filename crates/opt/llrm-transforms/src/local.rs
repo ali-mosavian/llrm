@@ -1366,6 +1366,9 @@ fn combine_metadata(
             // Dropped, the merged `inttoptr` forges a pointer into the data
             // segment (`forging`).
             DESCRIPTOR_WORD => set_metadata(function, k, &kind, jmd.map(|_| kmd)),
+            // The list is the declaration's operand (`scope.decl(metadata)` in
+            // the pin), which K keeps.
+            crate::inlinemetadata::DECL => {}
             // Remove unknown metadata.
             _ => set_metadata(function, k, &kind, None),
         }

@@ -221,8 +221,6 @@ pub struct Profile {
     pub register_inline_frees_frame_at_size: bool,
     /// `TimingTable::tail_merge_pin_faithful`.
     pub tail_merge_pin_faithful: bool,
-    /// `TimingTable::tail_merge_pairs_at_size`.
-    pub tail_merge_pairs_at_size: bool,
     /// Equal literal stores share a register where bytes are strict
     /// (`TimingTable::share_literal_stores`).
     pub share_literal_stores: bool,
@@ -463,7 +461,6 @@ impl Profile {
             skip_computed_goto_copies_at_size: false,
             register_inline_frees_frame_at_size: false,
             tail_merge_pin_faithful: false,
-            tail_merge_pairs_at_size: false,
             share_literal_stores: false,
             share_literal_stores_at_speed: false,
             zero_extend_with_and: false,
@@ -847,7 +844,6 @@ fn _profile(
         skip_computed_goto_copies_at_size: table.skip_computed_goto_copies_at_size,
         register_inline_frees_frame_at_size: table.register_inline_frees_frame_at_size,
         tail_merge_pin_faithful: table.tail_merge_pin_faithful,
-        tail_merge_pairs_at_size: table.tail_merge_pairs_at_size,
         share_literal_stores: table.share_literal_stores,
         share_literal_stores_at_speed: table.share_literal_stores_at_speed,
         zero_extend_with_and: table.zero_extend_with_and,

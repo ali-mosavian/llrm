@@ -772,7 +772,7 @@ fn tail(
                 source = Some(paged);
             }
         }
-        if let Some((_, counted)) = counted.as_ref().filter(|(names, _)| paged_chosen && names.contains(name)) {
+        if let Some((_, counted)) = counted.as_ref().filter(|(names, _)| names.contains(name)) {
             let mut other = select_function(counted, name, request.cpu)?;
             other.zero_page = request.platform.zero_page;
             other.tuning = request.level.tuning();
@@ -843,8 +843,12 @@ fn tail(
         text = text.replace(name.as_str(), label);
     }
     let files = file.map_or_else(String::new, |name| format!(".dbg file, \"{name}\", 0, 0\n"));
-    // `-fno-outline` is the kill switch, for a test of what the backend wrote
-    let outlined = request.level != Level::O0 && !request.passes.iter().any(|flag| flag == "-fno-outline");
+    // `-fno-outline` is the kill switch, for a test of what the backend wrote;
+    // `LLRM_6502_NO_OUTLINE=1` is the same for an A/B of one binary through
+    // `llrm-cc` (which does not take the flag)
+    let outlined = request.level != Level::O0
+        && !request.passes.iter().any(|flag| flag == "-fno-outline")
+        && std::env::var_os("LLRM_6502_NO_OUTLINE").is_none();
     // A place in a loop is given up for its clocks at -O1 and -Os: at -O2 and
     // -O3 that takes div_constants_long and div_constants_ulong out of the
     // bytes that beat the other compilers', and bytes come first (row
@@ -868,7 +872,8 @@ fn tail(
     // before the transfer of known constants, which that pass makes differ
     // between copies of one run; it then runs on the outlined text, and the
     // smaller module is kept.
-    // `LLRM_6502_OUTLINE_PLAIN=0` is the kill switch, for an A/B of one binary
+    // `LLRM_6502_OUTLINE_PLAIN=0` drops only this variant, not the outliner (see
+    // `LLRM_6502_NO_OUTLINE`)
     let plain = (outlined
         && crate::copyprop::enabled(std::env::var_os("LLRM_6502_OUTLINE_PLAIN").as_deref())
         && plain_pieces.iter().zip(&pieces).any(|(plain, piece)| plain != piece))

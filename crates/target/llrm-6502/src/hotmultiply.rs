@@ -2,9 +2,9 @@
 //! multiply.
 //!
 //! # How it works
-//! `__mulsi3_fast` walks the multiplier a byte at a time and stops at its last
-//! set byte; the compact `__mulsi3` always walks 32 bits. A call saves
-//! [`SAVED_CLOCKS`] on average over multipliers of one to four bytes, the
+//! `__mulsi3_fast` stops its walk of the multiplier after the top set bit
+//! (llvm-mos's `__mulsi3`); the compact `__mulsi3` always walks 32 bits. A call
+//! saves [`SAVED_CLOCKS`] on average over multipliers of one to four bytes, the
 //! routine is [`fast_bytes`] longer, so a site
 //! that runs repays it at once. The static count cannot tell a site that runs
 //! from one that is dead after folding (an exported function nothing calls

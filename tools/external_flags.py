@@ -26,7 +26,16 @@ TARGET = {
     "arm64": ("-mbranch-protection=none",),  # no PAC/BTI
     "none": (),  # targets with no branch-protection option (m68k, wasm, 6502, z80)
 }
+# The float mode of gcc's column per arch: ours and the pin's clang decide it, gcc's own default must not. m68k: gcc defaults to 68881
+# hardware float at 68020/040/060, ours and clang have no FPU (QB double.c 68020 -Os: gcc 3746 B hardware, 4078 B soft; bar read 332 B
+# low). arm64 (hard, FP regs) and m64 (SSE) agree with gcc's default; m32 is x87 on both sides (the canonical x87 ruling).
+GCC_FLOAT = {"m68k": ("-msoft-float",), "arm64": (), "m64": (), "m32": ()}
 ZERO_INIT_PADDING = "-fzero-init-padding-bits=standard"  # gcc 15's upstream default, pinned; gcc < 15 rejects the option
+
+
+def gcc_float(arch):
+    """gcc's float-mode flags for `arch` (KeyError for an arch with no ruling: a bar must not take the compiler's default silently)."""
+    return GCC_FLOAT[arch]
 
 
 def flags(target, reloc=(), gcc_major=None):
@@ -76,7 +85,7 @@ def check_gcc_flags(program_tokens, gcc_tokens, allowed_extra=()):
 
 
 def config_hash():
-    text = repr((COMMON, sorted(TARGET.items()), ZERO_INIT_PADDING))
+    text = repr((COMMON, sorted(TARGET.items()), ZERO_INIT_PADDING, sorted(GCC_FLOAT.items())))
     return hashlib.sha256(text.encode()).hexdigest()[:12]
 
 

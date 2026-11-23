@@ -463,6 +463,17 @@ impl Tti for M68k {
         "M68k"
     }
 
+    /// DEVIATE SINK-COMMON-SIZE (owner w12, exit 2026-12-05; M32-SINK-COMMON-SIZE,
+    /// gcc `-fcrossjumping`): at -Os SimplifyCFG sinks common code in every
+    /// slot; the pin does so only in the late one. Priced by the phis it makes.
+    fn sink_common_at_size(&self) -> bool {
+        true
+    }
+
+    fn sink_common_phi_cost(&self) -> usize {
+        1
+    }
+
     fn call_sequence_cost(
         &self,
         shape: &llrm_mir::tti::CallShape,

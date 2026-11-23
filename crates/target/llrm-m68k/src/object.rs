@@ -129,6 +129,21 @@ pub(crate) fn relaxed(opcode: &str) -> Option<&'static str> {
     encoding(&wide).map(|(name, ..)| *name)
 }
 
+/// `getRelaxedOpcodeBranch`: the 32-bit form of a 16-bit branch (68020 and
+/// later only: the 68000 has none).
+pub(crate) fn relaxed_long(opcode: &str) -> Option<&'static str> {
+    let wide = format!("{}32", opcode.strip_suffix("16")?);
+    encoding(&wide).map(|(name, ..)| *name)
+}
+
+/// The next wider form of a branch: 8 -> 16, and 16 -> 32 where `long_branches`.
+pub(crate) fn relax_step(
+    opcode: &str,
+    long_branches: bool,
+) -> Option<&'static str> {
+    relaxed(opcode).or_else(|| long_branches.then(|| relaxed_long(opcode)).flatten())
+}
+
 /// A `bra` to a label the items define starts as the 8-bit branch, which the
 /// layout widens where the displacement needs it, as gas does for a symbol of
 /// its own section (`MCAssembler::relaxInstruction`). `TCRETURNq` expands to
@@ -159,9 +174,10 @@ pub(crate) fn tail_jumps_narrowed(items: &[Item]) -> Vec<Item> {
 /// "16 bits follow"), becomes its 16-bit form and the code is laid out again
 /// (`fixupNeedsRelaxationAdvanced`, `relaxInstruction`).
 ///
-/// DEVIATE: no 16 -> 32 relaxation. Reason: that form is 68020 and this
-/// function is not told the cpu; a branch beyond 32 KiB is an error. Exit:
-/// the object refactor passing the subtarget.
+/// No 16 -> 32 relaxation here: the images this builds (Atari, Amiga, Mac,
+/// the test executable) are 68000, where the pin has no 32-bit branch either
+/// (`fixupNeedsRelaxationAdvanced` is unreachable). The ELF path relaxes
+/// ([`crate::elf::object_with_branches`]).
 pub fn assemble(
     items: &[Item],
     base: u32,

@@ -43,7 +43,7 @@ POSIX = ROOT / "runtime/shared/posix"
 GCC_ONLY = ("-fzero-init-padding-bits",)
 # gcc's m68k defaults to 68881 hardware floating point (`__HAVE_68881__`) at -mcpu=68020/040/060; ours and the pin's clang
 # have no FPU, so the like-for-like gcc column is soft-float (nbody 68020 O2: 578 B hardware, 946 B soft; ours 1294 B)
-GCC_FLOAT = ("-msoft-float",)
+GCC_FLOAT = external_flags.gcc_float("m68k")
 CONDITIONS = ("ra", "hi", "ls", "cc", "cs", "ne", "eq", "vc", "vs", "pl", "mi", "ge", "lt", "gt", "le", "hs")
 
 
@@ -205,7 +205,7 @@ class Tools:
         as 0 bytes, so it is named and the cell's whole-program size is unknown, not small. Other unresolved symbols (`report`, libc) are ignored."""
         archive = self.support(cpu, level)
         mapfile, exe = Path(str(obj) + ".map"), Path(str(obj) + ".exe")
-        link = subprocess.run([f"{self.root}/usr/bin/m68k-linux-gnu-gcc", f"-m{cpu}", "-msoft-float", "-nostdlib", "-static", "-ffreestanding",
+        link = subprocess.run([f"{self.root}/usr/bin/m68k-linux-gnu-gcc", f"-m{cpu}", *GCC_FLOAT, "-nostdlib", "-static", "-ffreestanding",
                                "-Wl,--unresolved-symbols=ignore-all", f"-Wl,-Map={mapfile}", "-o", str(exe), str(obj), archive],
                               capture_output=True, text=True, env=self.env)
         if link.returncode != 0 or not mapfile.exists():

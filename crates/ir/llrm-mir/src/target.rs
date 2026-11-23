@@ -333,13 +333,14 @@ pub struct Tuning {
     /// x86-m32, exit 2026-11-30): the pin does this at `-Oz` only
     /// (`EmitTargetCodeForMemcpy`, `hasMinSize`).
     pub rep_movs_at_size: bool,
-    /// The largest constant copy (bytes) of less than dword alignment
+    /// The largest constant copy (bytes), of any alignment,
     /// `rep_movs_at_size` takes; a larger one is the pin's `memcpy` call
     /// (`emitConstantSizeRepmov`: `Size > MaxInlineSizeThreshold`, 128). The
     /// library copies by dwords, twice as fast as `rep movsw` of a 2-aligned
     /// block (scroll -Os, 4000 B: 682,269 against 533,965 clk). DEVIATE
     /// REP-MOVS-OS bounds itself to the pin's limit (owner x86-m32, exit
-    /// 2026-11-30).
+    /// 2026-11-30), aligned or not: a longer `rep movs` fixed ESI/EDI/ECX at
+    /// exec.c's entry and the interpreter pc spilled in every handler.
     pub rep_movs_at_size_max: u64,
     /// The largest constant copy (bytes) a `-O2`/`-O3` build does with `rep movs` of the pointer's width
     /// when the blocks are aligned, past the pin's 128-byte limit (`emitConstantSizeRepmov`), instead of the

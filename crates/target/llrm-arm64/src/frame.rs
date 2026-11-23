@@ -343,6 +343,47 @@ fn pairs_at(
 /// The pin's `DefaultSafeSPDisplacement`.
 pub const SAFE_SP_DISPLACEMENT: u64 = 255;
 
+/// Whether every call of `function` is a `MachineRegisterInfo::isNoReturnDef`
+/// ([MachineRegisterInfo.cpp:574](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/MachineRegisterInfo.cpp#L574)):
+/// the call's block has no successor, the function has no `uwtable`, and the
+/// callee is `noreturn` and `nounwind`. `TargetFrameLowering::
+/// determineCalleeSaves` reads such a call's definition of `x30` as no
+/// modification, so the link register is not saved for it.
+pub fn calls_never_return(
+    function: &MFunc,
+    uwtable: bool,
+    noreturn_nounwind: impl Fn(&str) -> bool,
+) -> bool {
+    if !function.calls || uwtable {
+        return false;
+    }
+    let labels: rustc_hash::FxHashMap<&str, usize> =
+        function.blocks.iter().enumerate().map(|(at, block)| (block.label.as_str(), at)).collect();
+    function
+        .blocks
+        .iter()
+        .enumerate()
+        .all(
+            |(at, block)| {
+                let mut calls = block
+                    .ops
+                    .iter()
+                    .filter_map(
+                        |op| match op {
+                            Op::Call { callee, .. } => Some(callee),
+                            _ => None,
+                        },
+                    );
+                let Some(first) = calls.next() else { return true };
+                crate::mfunc::successors_of(block, at, function.blocks.len(), &labels).is_empty()
+                    && std::iter::once(first).chain(calls).all(|callee| match callee {
+                        Callee::Symbol(name) => noreturn_nounwind(name),
+                        Callee::Register(_) => false,
+                    })
+            },
+        )
+}
+
 fn layout(
     function: &MFunc,
     allocation: &Allocation,
@@ -368,7 +409,8 @@ fn layout(
     // without setting it up; here a Darwin call keeps the whole record.
     // Unreachable from clang, which gives Darwin `"frame-pointer"="all"`.
     let record = function.dynamic || keeps || function.outgoing > SAFE_SP_DISPLACEMENT || (darwin && function.calls);
-    let pairs = paired(&saved_list(allocation, record, function.calls && !record, darwin));
+    let link = function.calls && !function.calls_never_return && !record;
+    let pairs = paired(&saved_list(allocation, record, link, darwin));
     let registers: u64 = pairs.iter().map(|(_, second)| 1 + u64::from(second.is_some())).sum();
     let area = (8 * registers).next_multiple_of(16);
     // Filled from the top; where the area has a spare word, the first single
