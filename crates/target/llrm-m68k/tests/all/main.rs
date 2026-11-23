@@ -343,6 +343,7 @@ mod va_double_callee;
 mod volatile_order;
 mod wide_compare_branch;
 mod atomic_load_store;
+mod atomic_generic_libcall;
 mod global_ctors;
 mod wide_mul_chain;
 mod wide_mul_cost;
