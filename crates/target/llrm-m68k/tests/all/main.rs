@@ -2,6 +2,7 @@
 //! the whole stack 287 times. A new test is a file here and a `mod` line;
 //! `tests/support` and the fixtures stay where they are.
 
+mod any_extend_shared;
 mod stack_coloring;
 mod stacksave_vla_loop;
 #[path = "../support/mod.rs"]
