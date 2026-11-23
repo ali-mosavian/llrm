@@ -586,6 +586,51 @@ pub fn sync_libcalled(
     Ok(())
 }
 
+/// Every load and store `hidden` made calls of, of at most `native` bits and of any ordering, as the plain volatile
+/// access: a target whose selector has one pattern for `atomic_load_N` and `atomic_store_N` whatever the ordering
+/// (M68kInstrAtomics.td: a single in-order bus, `move`). Run before [`lowered`], which refuses the ordered ones.
+pub fn ordered_accesses_plain(
+    module: &mut Module,
+    native: u32,
+) -> Result<(), String> {
+    let mut found: Vec<(usize, InstId, AtomicInfo)> = Vec::new();
+    for (at, global) in module.globals.iter().enumerate() {
+        let GlobalKind::Function(function) = &global.kind else { continue };
+        for (_, inst) in function.walk() {
+            let Some(callee) = crate::memory::callee(&module.context, function, inst) else { continue };
+            if let Some(info) = module.globals[callee.0 as usize].name.as_deref().and_then(decode)
+                && matches!(info.kind, AtomicKind::Load | AtomicKind::Store)
+            {
+                found.push((at, inst, info));
+            }
+        }
+    }
+    for (at, inst, info) in found {
+        let GlobalKind::Function(function) = &module.globals[at].kind else { continue };
+        let instruction = function.instruction(inst).clone();
+        let accessed = match info.kind {
+            AtomicKind::Load => Some(instruction.ty),
+            _ => function.operand_type(&module.context, instruction.operands[0]),
+        };
+        if accessed.and_then(|ty| module.context.types.int_bits(ty)).is_none_or(|bits| bits > native) {
+            continue;
+        }
+        let plain = match info.kind {
+            AtomicKind::Load => Opcode::Load { align: info.align, volatile: true },
+            _ => Opcode::Store { align: info.align, volatile: true },
+        };
+        let GlobalKind::Function(function) = &mut module.globals[at].kind else { continue };
+        let operands = instruction.operands[..instruction.operands.len() - 1].to_vec();
+        let made = function.create_instruction(plain, instruction.ty, operands, Flags::default(), None);
+        function.insert(made, crate::edit::Position::Before(inst)).map_err(|why| why.to_string())?;
+        if let (Some(old), Some(new)) = (instruction.result, function.instruction(made).result) {
+            function.replace_all_uses_with(old, Operand::Value(new));
+        }
+        function.erase(inst).map_err(|why| why.to_string())?;
+    }
+    Ok(())
+}
+
 /// `LowerAtomicPass`, which a target without atomics runs before selection
 /// (wasm without the `atomics` feature): an atomic load or store is a plain
 /// one, a fence is nothing. A read-modify-write and a compare-exchange are

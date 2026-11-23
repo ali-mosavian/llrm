@@ -19,3 +19,11 @@ define i1 @claim() {
   %ok = extractvalue { i32, i1 } %r, 1
   ret i1 %ok
 }
+define i32 @acquire_load() {
+  %v = load atomic i32, ptr @flag acquire, align 4
+  ret i32 %v
+}
+define void @seq_cst_store() {
+  store atomic i32 7, ptr @flag seq_cst, align 4
+  ret void
+}
