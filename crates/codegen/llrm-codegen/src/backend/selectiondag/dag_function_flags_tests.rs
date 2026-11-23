@@ -384,10 +384,7 @@ fn a_wide_add_of_one_is_an_add_and_an_adc_not_an_inc_and_a_byte_round_trip() {
         .filter_map(|i| i.what.as_ref())
         .filter_map(|w| w.name.as_deref().map(str::to_owned))
         .collect();
-    assert!(
-        names.iter().any(|n| n == "adc") && !names.iter().any(|n| n == "sete" || n == "inc"),
-        "{names:?}"
-    );
+    assert!(names.iter().any(|n| n == "adc") && !names.iter().any(|n| n == "sete" || n == "inc"), "{names:?}");
 }
 
 const WIDE_SELECT_OF_CONSTANTS: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
@@ -1027,4 +1024,25 @@ x:
 fn a_branch_on_the_overflow_bit_reads_the_flags_of_the_add() {
     let all = names(OVERFLOW_LOOP).unwrap();
     assert!(!all.iter().any(|name| name.starts_with("set") || name == "not" || name == "test"), "{all:?}");
+}
+
+const I64_CLAMPED_DIFFERENCE: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+define i64 @f(i64 %lo, i64 %hi) {
+  %lt = icmp slt i64 %hi, %lo
+  %d = sub i64 %hi, %lo
+  %n = add i64 %d, 1
+  %r = select i1 %lt, i64 0, i64 %n
+  ret i64 %r
+}
+";
+
+/// The select reads the signed condition of the compare's `sbb`; the `sub`
+/// and `add` chains scheduled before it overwrite EFLAGS and an `sbb` has no
+/// cheaper form to make again (QuickrBasic declare.c `decl_dims` at m32 Os:
+/// 'flags overwritten between their producer and a consumer', file REFUSED).
+/// The condition goes in a byte and is tested again (X86FlagsCopyLowering).
+#[test]
+fn the_condition_of_a_wide_compare_survives_the_wide_arithmetic_scheduled_before_its_select() {
+    let all = names(I64_CLAMPED_DIFFERENCE).unwrap_or_else(|why| panic!("{why}"));
+    assert!(all.iter().any(|name| name == "setl") && all.iter().any(|name| name == "test"), "{all:?}");
 }
