@@ -125,10 +125,10 @@ def checked_object(work: Path, program: str, column: str, opt: str) -> Path:
 
 
 def compile_command(compiler: str, binary: Path, source: Path, opt: str, out: Path, bench: Path) -> tuple[list[str], dict[str, str]]:
-    """The command and environment that compile `source` to the object `out`: the same flags for every compiler; ours is flagless in the gated column (like for like with the base: main 65098fd950 ignores -fno-pic) and `-fno-pic` in its reported column, as gcc and clang are; `main` becomes `bench_main_`, which the driver runs."""
+    """The command and environment that compile `source` to the object `out`: the same flags for every compiler; ours is `-fPIE` in the gated column, as every bar is (flagless PIE reads an external variable through the GOT; only an explicit -fPIE takes `direct_extern_at_pie`, so a flagless column measured a different compiler from the one the bars are compared with) and `-fno-pic` in its reported column, as gcc and clang are; `main` becomes `bench_main_`, which the driver runs."""
     flags = [f"-{opt}", "-c", "-Dmain=bench_main_", "-I", str(bench), "-I", str(POSIX), "-o", str(out), str(source)]
     if compiler in (OURS, NOPIC):
-        return [str(binary / "llrm-cc"), "-m64", *(["-fno-pic"] if compiler == NOPIC else []), *flags], {**os.environ, "LLRM_CC_TARGET": "x86_64-linux"}
+        return [str(binary / "llrm-cc"), "-m64", "-fno-pic" if compiler == NOPIC else "-fPIE", *flags], {**os.environ, "LLRM_CC_TARGET": "x86_64-linux"}
     program = os.environ.get("LLRM_PIN_CLANG", "") if compiler == "pin64" else shutil.which(REPORTED[compiler]) or REPORTED[compiler]
     return [program, *external_flags.flags("x86", ("-fPIE",)), *flags], dict(os.environ)
 
