@@ -1,6 +1,7 @@
-//! A `const` global was written in `.data` at m64 and m32 (exec.c `ops`/`calls`: 6,680 B of function
-//! pointers; gcc and clang: `.rodata`, `.data.rel.ro` when position independent), so a read-only table was
-//! writable and the object's `.data` column read 6,680 B against 0.
+//! A `const` global was written in `.data` at m64 and m32 (exec.c
+//! `ops`/`calls`: 6,680 B of function pointers; gcc and clang: `.rodata`,
+//! `.data.rel.ro` when position independent), so a read-only table was writable
+//! and the object's `.data` column read 6,680 B against 0.
 
 #[path = "common/target_dir.rs"]
 mod target_dir;
@@ -14,7 +15,10 @@ const SOURCE: &str = "int g0(int); int g1(int); int g2(int); int g3(int);\n\
     int f(volatile int i, volatile int j) { return t[i & 15] + h[j & 3](i); }\n";
 
 /// `size -A` of `flags` compiled for `target`: section name -> bytes.
-fn sections(target: &str, flags: &[&str]) -> Vec<(String, u64)> {
+fn sections(
+    target: &str,
+    flags: &[&str],
+) -> Vec<(String, u64)> {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
     let tmp = Path::new(env!("CARGO_TARGET_TMPDIR"));
     let stem = format!("constdata-{target}-{}-{}", flags.join(""), std::process::id());
@@ -50,7 +54,8 @@ fn bytes(
 
 #[test]
 fn a_const_table_is_read_only_at_m64_and_m32_without_pic() {
-    // x86-m32's object format defaults to OMF: the ELF target asks for ELF, which the placement must follow.
+    // x86-m32's object format defaults to OMF: the ELF target asks for ELF,
+    // which the placement must follow.
     for (target, flags) in [("x86_64-linux", ["-m64", "-fno-pic"]), ("x86_32-linux", ["-m32", "-fno-pic"])] {
         let found = sections(target, &flags);
         assert_eq!(bytes(&found, ".data"), 0, "{target}: a const table is in .data: {found:?}");
@@ -66,7 +71,8 @@ fn a_const_pointer_table_is_relro_and_a_plain_one_read_only_with_pic() {
     assert!(bytes(&found, ".rodata") >= 64, "the integer table is not in .rodata: {found:?}");
 }
 
-/// The other ELF targets already placed them: held so a later change of the shared placement cannot move them.
+/// The other ELF targets already placed them: held so a later change of the
+/// shared placement cannot move them.
 #[test]
 fn a_const_table_is_read_only_at_arm64_and_m68k() {
     for (target, flags) in [("arm64-linux", vec!["-fno-pic"]), ("m68k-68020", vec!["-fno-pic"])] {
