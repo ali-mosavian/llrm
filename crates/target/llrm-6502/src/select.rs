@@ -1354,8 +1354,8 @@ fn speed_division16_pays(
         ))
 }
 
-/// The speed 16-bit divisions at size when the image they link is no larger
-/// than the pin's for the same kind (`[pin.division16]`) and the clocks they
+/// The speed signed 16-bit divisions at size when the image they link is no larger
+/// than the pin's for a signed one (`[pin.division16]`) and the clocks they
 /// save repay the bytes they add at the speed rate: a cold division stays
 /// compact.
 ///

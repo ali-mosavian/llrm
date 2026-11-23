@@ -20,13 +20,13 @@ __modhi3 = "__modhi3c"
 __divmodhi4 = "__divmodhi4c"
 
 [pin.division16]
-# DEVIATE 6502-DIV-16-OS-PIN-IMAGE (owner llrm-target-6502, review 2027-01-31): what the pin's flow links for the same
-# 16-bit division, in bytes. llvm-mos a40207a (mos-sim-clang -Os -fno-lto, one program, the LINKED image, llvm-nm -S,
-# 2026-11-23): `__modhi3` 111 + `__umodhi3` 174 = 285 for a signed remainder, `__umodhi3` 174 alone for an unsigned one
-# (cross-check: the whole image of the signed program is 716 B). At size our speed routines are taken for the clocks they
-# save while the image they link is no larger than the pin's for the same kind.
+# DEVIATE 6502-DIV-16-OS-PIN-IMAGE (owner llrm-target-6502, review 2027-01-31): what the pin's flow links for a
+# signed 16-bit remainder, in bytes. llvm-mos a40207a (mos-sim-clang -Os -fno-lto, one program, the LINKED image,
+# llvm-nm -S, 2026-11-23): `__modhi3` 111 + `__umodhi3` 174 = 285 (cross-check: the whole image of that program is
+# 716 B). At size our speed routines are taken for the clocks they save while the image they link is no larger than
+# the pin's. Signed only: the pin's unsigned remainder is 174 B and ours 169 B, but admitting it grew k_itoa -Os
+# 200 -> 325 B, over sdcc's 288 (hand corpus, 2026-11-23): the unsigned divide keeps the share rule.
 signed = 285
-unsigned = 174
 
 [share]
 # Policy, for a speed routine linked at size (the speed multiply): the share of its estimated clocks a

@@ -3270,14 +3270,17 @@ fn a_product_by_a_byte_calls_the_byte_entry() {
     }
 }
 
-/// -Os is strict bytes: a word divide links the compact routine in a module
-/// whose divides do not save twice their byte share (`[share.size]
-/// division16`; at 1 compound_assignment_types went 892 -> 1,044 B, over its
-/// bar). The aligned one (16 B larger, quicker for a small quotient) made
-/// k_tosudivax 82 B, a bare `jmp`, against sdcc's 64 and the compact build's
-/// 58, and digits 151 B against 129.
+/// -Os is bytes first: a word divide links the compact routine unless the
+/// clocks the speed routine saves repay its bytes and its image is no larger
+/// than the pin's for the same kind (`[pin.division16]`; the share rule alone
+/// refused idiv_loop_os, 2.31M clocks against llvm-mos's 1.07M). A divide that
+/// runs once saves nothing: k_tosudivax stays the compact build's 58 B (the
+/// aligned routine made it 82 B, a bare `jmp`, against sdcc's 64). This test
+/// said "compact in every module" before the per-kind ceiling: its nested loop
+/// of two signed remainders is the idiv_loop_os shape and now takes the speed
+/// routine.
 #[test]
-fn an_os_word_divide_is_the_compact_routine_in_every_module() {
+fn an_os_word_divide_takes_the_speed_routine_only_where_its_clocks_repay_the_bytes() {
     let divides = |inner: &str, outer: &str| {
         module(&format!(
             "define i16 @f(i16 %a, i16 %b, i16 %n, i16 %m) {{\nentry:\n  %d = or i16 %b, 1\n  br label %outer\n\
@@ -3292,7 +3295,7 @@ fn an_os_word_divide_is_the_compact_routine_in_every_module() {
     let in_loop =
         divides("%r1 = srem i16 %x, %b\n  %y = add i16 %r1, %j\n  %r2 = srem i16 %y, %d", "%r3 = add i16 %t3, 1");
     let text = assembly(&in_loop, &Request::new(Level::Os)).unwrap();
-    assert!(text.contains("__modhi3c") && !text.contains("__modhi3a"), "a divide in a loop:\n{text}");
+    assert!(text.contains("__modhi3\n") && !text.contains("__modhi3c"), "a divide in a loop:\n{text}");
     let once = module("define i16 @g(i16 %a, i16 %b) {\n  %r = srem i16 %a, %b\n  ret i16 %r\n}");
     let text = assembly(&once, &Request::new(Level::Os)).unwrap();
     assert!(text.contains("__modhi3c") && !text.contains("__modhi3a"), "the only work of the module:\n{text}");

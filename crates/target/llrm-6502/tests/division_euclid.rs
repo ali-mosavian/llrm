@@ -103,15 +103,14 @@ fn a_hot_remainder_loop_among_other_code_calls_the_speed_routine_at_os() {
     assert!(text.contains("__umodhi3\n") && !text.contains("__umodhi3c"), "the speed remainder at -Os:\n{text}");
 }
 
-/// The same loop alone in its module: the speed routine's 131 B were most of
-/// the module's bytes, so the share rule kept the compact one. An unsigned
-/// remainder's speed image is 169 B, under the 174 B the pin links for it
-/// (`[pin.division16]`), and the clocks repay the bytes: the speed routine.
-/// No corpus cell has this shape (the A/B moves idiv_loop_os only).
+/// The same loop alone in its module: the speed routine's 131 B are most of
+/// the module's bytes, so its share is not twice the clocks it saves. The
+/// compact routine stays (bytes first at -Os): the pin's image ceiling is the
+/// signed kind's only (`[pin.division16]`; k_itoa -Os 200 -> 325 B, over sdcc's 288).
 #[test]
-fn a_remainder_loop_that_is_the_whole_module_takes_the_speed_routine_within_the_pins_image() {
+fn an_unsigned_remainder_loop_that_is_the_whole_module_keeps_the_compact_routine_at_os() {
     let text = assembly(&hot_rem_loop_with_code(0), &Request::new(Level::Os)).unwrap_or_else(|e| panic!("{e}"));
-    assert!(text.contains("__umodhi3\n") && !text.contains("__umodhi3c"), "the speed remainder at -Os:\n{text}");
+    assert!(text.contains("__umodhi3c\n"), "the compact remainder at -Os:\n{text}");
 }
 
 /// idiv_loop_os at -Os ran 2.31M clocks against llvm-mos's 1.07M on the compact
