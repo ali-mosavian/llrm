@@ -153,12 +153,16 @@ fn the_odds_still_follow_the_blocks_after_the_prepass_removes_an_edge_block() {
 /// (141 instructions where release/next has 140; the pin's `opt -O2 | llc -O2`
 /// on the same IR: 141). The IR is `no-builtins`: the 139 it once counted had
 /// two `printf` calls folded to `puts` and `putchar`, which the pin does not
-/// do (14 `printf` calls both ways), so it is 140 since #10618.
+/// do (14 `printf` calls both ways), so it is 140 since #10618. It is 141 again
+/// since an argument stays in its arrival register (`LowerArguments`): the
+/// switch reads `w0` to its last case, so the two return values are built in
+/// `x9` and moved to `x0`, as the pin's allocation does (141); row
+/// X86-LIVEIN-ARG-SPILL.
 #[test]
 fn the_layout_reads_the_odds_of_the_blocks_it_places() {
     let source = include_str!("data/dispatch_switch.ll");
     let asm = llrm_arm64::driver::assembly(source, llrm_arm64::machine::Platform::Linux, llrm_arm64::driver::Level::O2)
         .expect("lowers");
     let instructions = asm.lines().filter(|line| line.starts_with('\t') && !line.starts_with("\t.")).count();
-    assert_eq!(instructions, 140);
+    assert_eq!(instructions, 141);
 }
