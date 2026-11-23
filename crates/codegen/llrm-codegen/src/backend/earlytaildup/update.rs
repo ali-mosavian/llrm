@@ -87,8 +87,10 @@ impl<'a> Updater<'a> {
         }
         for (at, phis) in std::mem::take(&mut this.added) {
             let index = this.index(at);
-            let mut all: Vec<Phi> = this.blocks[index].phis.iter().cloned().collect();
-            all.extend(phis);
+            // `MachineSSAUpdater::InsertNewDef` builds each phi at the block's
+            // start: the last one made comes first.
+            let mut all: Vec<Phi> = phis.into_iter().rev().collect();
+            all.extend(this.blocks[index].phis.iter().cloned());
             this.blocks[index].phis = all.into();
         }
     }
