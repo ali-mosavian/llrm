@@ -12,7 +12,7 @@ SCRIPT = Path(__file__).resolve().parent / "red_set_diff.py"
 MISSING = """---- test_size_keeps_sahf stdout ----
 
 thread 'test_size_keeps_sahf' panicked at crates/driver/llrm-cc/tests/m32_x87_status_word.rs:32:5:
-llrm-cc: /var/tmp/x/target-w9/release/llrm-llc: No such file or directory (os error 2)
+llrm-cc: /work/target/release/llrm-llc: No such file or directory (os error 2)
 test test_size_keeps_sahf ... FAILED
 """
 REAL = "test a_real_red ... FAILED\n"
