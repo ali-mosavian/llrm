@@ -422,6 +422,16 @@ mod tests {
         assert_eq!(after(vec![mov(20, 25), add(9, 23), mov(25, 20), ret.clone()]), vec![mov(20, 25), add(9, 23), ret]);
     }
 
+    /// The dispatch copy of QB's arm64 `exec_loop`: the two carried-value
+    /// copies, the table lookup and the `br`. The bounce back is the only
+    /// instruction clang does not have (5 instructions, as its copy).
+    #[test]
+    fn a_dispatch_copy_keeps_its_carried_copies_and_loses_the_bounce_back() {
+        let branch = Inst::BranchReg { link: false, rn: Gpr(9) };
+        let copy = vec![mov(20, 25), mov(23, 9), add(9, 9), add(9, 26), mov(25, 20), branch.clone()];
+        assert_eq!(after(copy), vec![mov(20, 25), mov(23, 9), add(9, 9), add(9, 26), branch]);
+    }
+
     #[test]
     fn a_read_of_a_copys_destination_reads_its_source_and_a_write_ends_the_copy() {
         assert_eq!(after(vec![mov(20, 25), add(0, 20)]), vec![mov(20, 25), add(0, 25)]);
