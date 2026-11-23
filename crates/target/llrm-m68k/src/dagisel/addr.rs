@@ -461,6 +461,31 @@ pub fn select_ari<D: AddrDag>(
     am.has_base_reg().then(|| am.base_reg).flatten()
 }
 
+/// DEVIATE from the pin, whose `(add (add a b) 272)` has no `ARID` (two
+/// registers) and no `ARII` (8-bit displacement), so the constant became the
+/// index register: `move.w #272,%a1; move.l (0,%a0,%a1),%d0`. The sum is the
+/// base and the constant the 16-bit displacement: `add.l; move.l (272,%a0)`,
+/// what GCC's `m68k_legitimize_address` makes. Only for a constant `ARII`
+/// cannot hold. Owner m68k. Exit 2027-01-31: upstream the order, or keep.
+fn base_and_far_offset<D: AddrDag>(
+    dag: &mut D,
+    n: SDValue,
+) -> Option<[SDValue; 2]> {
+    if dag.opcode(n.node) != isd::ADD {
+        return None;
+    }
+    let (lhs, rhs) = (dag.operand(n.node, 0), dag.operand(n.node, 1));
+    let (base, offset) = match (dag.constant(rhs), dag.constant(lhs)) {
+        (Some(offset), _) => (lhs, offset),
+        (None, Some(offset)) => (rhs, offset),
+        _ => return None,
+    };
+    if is_int_n(8, offset) || !is_int_n(16, offset) || dag.constant(base).is_some() {
+        return None;
+    }
+    Some([i16_imm(dag, offset), base])
+}
+
 /// `SelectARID`: `[disp, base]`.
 pub fn select_arid<D: AddrDag>(
     dag: &mut D,
@@ -474,7 +499,10 @@ pub fn select_arid<D: AddrDag>(
     if let Some((disp, base)) = frame_index_address(dag, &am) {
         return Some([disp, base]);
     }
-    if am.has_index_reg() || !am.has_base_reg() {
+    if am.has_index_reg() {
+        return base_and_far_offset(dag, n);
+    }
+    if !am.has_base_reg() {
         return None;
     }
     let base = am.base_reg?;
