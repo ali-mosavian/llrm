@@ -160,6 +160,6 @@ pub fn select(
     let vt = adapter.value_type(SDValue { node, res: 0 });
     let offset = adapter.target_constant(offset, vt);
     let width = adapter.target_constant(width, vt);
-    adapter.morph_node_to(node, FIRST, &[vt], &[value, offset, width]);
+    super::local::morph(adapter, node, FIRST, &[vt], &[value, offset, width]);
     Some(Outcome::Selected)
 }

@@ -615,6 +615,6 @@ pub fn select(
             vec![base, operand(1), chain],
         )
     };
-    adapter.morph_node_to(node, selected, &vts, &operands);
+    super::local::morph(adapter, node, selected, &vts, &operands);
     Some(Outcome::Selected)
 }

@@ -236,8 +236,10 @@ pub fn physical(
                             }
                         }
                     }
-                    // An address component read as undef (a store through an undefined pointer) names the register it
-                    // was given and reads nothing; the placed cell still holds the value.
+                    // An address component read as undef (a store through an
+                    // undefined pointer) names the register it
+                    // was given and reads nothing; the placed cell still holds
+                    // the value.
                     if let Some(what) = one.what.as_ref() {
                         for place in what.dests.iter().chain(&what.sources) {
                             if let Loc::Mem(cell) = place {
@@ -245,7 +247,8 @@ pub fn physical(
                                     undef = undef.or(&_lanes(regs, regs.named(cell.through, i64::from(base.width))));
                                 }
                                 if let Some(index) = cell.index.filter(|index| one.undefs.contains(&index.value)) {
-                                    undef = undef.or(&_lanes(regs, regs.named(cell.index_through, i64::from(index.width))));
+                                    undef =
+                                        undef.or(&_lanes(regs, regs.named(cell.index_through, i64::from(index.width))));
                                 }
                             }
                         }
@@ -294,6 +297,103 @@ pub fn physical(
         return Vec::new();
     }
     let names: Vec<String> = seen.iter().map(|one| regs.name(*one).unwrap_or("?").to_owned()).collect();
+    vec![format!(
+        "{} reads {} before any path writes it, and the entry does not deliver it",
+        body.name,
+        names.join(", ")
+    )]
+}
+
+/// After allocation, an SSE register an instruction names as a source that no
+/// path to it has written, unless the entry delivers it (an argument) or the
+/// function preserves it. The lane model of [`physical`] holds integer
+/// registers only, so this reads the operands themselves. A call, or an
+/// instruction nothing is known of, may write any of them; `xorps x, x` reads
+/// nothing. A hoist above a branch of code that read what only one arm loaded
+/// was invisible here (QB `PMAP`: 2 for 199).
+pub fn physical_vector(
+    body: &LirBody,
+    preserved: &BTreeSet<RegId>,
+) -> Vec<String> {
+    use crate::model::ir::Operation as Op;
+    let regs = body.regs();
+    let vector = |register: RegId| regs.in_class(register, llrm_lir::registers::class::XMM);
+    let roots = |loc: &Loc| match loc {
+        Loc::Reg(one) if vector(one.register) => Some(regs.root(one.register)),
+        _ => None,
+    };
+    let mut entering: BTreeSet<RegId> = preserved.iter().copied().filter(|one| vector(*one)).collect();
+    for block in body.blocks.iter().filter(|block| block.at == body.entry) {
+        for (_, register) in block.insns.iter().flat_map(|one| one.delivers.iter()) {
+            if vector(*register) {
+                entering.insert(regs.root(*register));
+            }
+        }
+    }
+    let every: BTreeSet<RegId> =
+        regs.entries().map(|(id, _)| id).filter(|one| vector(*one)).map(|one| regs.root(one)).collect();
+    let mut out_of: BTreeMap<i64, BTreeSet<RegId>> = BTreeMap::new();
+    let mut preds: BTreeMap<i64, Vec<i64>> = body.blocks.iter().map(|block| (block.at, Vec::new())).collect();
+    for block in &body.blocks {
+        for next in &block.succ {
+            if let Some(list) = preds.get_mut(next) {
+                list.push(block.at);
+            }
+        }
+    }
+    let mut undefined: BTreeSet<RegId> = BTreeSet::new();
+    let walk = |block: &LirBlock, out_of: &BTreeMap<i64, BTreeSet<RegId>>, undefined: &mut BTreeSet<RegId>| {
+        let mut defined: BTreeSet<RegId> = if block.at == body.entry {
+            entering.clone()
+        } else {
+            preds[&block.at].iter().flat_map(|pred| out_of.get(pred).into_iter().flatten().copied()).collect()
+        };
+        for one in block.insns.iter().filter(|one| !one.is_meta()) {
+            let Some(what) = one.what.as_ref() else {
+                defined.extend(every.iter().copied());
+                continue;
+            };
+            if !one.clobbers.is_empty() || what.op == Op::Barrier || what.op == Op::Call {
+                defined.extend(every.iter().copied());
+                continue;
+            }
+            let zeroing = matches!(
+                what.name.as_deref(),
+                Some("xorps" | "xorpd" | "pxor" | "pcmpeqd")
+            )
+                && what.sources.len() == 2
+                && what.sources[0] == what.sources[1];
+            if !zeroing {
+                for source in what.sources.iter().filter_map(roots) {
+                    if !defined.contains(&source) {
+                        undefined.insert(source);
+                    }
+                }
+            }
+            defined.extend(what.dests.iter().filter_map(roots));
+        }
+        defined
+    };
+    loop {
+        let mut changed = false;
+        for block in &body.blocks {
+            let after = walk(block, &out_of, &mut BTreeSet::new());
+            if out_of.get(&block.at) != Some(&after) {
+                out_of.insert(block.at, after);
+                changed = true;
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+    for block in &body.blocks {
+        walk(block, &out_of, &mut undefined);
+    }
+    if undefined.is_empty() {
+        return Vec::new();
+    }
+    let names: Vec<String> = undefined.iter().map(|one| regs.name(*one).unwrap_or("?").to_owned()).collect();
     vec![format!(
         "{} reads {} before any path writes it, and the entry does not deliver it",
         body.name,
@@ -871,6 +971,59 @@ mod tests {
         );
         let said = physical(&physical_body(vec![read]), &BTreeSet::new());
         assert!(said.iter().any(|complaint| complaint.contains("reads ebx before any path writes it")), "{said:?}");
+    }
+
+    /// `subsd xmm0, xmm1` with no write of xmm1 before it (QB `PMAP`: the
+    /// common code of two arms hoisted above the branch, ahead of each
+    /// arm's own load of xmm1: 2 for 199). The lane model holds no SSE
+    /// register, so the integer check said nothing. A zeroing `xorps` first
+    /// defines it.
+    #[test]
+    fn test_an_sse_register_read_before_any_write_is_refused_after_allocation() {
+        let sub = || {
+            Insn::new(
+                1,
+                Some((1, 1)),
+                Some(semantics(
+                    Operation::FloatArith,
+                    "subsd",
+                    vec![register(RegId::XMM0, 8)],
+                    vec![register(RegId::XMM1, 8)],
+                )),
+                vec![],
+                vec![],
+            )
+        };
+        let zero = Insn::new(
+            2,
+            Some((2, 2)),
+            Some(semantics(
+                Operation::Binary,
+                "xorps",
+                vec![register(RegId::XMM1, 16)],
+                vec![register(RegId::XMM1, 16), register(RegId::XMM1, 16)],
+            )),
+            vec![],
+            vec![],
+        );
+        let wide = |insns| {
+            let mut made = physical_body(insns);
+            made.registers = Some(llrm_lir::registers::Regs(&llrm_x86_m64::REGISTER_INFO));
+            made
+        };
+        let said = physical_vector(&wide(vec![sub()]), &BTreeSet::new());
+        assert!(said.iter().any(|complaint| complaint.contains("reads xmm1 before any path writes it")), "{said:?}");
+        assert!(physical_vector(&wide(vec![zero, sub()]), &BTreeSet::new()).is_empty());
+        // A register the entry delivers is defined: a variadic function's save
+        // of xmm3 names it so (`x86_64_stdarg_fp_save`); the one undelivered
+        // register is still read before any write.
+        let held = |value| ir::Held { value, width: 16, offset: 0 };
+        let arrives = Insn {
+            defines: vec![9],
+            delivers: vec![(held(9), RegId::XMM1)],
+            ..Insn::new(4, Some((4, 4)), Some(semantics(Operation::Nothing, "", vec![], vec![])), vec![], vec![])
+        };
+        assert!(physical_vector(&wide(vec![arrives, sub()]), &BTreeSet::new()).is_empty());
     }
 
     /// `movzx ebx, bx` before a loop that writes the word (STATIC.BAS -O2,

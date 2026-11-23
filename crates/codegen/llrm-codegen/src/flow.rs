@@ -498,6 +498,7 @@ pub fn verified(
     let mut complaints = verify::verify_for(&body, in_ssa, spaces);
     if let Some(arguments) = allocated {
         complaints.extend(verify::physical(&body, arguments));
+        complaints.extend(verify::physical_vector(&body, arguments));
     }
     if let Some(first) = complaints.first() {
         return Err(Malformed(format!("{stage}: {first}")));

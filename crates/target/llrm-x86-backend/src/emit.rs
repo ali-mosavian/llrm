@@ -1660,7 +1660,10 @@ impl Emitter<'_, '_> {
             // and one by one (`ROR32r1`, `SHL8m1`) has the amount 1 in the name
             let implicit = || {
                 if name.ends_with("r1") || name.ends_with("m1") {
-                    return matches!(form.name.as_str(), "shl" | "shr" | "sar" | "sal" | "rol" | "ror" | "rcl" | "rcr")
+                    return matches!(
+                        form.name.as_str(),
+                        "shl" | "shr" | "sar" | "sal" | "rol" | "ror" | "rcl" | "rcr"
+                    )
                         .then(|| Loc::Imm(Imm { value: 1, width: 8, address: None }));
                 }
                 (name.ends_with("rCL") || name.ends_with("mCL"))
@@ -1880,13 +1883,28 @@ impl Emitter<'_, '_> {
         let first = self.constant(offset)?;
         let area =
             self.ctx.frame.cell(index, 16).ok_or_else(|| EmitError::Unsupported(format!("frame index {index}")))?;
+        let skipped = ((first - 48) / 16) as usize;
+        // The registers the save reads arrive with the call: named as
+        // delivered here, as the entry names the unnamed integer registers,
+        // so a read of an xmm register nothing wrote can be told from this one.
+        let arrived: Vec<(Held, llrm_lir::registers::RegId)> = XMM
+            .iter()
+            .skip(skipped)
+            .map(|register| (self.fresh(16), llrm_lir::registers::RegId::new(*register)))
+            .collect();
+        let at = self.next_address();
+        let anchor = Insn {
+            defines: arrived.iter().map(|(held, _)| held.value).collect(),
+            delivers: arrived,
+            ..Insn::new(at, Some((at, at)), Some(Semantics::new(Operation::Nothing)), vec![], vec![])
+        };
+        self.blocks.last_mut().expect("a block").insns.push(Arc::new(anchor));
         let sink_at = self.next_address();
         self.push(Operation::Compare, "test", vec![], vec![Loc::Held(al), Loc::Held(al)]);
         let what = Semantics { target: Some(sink_at), name: Some("je".into()), ..Semantics::new(Operation::Branch) };
         self.push_semantics(what);
         let save_at = self.next_address();
         self.blocks.push(EmitBlock { at: save_at, ..EmitBlock::default() });
-        let skipped = ((first - 48) / 16) as usize;
         for (at, register) in XMM.iter().enumerate().skip(skipped) {
             let disp = first + 16 * (at - skipped) as i64;
             let addr = area.addr.map(|addr| Addr { disp: addr.disp + disp, ..addr });

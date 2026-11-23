@@ -183,6 +183,6 @@ pub fn select(
     operands.push(operand);
     operands.push(before);
     let results = vec![adapter.value_type(SDValue { node, res: 0 })];
-    adapter.morph_node_to(node, selected, &results, &operands);
+    super::local::morph(adapter, node, selected, &results, &operands);
     Some(Outcome::Selected)
 }
