@@ -568,6 +568,17 @@ pub fn joined_with_map(
     // that exposes `returns_twice`: after `longjmp` a joined variable would
     // hold a value the first return never set
     // (<https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/RegisterCoalescer.cpp#L4338>).
+    // `LLRM_MIR_PRINT_PRECOAL=<function>`: the MIR the coalescer is given, as
+    // `LLRM_MIR_PRINT` prints what the allocator is given.
+    if llrm_support::env_var("LLRM_MIR_PRINT_PRECOAL").is_some_and(|name| name == &*body.name) {
+        match crate::backend::hooks::installed()
+            .ok_or_else(|| "no backend installed".to_owned())
+            .and_then(|hooks| hooks.mir_print(body, &Default::default()))
+        {
+            Ok(text) => eprintln!("{text}"),
+            Err(why) => eprintln!("MIR-PRINT-REFUSED {}: {why}", body.name),
+        }
+    }
     let stats = if body.returns_twice { driver::Stats::default() } else { driver::run(&mut lis, env, depth) };
     let after = lis.body_like(body);
     if llrm_support::env_flag!("LLRM_COALESCE_WHY") {
