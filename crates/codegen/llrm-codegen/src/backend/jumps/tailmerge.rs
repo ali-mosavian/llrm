@@ -96,7 +96,8 @@ fn identical(
             _ => return false,
         }
     }
-    a.what == b.what
+    a.what.is_some() == b.what.is_some()
+        && a.what.as_ref().zip(b.what.as_ref()).is_none_or(|(x, y)| x.machine_eq(y))
         && a.clobbers == b.clobbers
         && a.clobbers_high == b.clobbers_high
         && a.frame_adjust == b.frame_adjust

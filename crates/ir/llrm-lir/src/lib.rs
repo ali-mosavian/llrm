@@ -536,10 +536,11 @@ pub struct Semantics {
     pub pops: Option<i64>,
     /// The `(source, dest)` pairs the instruction ties, numbered as `sources`
     /// and `dests` are, where the producer knows them from the machine
-    /// instruction itself (its own tied operands, `MachineInstr::isRegTiedToDefOperand`).
-    /// A target's per-name rows (`@ties rows`) number operands as the
-    /// description does, which is not these lists once an operand is dropped
-    /// (a reserved register). None: the rows say.
+    /// instruction itself (its own tied operands,
+    /// `MachineInstr::isRegTiedToDefOperand`). A target's per-name rows
+    /// (`@ties rows`) number operands as the description does, which is not
+    /// these lists once an operand is dropped (a reserved register). None:
+    /// the rows say.
     pub tied: Option<Vec<(usize, usize)>>,
 }
 
@@ -633,6 +634,55 @@ impl Semantics {
             && self.pops == other.pops
             && same(&self.dests, &other.dests)
             && same(&self.sources, &other.sources)
+    }
+
+    /// `MachineInstr::isIdenticalTo`: the same operation on the same
+    /// registers. A memory operand's `base`, `index` and `selector` are the
+    /// allocator's names for the values the registers `through` and
+    /// `index_through` hold, so two operands that go through the same
+    /// registers are identical whatever the values are called (`machine_hash`
+    /// leaves them out too).
+    pub fn machine_eq(
+        &self,
+        other: &Self,
+    ) -> bool {
+        let loc = |left: &Loc, right: &Loc| match (left, right) {
+            (Loc::Mem(x), Loc::Mem(y)) => {
+                let named = |a: &Option<Held>, b: &Option<Held>| match (a, b) {
+                    (Some(a), Some(b)) => a.width == b.width && a.offset == b.offset,
+                    (None, None) => true,
+                    _ => false,
+                };
+                x.addr == y.addr
+                    && x.width == y.width
+                    && x.through == y.through
+                    && x.offset == y.offset
+                    && x.disp_width == y.disp_width
+                    && x.stack_argument == y.stack_argument
+                    && x.scale == y.scale
+                    && x.index_through == y.index_through
+                    && x.exact == y.exact
+                    && named(&x.base, &y.base)
+                    && named(&x.selector, &y.selector)
+                    && named(&x.index, &y.index)
+            }
+            (x, y) => x == y,
+        };
+        let locs =
+            |left: &[Loc], right: &[Loc]| left.len() == right.len() && left.iter().zip(right).all(|(x, y)| loc(x, y));
+        self.op == other.op
+            && self.name == other.name
+            && self.target == other.target
+            && self.indirect == other.indirect
+            && self.table == other.table
+            && self.table_id == other.table_id
+            && self.computed == other.computed
+            && self.repeat == other.repeat
+            && self.lock == other.lock
+            && self.pops == other.pops
+            && self.tied == other.tied
+            && locs(&self.dests, &other.dests)
+            && locs(&self.sources, &other.sources)
     }
 
     /// `HashMachineInstr` ([BranchFolding.cpp L322][pin]): a hash of the
