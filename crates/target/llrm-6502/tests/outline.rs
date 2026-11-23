@@ -283,3 +283,27 @@ fn five_calls_with_one_constant_are_inline_at_every_speed_level() {
     let text = assembly(&ir, &Request::new(Level::Os)).unwrap_or_else(|e| panic!("{e}"));
     assert!(text.contains("__outl_"), "-Os outlines them for bytes\n{text}");
 }
+
+/// frameless -Os ran 54,218 clocks against llvm-mos's 46,669: `add4`'s `d * 4`
+/// was `jsr __outl_0` twice (a 4-instruction shift, 1 byte saved, 24 clocks a
+/// run) in a function a 12-trip loop calls. The pass saw no loop in `add4`; the
+/// share rule prices it by its callers' runs. Called once (cold) it stays
+/// outlined, for the byte.
+#[test]
+fn a_function_a_loop_calls_keeps_its_shift_inline_at_os_and_a_cold_one_outlines_it() {
+    let ir = |hot: bool| {
+        let call = if hot {
+            "entry:\n  br label %l\nl:\n  %i = phi i32 [ 0, %entry ], [ %in, %l ]\n  %s = phi i32 [ 0, %entry ], [ %sn, %l ]\n  %r = call i32 @add4(i32 %s, i32 %i)\n  %sn = add i32 %r, 1\n  %in = add i32 %i, 1\n  %c = icmp ult i32 %in, 12\n  br i1 %c, label %l, label %done\ndone:\n  ret i32 %sn\n"
+        } else {
+            "entry:\n  %r = call i32 @add4(i32 %n, i32 3)\n  ret i32 %r\n"
+        };
+        format!(
+            "target datalayout = \"{}\"\ndefine internal i32 @add4(i32 %a, i32 %d) noinline {{\n  %x = shl i32 %d, 2\n  %y = add i32 %a, %x\n  ret i32 %y\n}}\ndefine i32 @chain(i32 %n) {{\n{call}}}\n",
+            datalayout()
+        )
+    };
+    let hot = assembly(&ir(true), &Request::new(Level::Os)).unwrap_or_else(|e| panic!("{e}"));
+    assert!(!hot.contains("__outl_"), "called from a loop:\n{hot}");
+    let cold = assembly(&ir(false), &Request::new(Level::Os)).unwrap_or_else(|e| panic!("{e}"));
+    assert!(cold.contains("__outl_") || !cold.contains("asl"), "called once:\n{cold}");
+}
