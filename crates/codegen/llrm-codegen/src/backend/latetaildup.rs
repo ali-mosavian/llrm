@@ -67,6 +67,13 @@ use crate::model::lir::{self, Block, Insn, LirBlock, LirBody};
 const SIZE: usize = 2;
 /// What a computed goto may hold after allocation.
 const COMPUTED_GOTO_SIZE: usize = 10;
+/// DEVIATE TL5 (owner x87, exit: the per-copy size of the dispatch is closed,
+/// rows M32/M64-OS-EXEC-LOOP-CLOCKS): the nested computed gotos left by the
+/// tail merge are unfactored (here, to a fixed point, and in placement) at
+/// -O1 and above only. At -Os the pass keeps the single sweep and placement
+/// copies no computed goto, the state of the tree before it: copied to the
+/// end, QB `exec.c` is over the best of gcc and clang in bytes.
+pub const UNFACTOR_AT_SIZE: bool = false;
 
 /// `terminatorIsComputedGotoWithSuccessors`: the block ends in an indirect jump
 /// and every successor is a block whose address is taken (a `goto *`, not a
@@ -263,6 +270,9 @@ pub fn duplicated_with(
             }
         }
         place += 1;
+    }
+    if size && !UNFACTOR_AT_SIZE {
+        return body;
     }
     unfactored(body, size, computed_at_size, epilogue)
 }

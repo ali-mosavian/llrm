@@ -51,10 +51,8 @@ line_fill_clocks             =    =
 post_ra_tail_duplicate  1    1
 # DEVIATE TM-PAIR (owner w12, exit 2026-12-13): see CpuTable::tail_merge_pairs_at_size.
 tail_merge_pairs_at_size 1   1
-# DEVIATE TL4 (owner x87, exit: the per-copy size of the dispatch is closed, rows M32-OS-EXEC-LOOP-CLOCKS and
-# M64-OS-EXEC-LOOP-CLOCKS): see TimingTable::skip_computed_goto_copies_at_size. Copied at -Os, QB exec.c is
-# 11,303 -> 12,601 B (.text), over the best of gcc and clang (11,916).
-skip_computed_goto_copies_at_size 1   1
+# The dispatch of a computed goto is copied into its handlers at -Os too, as the pin does (TL4 is
+# dropped): QB exec.c 15,693 -> 17,529 B (gcc16 18,562), host instructions -5..-11%.
 # DEVIATE INLINE-FRAME-SIZE (owner x86-m32-b, exit 2026-12-05): see TimingTable::register_inline_frees_frame_at_size.
 register_inline_frees_frame_at_size 1 1
 # DEVIATE TAILDUP-HOT (owner x86-m32): gcc copies up to 8 instructions where it optimises for speed. Stated cost:

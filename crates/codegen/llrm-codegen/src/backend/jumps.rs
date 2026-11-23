@@ -254,9 +254,9 @@ pub fn optimized_folded(
     folded: bool,
 ) -> Result<LirBody, masm::Unprintable> {
     let size = cpu.size;
-    // DEVIATE TL4 as in `latetaildup`: a target may keep a computed goto
-    // factored at -Os.
-    let goto_copies = !(size && cpu.skip_computed_goto_copies_at_size);
+    // DEVIATE TL5 (`latetaildup::UNFACTOR_AT_SIZE`): placement copies a
+    // computed goto above -Os only.
+    let goto_copies = !size || crate::backend::latetaildup::UNFACTOR_AT_SIZE;
     // `BranchFolder` ahead of placement: in the order the blocks were made,
     // where a block falling into the common successor takes any tail.
     let hoisted = _hoisted(body);

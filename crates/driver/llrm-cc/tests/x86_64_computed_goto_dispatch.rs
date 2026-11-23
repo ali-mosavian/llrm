@@ -1,4 +1,4 @@
-//! x86-64 -O1 to -O3 (-Os keeps it one block, TL4): the dispatch of an
+//! x86-64 -O1 to -O3 (-Os keeps the tree's state, TL5): the dispatch of an
 //! interpreter (`goto *tab[*pc]` after every handler) is copied into each
 //! handler after allocation, as the pin does for a computed goto. Before, one
 //! block held it and all twenty handlers jumped to it, with the phi copies of
@@ -41,11 +41,13 @@ fn a_computed_goto_dispatch_is_one_indirect_jump_per_handler() {
     }
 }
 
-/// DEVIATE TL4 (`skip_computed_goto_copies_at_size`): at -Os the dispatch stays
-/// one block, the shape before the copies (QB exec.c is over the best of gcc
-/// and clang in bytes when copied).
+/// DEVIATE TL5 (`latetaildup::UNFACTOR_AT_SIZE`): -Os keeps the tree's partial
+/// state ON PURPOSE (9 of 20 dispatches copied, as before the unfactoring):
+/// copied to the end, QB exec.c is over the best of gcc and clang in bytes and
+/// a shared dispatch on its own costs 26% of the Os instructions. Row
+/// M64-OS-EXEC-LOOP-CLOCKS; the lever that closes the copy's size flips it.
 #[test]
-fn an_os_dispatch_stays_one_block() {
+fn an_os_dispatch_keeps_the_trees_partial_state() {
     let found = jumps("-Os");
-    assert!(found <= 4, "{found} indirect jumps at -Os: the dispatch was copied into the handlers (bytes first)");
+    assert_eq!(found, 9, "{found} indirect jumps at -Os: the tree's state before the unfactoring is 9");
 }

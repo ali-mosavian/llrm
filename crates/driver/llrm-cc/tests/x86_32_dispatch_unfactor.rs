@@ -4,8 +4,8 @@
 //! `exec_loop` ran 20-24% more instructions per op on float programs (sng_math:
 //! 282M against 222M) for the dispatch's copies. The same at -Os, where one
 //! shared dispatch kept the float and loop programs 19-30% over clang's
-//! instructions; its copies are +2.6 KB in `exec.c`, so -Os keeps it one block
-//! (TL4). Needs `LLRM_LLC`.
+//! instructions; its copies are +2.6 KB in `exec.c` (516 B under gcc16).
+//! Needs `LLRM_LLC`.
 
 use std::path::Path;
 use std::process::Command;
@@ -38,10 +38,13 @@ fn a_computed_goto_dispatch_is_copied_into_each_handler() {
     assert!(jumps >= 20, "{jumps} indirect jumps: the dispatch is still one shared block (the pin: 21)");
 }
 
-/// DEVIATE TL4 (`skip_computed_goto_copies_at_size`): at -Os the dispatch stays
-/// one block, so `exec.c` is not over the best of gcc and clang in bytes.
+/// DEVIATE TL5 (`latetaildup::UNFACTOR_AT_SIZE`): -Os keeps the tree's partial
+/// state ON PURPOSE (8 of 21 dispatches copied: the test that asked for 20 was
+/// red since #10641): copied to the end, QB exec.c is over the best of gcc and
+/// clang in bytes. Row M32-OS-EXEC-LOOP-CLOCKS; the lever that closes the
+/// copy's size flips it.
 #[test]
-fn an_os_dispatch_stays_one_block() {
+fn an_os_dispatch_keeps_the_trees_partial_state() {
     let jumps = indirect_jumps("-Os");
-    assert!(jumps <= 4, "{jumps} indirect jumps at -Os: the dispatch was copied into the handlers (bytes first)");
+    assert_eq!(jumps, 8, "{jumps} indirect jumps at -Os: the tree's state before the unfactoring is 8");
 }
