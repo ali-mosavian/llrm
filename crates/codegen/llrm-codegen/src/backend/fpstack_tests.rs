@@ -580,7 +580,10 @@ fn test_a_spill_of_a_value_the_inputs_do_not_read_is_made_ahead_of_them() {
     };
     let spill = {
         let what = Semantics {
-            dests: vec![Loc::Mem(crate::model::ir::Mem::new(Some(crate::model::ir::Addr::new(crate::model::ir::Space::Frame, -16)), 10))],
+            dests: vec![Loc::Mem(crate::model::ir::Mem::new(
+                Some(crate::model::ir::Addr::new(crate::model::ir::Space::Frame, -16)),
+                10,
+            ))],
             sources: vec![held(7)],
             ..Semantics::new(Operation::FloatStore)
         };
