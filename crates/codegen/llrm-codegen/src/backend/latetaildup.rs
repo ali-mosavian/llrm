@@ -67,13 +67,6 @@ use crate::model::lir::{self, Block, Insn, LirBlock, LirBody};
 const SIZE: usize = 2;
 /// What a computed goto may hold after allocation.
 const COMPUTED_GOTO_SIZE: usize = 10;
-/// DEVIATE TL5 (owner x87, exit: the per-copy size of the dispatch is closed,
-/// rows M32/M64-OS-EXEC-LOOP-CLOCKS): the nested computed gotos left by the
-/// tail merge are unfactored (here, to a fixed point, and in placement) at
-/// -O1 and above only. At -Os the pass keeps the single sweep and placement
-/// copies no computed goto, the state of the tree before it: copied to the
-/// end, QB `exec.c` is over the best of gcc and clang in bytes.
-pub const UNFACTOR_AT_SIZE: bool = false;
 
 /// `terminatorIsComputedGotoWithSuccessors`: the block ends in an indirect jump
 /// and every successor is a block whose address is taken (a `goto *`, not a
@@ -254,54 +247,26 @@ pub fn duplicated_with(
     frame_kept: bool,
 ) -> LirBody {
     let epilogue = saved_count(&body, saved, free, pointer) + usize::from(framed(&body, frame_kept, free, pointer));
-    let mut place = 1;
     let mut graph = Preds::of(&body);
-    while place < body.blocks.len() {
-        let at = body.blocks[place].at;
-        // Most blocks fail the cheap tests: no scan of the body for them.
-        if copied(&body, &body.blocks[place], size, computed_at_size, epilogue).is_some()
-            && let Some(made) = tail_duplicate(&graph, &body, place, size, computed_at_size, epilogue)
-        {
-            body = made;
-            graph = Preds::of(&body);
-            // The tail may be gone: what stands at `place` is the next block.
-            if body.blocks.get(place).is_none_or(|block| block.at != at) {
-                continue;
-            }
-        }
-        place += 1;
-    }
-    if size && !UNFACTOR_AT_SIZE {
-        return body;
-    }
-    unfactored(body, size, computed_at_size, epilogue)
-}
-
-/// A computed goto's tail copied into a block makes that block one, small
-/// enough to be copied in turn, but a block before it in the order has been
-/// passed: where merged tails nest (a tail inside a tail inside the dispatch),
-/// the pass leaves a shared copy at each level. The blocks that end in a
-/// computed goto are visited again until none changes.
-fn unfactored(
-    mut body: LirBody,
-    size: bool,
-    computed_at_size: bool,
-    epilogue: usize,
-) -> LirBody {
-    let mut graph = Preds::of(&body);
-    // Each round removes a block or copies into one: bounded by the blocks.
-    for _ in 0..body.blocks.len() {
+    // `TailDuplicatePass::runOnMachineFunction`: `while
+    // (tailDuplicateBlocks())`, the sweep repeated until it changes
+    // nothing, so a block that a copy made a computed goto, passed already
+    // in the order, is visited again. Each round removes a block or copies
+    // into one: bounded by the blocks.
+    for _ in 0..=body.blocks.len() {
         let mut changed = false;
         let mut place = 1;
         while place < body.blocks.len() {
             let at = body.blocks[place].at;
-            if computed_goto(&body, &body.blocks[place])
-                && copied(&body, &body.blocks[place], size, computed_at_size, epilogue).is_some()
+            // Most blocks fail the cheap tests: no scan of the body for them.
+            if copied(&body, &body.blocks[place], size, computed_at_size, epilogue).is_some()
                 && let Some(made) = tail_duplicate(&graph, &body, place, size, computed_at_size, epilogue)
             {
                 body = made;
                 graph = Preds::of(&body);
                 changed = true;
+                // The tail may be gone: what stands at `place` is the next
+                // block.
                 if body.blocks.get(place).is_none_or(|block| block.at != at) {
                     continue;
                 }
@@ -643,5 +608,64 @@ mod tests {
         };
         assert!(kept(true), "at -Os the dispatch stays one block");
         assert!(!kept(false), "at -O2 it is copied");
+    }
+
+    /// QB `exec_loop` m64 -Os and the 20-handler repro: the tail merge left a
+    /// one-instruction tail (block 50) that falls into the dispatch and sits
+    /// BEFORE it. The dispatch is copied into it, which makes it a computed
+    /// goto, but the sweep has passed it: ten of the twenty dispatches stayed
+    /// shared (11 indirect jumps, the pin's 20). `TailDuplicatePass` repeats
+    /// the sweep until nothing changes (`while (tailDuplicateBlocks())`).
+    #[test]
+    fn test_a_tail_before_the_dispatch_that_becomes_a_computed_goto_is_copied_in_turn() {
+        let ids: Vec<i64> = (1..=20).collect();
+        let mut blocks = vec![block(0, vec![jump(99)], &[99]), block(50, vec![work(50)], &[99])];
+        blocks.push(block(99, vec![work(100), indirect_jump()], &ids));
+        for id in &ids {
+            let to = if *id > 10 { 50 } else { 99 };
+            blocks.push(block(*id, vec![work(*id as u32), jump(to)], &[to]));
+        }
+        let mut start = body(blocks);
+        start.address_symbols = Arc::new(ids.iter().map(|id| (*id, format!("$BA{id}"))).collect());
+
+        let done = dup(start, true);
+
+        assert!(done.blocks.iter().all(|block| block.at != 50 && block.at != 99), "a shared tail is left");
+        for handler in &ids {
+            assert_eq!(names(at(&done, *handler)).last().map(String::as_str), Some("jmp"), "handler {handler}");
+        }
+    }
+
+    /// Termination: each sweep copies a tail into a predecessor, which makes
+    /// that predecessor the next candidate, one nesting level at a time when
+    /// the levels sit before the dispatch in the order. A chain of six
+    /// single-move tails needs seven sweeps, within the bound of one more
+    /// than the blocks (the pin loops `while (tailDuplicateBlocks())` with
+    /// none: every copy removes the tail or leaves it one predecessor
+    /// fewer).
+    #[test]
+    fn test_a_nest_of_tails_before_the_dispatch_is_copied_through_to_the_handlers() {
+        let ids: Vec<i64> = (1..=8).collect();
+        let tails: Vec<i64> = (50..56).collect();
+        let mut blocks = vec![block(0, vec![jump(99)], &[99])];
+        // Laid out outermost first: each sweep reaches a tail before the copy
+        // into it has made the tail a computed goto.
+        for (place, tail) in tails.iter().enumerate().rev() {
+            let onward = if place == 0 { 99 } else { tails[place - 1] };
+            blocks.push(block(*tail, vec![work(*tail as u32), jump(onward)], &[onward]));
+        }
+        blocks.push(block(99, vec![work(100), indirect_jump()], &ids));
+        for id in &ids {
+            blocks.push(block(*id, vec![work(*id as u32), jump(*tails.last().unwrap())], &[*tails.last().unwrap()]));
+        }
+        let mut start = body(blocks);
+        start.address_symbols = Arc::new(ids.iter().map(|id| (*id, format!("$BA{id}"))).collect());
+
+        let done = dup(start, true);
+
+        assert!(done.blocks.iter().all(|block| block.at == 0 || ids.contains(&block.at)), "a shared tail is left");
+        for handler in &ids {
+            assert_eq!(names(at(&done, *handler)).last().map(String::as_str), Some("jmp"), "handler {handler}");
+        }
     }
 }

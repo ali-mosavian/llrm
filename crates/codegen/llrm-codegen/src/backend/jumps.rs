@@ -174,14 +174,9 @@ impl LIRTransform for BranchFolder<'_> {
             return Ok(body);
         }
         let hoisted = _hoisted(&body);
-        let (merged, _) = tails_merged(
-            hoisted,
-            self.cpu.size,
-            self.calls.as_ref(),
-            false,
-            self.cpu.tail_merge_pin_faithful,
-        )
-        .map_err(|error| error.0)?;
+        let (merged, _) =
+            tails_merged(hoisted, self.cpu.size, self.calls.as_ref(), false, self.cpu.tail_merge_pin_faithful)
+                .map_err(|error| error.0)?;
         Ok(merged)
     }
 }
@@ -253,20 +248,17 @@ pub fn optimized_folded(
     folded: bool,
 ) -> Result<LirBody, masm::Unprintable> {
     let size = cpu.size;
-    // DEVIATE TL5 (`latetaildup::UNFACTOR_AT_SIZE`): placement copies a
-    // computed goto above -Os only.
-    let goto_copies = !size || crate::backend::latetaildup::UNFACTOR_AT_SIZE;
+    // The size order of `-apply-ext-tsp-for-size` skips `buildCFGChains`, where
+    // placement copies a computed goto: only above -Os.
+    let goto_copies = !size;
     // `BranchFolder` ahead of placement: in the order the blocks were made,
     // where a block falling into the common successor takes any tail.
     let hoisted = _hoisted(body);
     // `OptimizeBranches` changes the function whether or not a tail merged: the
     // placement sees a select's empty `copy0MBB` gone, not a block to fall
     // into.
-    let early = if folded {
-        hoisted
-    } else {
-        tails_merged(hoisted, size, calls, false, cpu.tail_merge_pin_faithful)?.0
-    };
+    let early =
+        if folded { hoisted } else { tails_merged(hoisted, size, calls, false, cpu.tail_merge_pin_faithful)?.0 };
     let start = early.with_blocks(_explicit(&early)?);
     let mut placed = threaded(&_placed_ext(
         &start,
@@ -284,8 +276,7 @@ pub fn optimized_folded(
     // `BranchFolder::OptimizeFunction` after placement: the tails merged, then
     // the branches optimised (`threaded`), until neither changes anything. A
     // merge can leave a compare nothing selects on; LLVM leaves it (T6).
-    let (merged, any) =
-        tails_merged(placed, size, calls, true, cpu.tail_merge_pin_faithful)?;
+    let (merged, any) = tails_merged(placed, size, calls, true, cpu.tail_merge_pin_faithful)?;
     placed = merged;
     if any {
         // `MachineBlockPlacement::runOnMachineFunction`: "Redo the layout if
