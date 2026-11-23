@@ -79,12 +79,8 @@ pub(crate) fn order(
                 .map(|inst| {
                     let (op, indirect) = operation(inst);
                     let target = crate::layout::label_of(inst).and_then(|label| index.get(label)).map(|&to| to as i64);
-                    let what = Semantics {
-                        name: Some(format!("k{next}").into()),
-                        target,
-                        indirect,
-                        ..Semantics::new(op)
-                    };
+                    let what =
+                        Semantics { name: Some(format!("k{next}").into()), target, indirect, ..Semantics::new(op) };
                     let one = Insn::new(next, Some((next, next)), Some(what), Vec::new(), Vec::new());
                     next += 1;
                     Arc::new(one)
@@ -95,10 +91,14 @@ pub(crate) fn order(
         })
         .collect();
     let mut body = LirBody::new("f", 0, lir.clone(), Default::default(), Default::default());
-    body.odds = BlockOdds { taken: odds.iter().map(|(&(from, to), &share)| ((from as i64, to as i64), share)).collect() };
-    let placed = placed_explicit(&body, lir, size, false, None, None, None, 0, None);
+    body.odds =
+        BlockOdds { taken: odds.iter().map(|(&(from, to), &share)| ((from as i64, to as i64), share)).collect() };
+    let placed = placed_explicit(&body, lir, size, false, None, None, None, 0, None, true);
     let number = |one: &Insn| {
-        one.what.as_ref().and_then(|what| what.name.as_deref()?.strip_prefix('k')?.parse::<i64>().ok()).map(|k| (k - FIRST_INSN) as usize)
+        one.what
+            .as_ref()
+            .and_then(|what| what.name.as_deref()?.strip_prefix('k')?.parse::<i64>().ok())
+            .map(|k| (k - FIRST_INSN) as usize)
     };
     Placed {
         blocks: placed
