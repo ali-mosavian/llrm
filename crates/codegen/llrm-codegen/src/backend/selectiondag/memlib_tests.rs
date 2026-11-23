@@ -276,51 +276,30 @@ fn a_constant_clear_for_size_without_memset_steps_by_whole_words() {
     assert!(dump.contains("$ecx, Constant:i32<64>") && dump.contains("ValueType:ch:i32"), "{dump}");
 }
 
-/// x_mergesort -O3 at m32: the three copy loops of `msort` became `call
-/// _memcpy` (three pushes, the call, the callee's setup: ~35 clk each, 72146
-/// clk against 54487 with the loops left). With the target's tuning bit a
-/// variable length is `rep movsd` inline at speed, and the call at size.
+/// QB localarr -O2/-O3 at m32: a variable-length copy was an inline `rep movsd` (85.8M cycles, clang's
+/// `call memcpy` 74.9M). A length known only at run time is the pin's libcall at speed.
 #[test]
-fn a_variable_copy_is_rep_movs_at_speed_where_the_tuning_says_so() {
+fn a_variable_copy_is_a_call_at_speed() {
     let target = BuilderTarget::for_pointer_bits(32).with_libcalls(&["memcpy"]);
-    let before = built("copy", &target).expect("builds");
-    assert!(before.contains("'memcpy'") && !before.contains("REP_MOVS"), "premise: the pin's call\n{before}");
-    let mut tuning = llrm_mir::target::Tuning::PIN;
-    tuning.inline_variable_memcpy = true;
-    let tti = llrm_x86::tti::X86::of_cpu("i486").expect("a cpu").with_tuning(tuning);
-    let target = target.with_tti(Some(std::rc::Rc::new(tti)));
-    let after = built("copy", &target).expect("builds");
-    assert!(after.contains("REP_MOVS") && !after.contains("'memcpy'"), "{after}");
-}
-
-/// x_jpeg_single -O1 at m32: `next()` inlined twice into `getbit` with the refill's variable
-/// copy as an inline `rep movs` (about 30 B each against a call's 13), the cell 1762 B over
-/// the best external. MEM-1 trades bytes for clocks at -O2/-O3 only: -O1 keeps the call.
-#[test]
-fn a_variable_copy_stays_a_call_where_bytes_are_strict() {
-    let mut tuning = llrm_mir::target::Tuning::PIN;
-    tuning.inline_variable_memcpy = true;
-    let tti = llrm_x86::tti::X86::of_cpu("i486").expect("a cpu").with_tuning(tuning);
-    let target = BuilderTarget::for_pointer_bits(32)
-        .with_libcalls(&["memcpy"])
-        .with_tti(Some(std::rc::Rc::new(tti)))
-        .with_bytes_strict(true);
     let dump = built("copy", &target).expect("builds");
-    assert!(dump.contains("'memcpy'") && !dump.contains("REP_MOVS"), "-O1 keeps the call:\n{dump}");
+    assert!(dump.contains("'memcpy'") && !dump.contains("REP_MOVS"), "{dump}");
 }
 
-/// x_mergesort -O3: a copy of `n << 2` bytes ended in a `rep movsb` of `xor
-/// ecx, ecx` (a dead tail, ~5 clk and three instructions per copy, 1818
-/// copies). A length with its low two bits known zero has one `rep movs`.
+/// A runtime-length copy with no `memcpy` to call is `rep movsd` and an n&3 `rep movsb`. The tail once
+/// reloaded di/si with the copy's start, rewrote the first bytes and never copied the last n&3 (n=17:
+/// d[17] stayed old). The tail's di/si are the ones the dword copy left, read back.
 #[test]
-fn a_dword_multiple_variable_copy_has_no_byte_tail() {
-    let text = "target datalayout = \"e-p:32:32-n8:16:32\"\n\
-        declare void @llvm.memcpy.p0.p0.i32(ptr, ptr, i32, i1)\n\
-        define void @cells(ptr %d, ptr %s, i32 %n) {\n  %b = shl i32 %n, 2\n  call void @llvm.memcpy.p0.p0.i32(ptr %d, ptr %s, i32 %b, i1 false)\n  ret void\n}\n";
-    let mut tuning = llrm_mir::target::Tuning::PIN;
-    tuning.inline_variable_memcpy = true;
-    let tti = llrm_x86::tti::X86::of_cpu("i486").expect("a cpu").with_tuning(tuning);
-    let target = BuilderTarget::for_pointer_bits(32).with_libcalls(&["memcpy"]).with_tti(Some(std::rc::Rc::new(tti)));
-    let dump = built_from(text, "cells", &target).expect("builds");
-    assert_eq!(dump.matches("REP_MOVS").count(), 1, "{dump}");
+fn a_copy_tail_continues_after_the_dwords() {
+    let dump = built("copy", &BuilderTarget::for_pointer_bits(32).with_libcalls(&[])).expect("builds");
+    assert_eq!(dump.matches("X86ISD::REP_MOVS").count(), 2, "{dump}");
+    for reg in ["$edi", "$esi"] {
+        let read = dump
+            .lines()
+            .find(|line| line.contains("CopyFromReg") && line.contains(reg))
+            .and_then(|line| line.trim().split(':').next())
+            .unwrap_or_else(|| panic!("no read-back of {reg}\n{dump}"));
+        let restored =
+            dump.lines().filter(|line| line.contains("CopyToReg") && line.contains(&format!("{reg}, {read},"))).count();
+        assert_eq!(restored, 1, "the tail's {reg} is the dword copy's, read back\n{dump}");
+    }
 }

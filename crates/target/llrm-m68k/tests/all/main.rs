@@ -3,6 +3,7 @@
 //! `tests/support` and the fixtures stay where they are.
 
 mod any_extend_shared;
+mod index_far_displacement;
 mod stack_coloring;
 mod stacksave_vla_loop;
 #[path = "../support/mod.rs"]

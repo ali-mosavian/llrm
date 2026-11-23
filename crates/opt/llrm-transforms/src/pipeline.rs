@@ -183,9 +183,10 @@ pub struct Options {
     /// `-fthread-jumps`.
     ///
     /// DEVIATE JUMPTHREAD-O1 (owner m68k-lsr-addressing, exit 2026-12-04, or
-    /// when the pin's -O1 gains it): a target's driver row may turn it on at
-    /// -O1 (`thread_jumps_at_o1` in llrm-cc's targets.toml); no row does but
-    /// m68k's. clang's -O1 IR leaves a latch `br` on a compare one block up
+    /// when the pin's -O1 gains it; the x86 rows are x87's, review 2026-12-07:
+    /// QB instructions at -O1 are 1.15x (m32) and 1.20x (m64) without it): a
+    /// target's driver row may turn it on at -O1 (`thread_jumps_at_o1` in
+    /// llrm-cc's targets.toml); the rows that do are m68k's and x86's. clang's -O1 IR leaves a latch `br` on a compare one block up
     /// (bsearch -O1: a re-test and a loop-carried copy of the result).
     pub thread_jumps: bool,
     /// `TailCallElimPass` (`tailrec@688`) in the function pipeline before the

@@ -90,7 +90,6 @@ pub fn expanded(
     module: &mut Module,
     convention: u32,
     symbol: &str,
-    inline_variable: bool,
     rep_movsb: bool,
     rep_movs_speed_max: u64,
     inline_variable_unlooped: bool,
@@ -135,7 +134,6 @@ pub fn expanded(
             function,
             call,
             widest,
-            inline_variable,
             rep_movsb,
             rep_movs_speed_max,
             inline_variable_unlooped,
@@ -172,7 +170,6 @@ pub fn expanded(
             function,
             call,
             widest,
-            inline_variable,
             rep_movsb,
             rep_movs_speed_max,
             inline_variable_unlooped,
@@ -225,7 +222,6 @@ fn calls(
     function: &llrm_mir::module::Function,
     call: llrm_mir::module::InstId,
     widest: u64,
-    inline_variable: bool,
     rep_movsb: bool,
     rep_movs_speed_max: u64,
     inline_variable_unlooped: bool,
@@ -271,13 +267,7 @@ fn calls(
             return false;
         }
     }
-    // DEVIATE MEM-1 (`Tuning::inline_variable_memcpy`, exit 2026-11-20): at
-    // speed a length known only at run time is left to the selector's `rep
-    // movs`.
     let sized = llrm_mir::memory::has(&function.attrs, "optsize") || llrm_mir::memory::has(&function.attrs, "minsize");
-    if inline_variable && !sized && !matches!(instruction.operands[2], Operand::Constant(_)) {
-        return false;
-    }
     // DEVIATE MEM-OS-REP (`Tuning::inline_variable_memcpy_at_size`, exit
     // 2026-12-06): tuned for size, a variable length outside every loop is
     // `rep movsb` (gcc's `decide_alg`: `optimize_insn_for_size_p` takes
