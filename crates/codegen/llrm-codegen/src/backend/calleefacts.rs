@@ -351,10 +351,13 @@ impl CalleeFacts {
             let mut high = tail_high;
             let mut saved_whole = BTreeSet::new();
             for (kept, pushed) in &frame.saved {
-                if kept == pushed {
+                // Narrower only if fewer bytes are pushed than the register
+                // holds: m64 names `ebx` and pushes `rbx`.
+                let narrower = regs.bytes(*pushed) < regs.bytes(*kept);
+                if !narrower {
                     saved_whole.insert(regs.root(*kept));
                 }
-                if whole.remove(&regs.root(*kept)) && kept != pushed {
+                if whole.remove(&regs.root(*kept)) && narrower {
                     high.insert(*kept);
                 }
             }
@@ -571,6 +574,46 @@ mod tests {
         assert_eq!(facts.written("leaf").unwrap().high, BTreeSet::from([RegId::EDI]), "saved by the word");
         facts.record("leaf", &body, &frame(vec![(RegId::EDI, RegId::EDI)]), &IndexMap::default());
         assert!(facts.written("leaf").unwrap().high.is_empty(), "saved whole");
+    }
+
+    /// m64 `get_string` pushes `rbx` whole and its fact said it lost the upper half of
+    /// `ebx` (saved as the pair `ebx`/`rbx`, taken for a narrower push): its callers kept
+    /// no 64-bit value in a callee-saved register across it (QB chain.c -Os m64:
+    /// `chai_chain` 4 of 6 callee-saved registers, 48 stack ops against the pin's 12).
+    #[test]
+    fn a_register_pushed_wider_than_it_is_named_loses_no_upper_half() {
+        use crate::model::lir::{Insn, LirBlock};
+
+        let write = Arc::new(Insn {
+            clobbers: BTreeSet::from([RegId::DI]),
+            ..Insn::new(1, Some((1, 1)), Some(crate::model::ir::Semantics::new(crate::model::ir::Operation::Return)), vec![], vec![])
+        });
+        let body =
+            LirBody::new("leaf", 1, vec![LirBlock::new(1, vec![write]).into()], IndexMap::default(), IndexMap::default());
+        let frame = llrm_target::FrameRegisters {
+            vector_saved: Vec::new(),
+            pointer: RegId::BP,
+            stack: RegId::SP,
+            saved: vec![(RegId::DI, RegId::EDI)],
+            slot: 2,
+            align: 2,
+            object_align: 2,
+            optional: false,
+            enter: false,
+            wrap_split_size: false,
+            object_aligned: false,
+            red_zone: 0,
+            slot_scratch: None,
+            slot_dead_checked: false,
+            slot_add_with_saved: false,
+            free: false,
+            kept: false,
+            exit_cfi: true,
+            saved_first: false,
+        };
+        let facts = CalleeFacts::of(&parsed(LEAF)).0;
+        facts.record("leaf", &body, &frame, &IndexMap::default());
+        assert!(facts.written("leaf").unwrap().high.is_empty(), "di is pushed as edi, whole");
     }
 
     /// A function with a one-slot frame ends `pop rcx`; its fact said it wrote
