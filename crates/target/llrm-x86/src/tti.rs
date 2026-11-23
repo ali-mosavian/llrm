@@ -1546,10 +1546,6 @@ impl Tti for X86 {
         bits == 16 && self.tuning.prefixed_16_bit_counters
     }
 
-    fn inlines_variable_memcpy(&self) -> bool {
-        self.tuning.inline_variable_memcpy
-    }
-
     fn inlines_variable_memcpy_at_size(&self) -> bool {
         self.tuning.inline_variable_memcpy_at_size
     }

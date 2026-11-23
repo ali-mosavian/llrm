@@ -796,8 +796,7 @@ impl LoopIdiomRecognize {
         // DEVIATE, only where the target has no libc `memcpy` to call
         // (`Tuning::libc_memcpy` false): at -Os a copy whose length is known
         // only at run time stays a loop when the `rep movs` that replaces it
-        // is more bytes. Where there is one the pin's rule stands. At speed,
-        // DEVIATE MEM-1 inlines the copy. Exit 2026-11-20.
+        // is more bytes. Where there is one the pin's rule stands.
         if let Some((costs, callees)) = run.bytes
             && run.se.match_apint(args.be_count).is_none()
             && !run.tti.is_some_and(|tti| tti.libc_memcpy())
