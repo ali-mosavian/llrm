@@ -48,6 +48,7 @@ fn assembled_text(
         selector,
         &llrm_x86_m16::M16,
         &[],
+        false,
     )
 }
 
