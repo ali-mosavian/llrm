@@ -41,7 +41,6 @@ pub const LIBCALLS: [(&str, &str); 3] = [("memcpy", "__memcpy"), ("memmove", "__
 /// `own_ids.txt`.
 pub fn builder_target() -> BuilderTarget {
     BuilderTarget {
-        no_arrival_vreg: true,
         shift_amount: EVT::I8,
         legal_ints: vec![8, 16],
         soft_float: true,
