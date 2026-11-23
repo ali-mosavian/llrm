@@ -4018,7 +4018,7 @@ impl Emitter<'_, '_> {
             });
         }
         if let NodeData::Global { symbol, offset } = self.dag.node(group[3]).data {
-            let addr = overridden(self.ctx.globals.address(symbol, offset));
+            let addr = overridden(self.global_address(symbol, offset));
             if !through_ss && self.address_register(group[4], Role::Segment)?.is_some() {
                 return Err(EmitError::Unsupported("a segment override".to_owned()));
             }
@@ -4215,6 +4215,20 @@ impl Emitter<'_, '_> {
         self.ctx.tables.get(table as usize).cloned().ok_or_else(|| EmitError::Unsupported("a jump table".to_owned()))
     }
 
+    /// A global's address. `classifyGlobalReference`: a local symbol is
+    /// reached from the instruction pointer (`lea r, [rip + sym]`), a GOT
+    /// entry's load only for the rest.
+    fn global_address(
+        &self,
+        symbol: u32,
+        offset: i64,
+    ) -> Addr {
+        let mut addr = self.ctx.globals.address(symbol, offset);
+        addr.linked_direct = !self.dag.config().absolute_symbols
+            && self.dag.local_symbols.get(symbol as usize).copied().unwrap_or(false);
+        addr
+    }
+
     /// An address component: a value, or the `$noreg` register.
     fn address_register(
         &mut self,
@@ -4340,7 +4354,7 @@ impl Emitter<'_, '_> {
             return self.register(value);
         }
         if let NodeData::Global { symbol, offset } = self.dag.node(value).data {
-            let addr = self.ctx.globals.address(symbol, offset);
+            let addr = self.global_address(symbol, offset);
             return Ok(Loc::Imm(Imm {
                 value: 0,
                 width: width_of(self.ctx.map.scalar_sse(), self.dag, value),
