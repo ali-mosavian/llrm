@@ -37,7 +37,7 @@ fn the_68000_keeps_refusing_a_branch_over_32_kib() {
 
 #[test]
 fn a_function_over_32_kib_compiles_at_the_68020() {
-    let stores: String = (0..4_000).map(|n| format!("  store volatile i32 {}, ptr @g, align 4\n", 100_000 + n)).collect();
+    let stores: String = (0..6_000).map(|n| format!("  store volatile i32 {}, ptr @g, align 4\n", 100_000 + n)).collect();
     let ir = format!(
         "target datalayout = \"E-m:e-p:32:16:32-i8:8:8-i16:16:16-i32:16:32-n8:16:32-a:0:16-S16\"\n@g = global i32 0\n\
          define void @big(i1 %c) {{\nentry:\n  br i1 %c, label %body, label %done\nbody:\n{stores}  br label %done\ndone:\n  ret void\n}}\n"
