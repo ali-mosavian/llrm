@@ -110,4 +110,5 @@ def test_every_bar_carries_the_shared_external_flags(tmp_path):
         for line in lines:
             for flag in flags:
                 assert flag in line.split(), f'{arch}: {flag} missing in {line}'
+        assert (arch != 'm32') or any('-fexcess-precision=fast' in l.split() for l in lines), 'gcc -m32 cannot compile pfpu.c without it (the module was dropped)'
         assert any('-D__cdecl=' in l.split() for l in lines), 'gcc cannot compile qbrt.c without -D__cdecl= (the column dropped the module)'

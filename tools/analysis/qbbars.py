@@ -17,7 +17,8 @@ RELOC=('-fPIE',) if A=='m64' else ('-fno-pic','-fno-pie')
 CPU=['-march=i486'] if A=='m32' else []  # ours is a 486 (no SSE); a bar left at the distro's i686 default builds SSE  # what ours emits at the target; every column gets the same
 BASE=[f'-{L}',m,*CPU,*extra,'-fno-unwind-tables','-w']
 CF=['-std=c23',*BASE,*bar_flags('x86',RELOC)]
-GCC_CF=['-std=c2x','-D__cdecl=',*BASE,*bar_flags('x86',RELOC,gcc_major())]
+FAST=['-fexcess-precision=fast'] if A=='m32' else []  # pfpu.c's constexpr doubles do not compile for gcc -m32 under x87 excess precision
+GCC_CF=['-std=c2x','-D__cdecl=',*FAST,*BASE,*bar_flags('x86',RELOC,gcc_major())]
 def product_modules():
     """(source, its own -D/-I/-isystem tokens) of every compile in the product's build, from `make -n -B`."""
     made=subprocess.run(['make','-n','-B',os.environ.get('QB_MAKE_TARGET','build/hostperf/basic')],cwd=T,capture_output=True,text=True).stdout
@@ -34,7 +35,8 @@ def product_modules():
         mods.append((toks[toks.index('-c')+1],keep))
     return mods
 CF=['-std=c23',*BASE,*bar_flags('x86',RELOC)]
-GCC_CF=['-std=c2x','-D__cdecl=',*BASE,*bar_flags('x86',RELOC,gcc_major())]
+FAST=['-fexcess-precision=fast'] if A=='m32' else []  # pfpu.c's constexpr doubles do not compile for gcc -m32 under x87 excess precision
+GCC_CF=['-std=c2x','-D__cdecl=',*FAST,*BASE,*bar_flags('x86',RELOC,gcc_major())]
 def sizes(o,prefixes):
     r=subprocess.run(['size','-A',o],capture_output=True,text=True).stdout
     return sum(int(l.split()[1]) for l in r.splitlines() if l.split() and any(l.split()[0]==p or l.split()[0].startswith(p+'.') for p in prefixes))
