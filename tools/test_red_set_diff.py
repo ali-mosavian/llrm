@@ -8,7 +8,7 @@ from pathlib import Path
 
 SCRIPT = Path(__file__).resolve().parent / "red_set_diff.py"
 
-# The w9 called-once run, 269 red names none of which ran the compiler.
+# A run whose 269 red names never ran the compiler.
 MISSING = """---- test_size_keeps_sahf stdout ----
 
 thread 'test_size_keeps_sahf' panicked at crates/driver/llrm-cc/tests/m32_x87_status_word.rs:32:5:
