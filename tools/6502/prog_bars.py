@@ -494,9 +494,10 @@ def counted(ours_bytes, bars):
 
 
 CAVEATS = [
-    "ours: ours_cr.py, llrm-cc 6502-sim65 with -fwhole-program, product runtime archive (mkrt.py), one code layout (pad 0); bars: cc65 2.18, sdcc 4.5.0, llvm-mos 24.0.0git",
+    "ours: ours_cr.py, llrm-cc 6502-sim65 with -fwhole-program, product runtime archive (mkrt.py), one code layout (pad 0); bars: cc65 2.19-2 (Ubuntu package; self-reports V2.18), sdcc 4.5.0, llvm-mos 24.0.0git",
     "bytes: linked image minus the same image with an empty main (+ its rts); BSS not counted. A routine the empty image already links (cc65's pushax) is free to the program, so a bar is never larger than the whole",
     "clocks: run minus the empty-main run on both sides, ours net of crt0's zerobss for its BSS (sim65 zeroes it at 12-15 clk a byte, mos-sim does not); ours, cc65 and sdcc in sim65 -c, llvm-mos in mos-sim --cycles (two simulators); ours' floor is overlay/__void__.c",
+    "flags: per-compiler level tables, not tools/external_flags.py (cc65, sdcc and llvm-mos on these targets have no distro frame-pointer, PIE or canary defaults to pin)",
     "levels: cc65 O1 no optimizer, O2 = Os (-O), O3 -Oirs; sdcc O1 = O2 (default), O3 --opt-code-speed, Os --opt-code-size (changes few cells); llvm-mos -O1/-O2/-O3/-Os",
     "llvm-mos bar = -fno-lto as bars.rs; llvm-mos-lto (its default LTO link, prog_main inlined into the driver's main) is a fourth bar, `counted incl. LTO` below uses it too; ours gets -fwhole-program",
     "a cell whose reports differ from the .out is `wrong`, not a bar: cc65 miscompiles by-value structs and mixed-width compound assignment; sdcc has static (non-reentrant) parameters, so recursion is wrong (idiv_loop_os passes with __reentrant), other sdcc wrong cells not isolated",
