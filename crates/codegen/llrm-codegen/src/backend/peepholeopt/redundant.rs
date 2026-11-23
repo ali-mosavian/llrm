@@ -113,7 +113,7 @@ fn matching(
 }
 
 /// The canonical condition and prefix of a conditional instruction's name.
-fn split(name: &str) -> Option<(&'static str, &'static str)> {
+pub(super) fn split(name: &str) -> Option<(&'static str, &'static str)> {
     let prefix = ["cmov", "set", "j"].into_iter().find(|prefix| name.starts_with(prefix))?;
     let condition = match condition_of(name)? {
         "e" | "z" => "e",

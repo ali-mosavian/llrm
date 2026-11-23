@@ -33,13 +33,14 @@
 //! flags, and every reader of the flags after the compare must read only what
 //! the instruction sets as a compare of zero does: ZF always, SF unless
 //! `NoSignFlag`, OF only where the instruction clears it (`and`, `or`, `xor`);
-//! never CF. The flags must not live out of the block.
+//! never CF. The flags must not be live into a successor.
 //!
-//! Not translated: a compare redundant with another compare or subtract
-//! (`isRedundantFlagInstr`, `IsSwapped`, `ImmDelta`), `isUseDefConvertible`
-//! (`popcnt`), `adc`/`sbb`/`shld`/`shrd`/`lzcnt`/`tzcnt` and the BMI group as
-//! the flag source, the backward scan into a single predecessor and the NF
-//! variants (APX). A zero (`MOV32r0`) between the source and the compare moves
+//! A compare redundant with another compare or subtract is in `redundant`, the
+//! flags of an instruction that reads the value (`neg`, `bsf`, `bsr`:
+//! `isUseDefConvertible`) in `usedef`. Not translated: `adc`/`sbb`/`shld`/
+//! `shrd`/`lzcnt`/`tzcnt` and the BMI group as the flag source, the backward
+//! scan into a single predecessor and the NF variants (APX). A zero
+//! (`MOV32r0`) between the source and the compare moves
 //! above the source ([L5640](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86InstrInfo.cpp#L5640)),
 //! so it can be an `xor`.
 //!
@@ -61,6 +62,7 @@
 //! pin's `addMachineSSAOptimization` order), at every level but -O0.
 
 mod redundant;
+mod usedef;
 
 use crate::backend::machinesched::zero_move;
 use std::sync::Arc;
@@ -98,7 +100,7 @@ impl LIRTransform for PeepholeOptimizer {
 /// `body` with the compares an earlier instruction's flags make redundant gone,
 /// and each dead-result subtract a compare.
 pub fn compared(body: &LirBody) -> LirBody {
-    flags_reused(&redundant::compares_reused(&subtracts_compared(body)))
+    usedef::compares_of_uses_reused(&flags_reused(&redundant::compares_reused(&subtracts_compared(body))))
 }
 
 /// `body` with each dead-result subtract a compare.
@@ -378,13 +380,31 @@ fn reusable(
     block.succ.iter().all(|next| successor_overwrites_flags(body, *next, flags, pending)).then_some(def)
 }
 
-/// Whether the block at `at` writes every one of `pending` before it reads any.
+/// Whether none of `pending` is live into the block at `at`: on every path
+/// each is written before it is read, or the path ends (`isLiveIn(EFLAGS)` of
+/// the pin's successors, which a block that never reads the flags is not).
 pub(super) fn successor_overwrites_flags(
     body: &LirBody,
     at: i64,
     flags: &dyn Fn(&Insn) -> Option<(Lanes, Lanes)>,
-    mut pending: Lanes,
+    pending: Lanes,
 ) -> bool {
+    dead_into(body, at, flags, pending, &mut HashMap::default())
+}
+
+/// `successor_overwrites_flags`, with the lanes each block was already asked
+/// about: a block met again with no more of them is the same answer.
+fn dead_into(
+    body: &LirBody,
+    at: i64,
+    flags: &dyn Fn(&Insn) -> Option<(Lanes, Lanes)>,
+    mut pending: Lanes,
+    asked: &mut HashMap<i64, Lanes>,
+) -> bool {
+    if asked.get(&at).is_some_and(|earlier| pending.minus(earlier).is_empty()) {
+        return true;
+    }
+    asked.insert(at, pending.clone());
     let Some(block) = body.blocks.iter().find(|one| one.at == at) else { return false };
     for one in &block.insns {
         if one.is_meta() {
@@ -399,7 +419,7 @@ pub(super) fn successor_overwrites_flags(
             return true;
         }
     }
-    false
+    block.succ.iter().all(|next| dead_into(body, *next, flags, pending.clone(), asked))
 }
 
 /// `PeepholeOptimizer`'s `foldImmediate` (`X86InstrInfo::foldImmediateImpl`,
@@ -1010,6 +1030,97 @@ mod tests {
             insn(2, Operation::Branch, "jne", vec![], vec![], vec![], vec![]),
         ]);
         assert_eq!(names(&compared(&body), true), ["shr", "jne"]);
+    }
+
+    fn neg_of(
+        value: u32,
+        result: u32,
+    ) -> Arc<Insn> {
+        insn(0, Operation::Unary, "neg", vec![held(result)], vec![held(value)], vec![result], vec![value])
+    }
+
+    fn test_of(value: u32) -> Arc<Insn> {
+        insn(1, Operation::Compare, "test", vec![], vec![held(value), held(value)], vec![], vec![value, value])
+    }
+
+    fn jcc(name: &str) -> Arc<Insn> {
+        insn(2, Operation::Branch, name, vec![], vec![], vec![], vec![])
+    }
+
+    /// `v2 := neg v1; test v1, v1; je` (QB exec_loop at m64 -Os: `neg; lea;
+    /// test; je` where the pin has `neg; lea; jae`, one instruction more per
+    /// call): CF after `neg` is "v1 is not zero", so `je` reads `jae`.
+    #[test]
+    fn test_a_test_after_a_neg_of_the_value_is_the_negs_carry() {
+        let body = body_of(vec![neg_of(1, 2), test_of(1), jcc("je")]);
+        assert_eq!(names(&compared(&body), true), ["neg", "jae"]);
+        let body = body_of(vec![neg_of(1, 2), test_of(1), jcc("jne")]);
+        assert_eq!(names(&compared(&body), true), ["neg", "jb"]);
+    }
+
+    /// A reader of SF, OF or a magnitude means something else after `neg`.
+    #[test]
+    fn test_a_signed_reader_after_a_neg_keeps_its_test() {
+        for reader in ["jl", "js", "ja"] {
+            let body = body_of(vec![neg_of(1, 2), test_of(1), jcc(reader)]);
+            assert_eq!(names(&compared(&body), true), ["neg", "test", reader]);
+        }
+    }
+
+    /// The test of another value, or of the negation, is not `neg`'s source.
+    #[test]
+    fn test_a_test_of_another_value_after_a_neg_keeps_its_test() {
+        let body = body_of(vec![neg_of(1, 2), test_of(3), jcc("je")]);
+        assert_eq!(names(&compared(&body), true), ["neg", "test", "je"]);
+    }
+
+    fn scan_of(
+        name: &str,
+        repeat: bool,
+    ) -> Arc<Insn> {
+        let what = Semantics {
+            name: Some(name.into()),
+            dests: vec![held(2)],
+            sources: vec![held(2), held(1)],
+            repeat,
+            ..Semantics::new(Operation::Binary)
+        };
+        Arc::new(Insn::new(0, Some((0, 0)), Some(what), vec![2], vec![2, 1]))
+    }
+
+    /// `bsf` sets ZF when its source is zero: the test of the source goes, the
+    /// reader of ZF stays as it was. The `rep` form is `tzcnt`: its ZF is the
+    /// result's, the test stays.
+    #[test]
+    fn test_a_test_after_a_bit_scan_of_the_value_is_its_zero_flag() {
+        for scan in ["bsf", "bsr"] {
+            let body = body_of(vec![scan_of(scan, false), test_of(1), jcc("jne")]);
+            assert_eq!(names(&compared(&body), true), [scan, "jne"]);
+        }
+        let body = body_of(vec![scan_of("bsf", true), test_of(1), jcc("jne")]);
+        assert_eq!(names(&compared(&body), true), ["bsf", "test", "jne"]);
+    }
+
+    /// A successor that never reads the flags (it returns) does not keep the
+    /// compare: the flags are live into a block only where something reads
+    /// them (QB exec_loop: the `test` after a `neg` stayed because the
+    /// successors wrote no flag before the `ret`).
+    #[test]
+    fn test_a_successor_that_never_reads_the_flags_does_not_keep_the_test() {
+        let ends = |at: i64| {
+            LirBlock::new(at, vec![insn(at, Operation::Move, "mov", vec![held(8)], vec![held(7)], vec![8], vec![7])])
+        };
+        let block =
+            LirBlock { succ: vec![1, 2].into(), ..LirBlock::new(0, vec![neg_of(1, 2), test_of(1), jcc("jne")]) };
+        let mut body = LirBody::new(
+            "f",
+            0,
+            vec![block.into(), ends(1).into(), ends(2).into()],
+            IndexMap::default(),
+            IndexMap::default(),
+        );
+        body.registers = Some(llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO));
+        assert_eq!(names(&compared(&body), true), ["neg", "jb"]);
     }
 
     /// `cmp v2, 0` is the same compare.
