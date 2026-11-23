@@ -105,21 +105,41 @@ fn a_hot_remainder_loop_among_other_code_calls_the_speed_routine_at_os() {
 
 /// The same loop alone in its module: the speed routine's 131 B are most of
 /// the module's bytes, so its share is not twice the clocks it saves. The
-/// compact routine stays (bytes first at -Os).
+/// compact routine stays (bytes first at -Os): the pin's image ceiling is the
+/// signed kind's only (`[pin.division16]`; k_itoa -Os 200 -> 325 B, over sdcc's
+/// 288).
 #[test]
-fn a_remainder_loop_that_is_the_whole_module_keeps_the_compact_routine_at_os() {
+fn an_unsigned_remainder_loop_that_is_the_whole_module_keeps_the_compact_routine_at_os() {
     let text = assembly(&hot_rem_loop_with_code(0), &Request::new(Level::Os)).unwrap_or_else(|e| panic!("{e}"));
     assert!(text.contains("__umodhi3c\n"), "the compact remainder at -Os:\n{text}");
 }
 
-/// idiv_loop_os at -Os: the Euclid loop saves 1.5 times its byte share by the
-/// estimate (-57% clocks measured): under the rule, so compact. Row
-/// 6502-DIV-16-CALLEE-SAVES.
+/// k_itoa -Os (a digit loop: `u % radix`, `u /= radix` stored a byte at a time)
+/// was 200 B on the compact routines; the unsigned speed routine made it 325 B,
+/// over sdcc's 288 though its 169 B image is under the pin's 174 B: the
+/// unsigned kind keeps the share rule and the compact routines.
 #[test]
-fn the_euclid_loop_stays_compact_at_os_under_the_rule() {
+fn an_unsigned_digit_loop_keeps_the_compact_routines_at_os() {
+    let ir = format!(
+        "target datalayout = \"{}\"\ndefine void @itoa(i16 %n, ptr %buf, i16 %radix) {{\nentry:\n  br label %l\nl:\n  %v = phi i16 [ %n, %entry ], [ %q, %l ]\n  %p = phi ptr [ %buf, %entry ], [ %pn, %l ]\n  %q = udiv i16 %v, %radix\n  %r = urem i16 %v, %radix\n  %c = trunc i16 %r to i8\n  %d = add i8 %c, 48\n  store i8 %d, ptr %p\n  %pn = getelementptr i8, ptr %p, i16 1\n  %go = icmp ne i16 %q, 0\n  br i1 %go, label %l, label %done\ndone:\n  ret void\n}}\n",
+        datalayout()
+    );
+    let text = assembly(&ir, &Request::new(Level::Os)).unwrap_or_else(|e| panic!("{e}"));
+    assert!(
+        text.contains("hi3c\n") && !text.contains("__udivhi3\n") && !text.contains("__umodhi3\n"),
+        "the digit loop at -Os:\n{text}"
+    );
+}
+
+/// idiv_loop_os at -Os ran 2.31M clocks against llvm-mos's 1.07M on the compact
+/// remainder: the share rule (64% of the clocks for its 32% of the bytes)
+/// refused a speed routine whose image (229 B) is under the 285 B the pin links
+/// for a signed remainder (`[pin.division16]`). Row 6502-DIV-16-OS-IDIV-LOOP.
+#[test]
+fn the_euclid_loop_takes_the_speed_routine_at_os_within_the_pins_image() {
     let ir = format!("target datalayout = \"{}\"\n{GCD_SUM}", datalayout());
     let text = assembly(&ir, &Request::new(Level::Os)).unwrap_or_else(|e| panic!("{e}"));
-    assert!(text.contains("__modhi3c\n"), "the compact remainder at -Os:\n{text}");
+    assert!(text.contains("__modhi3\n") && !text.contains("__modhi3c"), "the speed remainder at -Os:\n{text}");
 }
 
 /// A division that runs once repays no byte: -Os keeps the compact routine.

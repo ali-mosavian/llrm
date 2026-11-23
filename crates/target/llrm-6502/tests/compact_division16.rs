@@ -63,3 +63,32 @@ fn the_compact_signed_word_divide_image_is_bounded() {
     assert!(image_bytes(&divide) <= 95, "{divide:?}");
     assert!(image_bytes(&remainder) <= 98, "{remainder:?}: {} B", image_bytes(&remainder));
 }
+
+/// idiv_loop_os -Os linked the compact remainder (2.31M clocks against llvm-mos's
+/// 1.07M) because the share rule priced the speed routine's bytes against the
+/// module's, while the pin's own flow links 285 B for a signed 16-bit remainder
+/// (`[pin.division16]`, llvm-mos a40207a, linked image). Ours link 229 B. The
+/// unsigned remainder (169 B, the pin's 174) is not admitted: k_itoa -Os went
+/// 200 -> 325 B, over sdcc's 288.
+#[test]
+fn the_speed_signed_remainder_links_no_more_than_the_pin_and_the_unsigned_kind_is_not_admitted() {
+    use llrm_6502::mulimage::{image_bytes, image_of_texts};
+    use llrm_6502::routines::within_pin_division16_image;
+    let names = vec!["f".to_owned()];
+    let signed = image_of_texts(&names, &["  jsr __modhi3\n".to_owned()]);
+    let unsigned = image_of_texts(&names, &["  jsr __umodhi3\n".to_owned()]);
+    assert_eq!(image_bytes(&signed), 229, "{signed:?}");
+    assert_eq!(image_bytes(&unsigned), 169, "{unsigned:?}");
+    assert!(within_pin_division16_image(&signed));
+    assert!(!within_pin_division16_image(&unsigned), "{unsigned:?}");
+}
+
+/// A signed image past the pin's 285 B is refused (a long division beside it).
+#[test]
+fn a_signed_image_past_the_pins_is_refused() {
+    use llrm_6502::mulimage::{image_bytes, image_of_texts};
+    use llrm_6502::routines::within_pin_division16_image;
+    let names = vec!["f".to_owned()];
+    let big = image_of_texts(&names, &["  jsr __modhi3\n  jsr __divsi3_fast\n".to_owned()]);
+    assert!(image_bytes(&big) > 285 && !within_pin_division16_image(&big), "{big:?}: {} B", image_bytes(&big));
+}

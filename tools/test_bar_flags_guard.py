@@ -16,13 +16,10 @@ SCANNED = ("tools", "runtime/compiler-rt/tests")
 
 # path -> owner and exit date. Each builds a bar with its own flags.
 DEBT = {
-    "tools/cc_cost.py": "unassigned, 2026-12-02",
     "tools/compile_map.py": "unassigned, 2026-12-02",
     "tools/scoreboard.py": "unassigned, 2026-12-02",
     "tools/wasm_corpus.sh": "unassigned, 2026-12-02",
     "tools/wasm_flag_check.py": "unassigned, 2026-12-02",
-    "tools/z80_flag_check.py": "unassigned, 2026-12-02",
-    "runtime/compiler-rt/tests/size_x86.sh": "unassigned, 2026-12-02",
 }
 
 
