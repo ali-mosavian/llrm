@@ -89,41 +89,58 @@ pub fn tail_duplicate(
     indirect: &[(String, Vec<String>)],
 ) -> Vec<(String, String)> {
     let size = if optsize { 1 } else { 2 };
-    let short: HashMap<String, (Vec<Inst>, Vec<Option<(u32, u32)>>)> = blocks
-        .iter()
-        .enumerate()
-        .skip(1)
-        .filter(|(_, block)| {
-            let goto = computed.contains(block.label.as_str());
-            // "Don't try to tail-duplicate single-block loops": a dispatch that
-            // can reach itself stays.
-            let loops = indirect.iter().any(|(label, targets)| *label == block.label && targets.contains(label));
-            copyable(block, &block.label, size, goto) && !loops
-        })
-        .map(|(_, block)| (block.label.clone(), (block.insts.clone(), block.locs.clone())))
-        .collect();
+    // A block that takes a computed goto's copy ends in one itself: the
+    // pin asks `terminatorIsComputedGotoWithSuccessors` of every block, each
+    // time round (`tailDuplicateBlocks` repeats until it changes nothing).
+    let mut computed: HashSet<String> = computed.iter().map(|label| (*label).to_owned()).collect();
     let mut copies = Vec::new();
-    if short.is_empty() {
-        return copies;
-    }
-    let at: HashMap<String, usize> = blocks.iter().enumerate().map(|(at, block)| (block.label.clone(), at)).collect();
-    for (index, block) in blocks.iter_mut().enumerate() {
-        // Only a block whose one exit is the jump takes a copy.
-        let Some(Inst::Branch { link: false, target: Target::Label(to) }) = block.insts.last() else { continue };
-        if block.insts.iter().filter_map(label_of).count() != 1 || *to == block.label {
-            continue;
+    // Each round removes a jump, so the rounds end; the bound is for a cycle
+    // of tails copied into one another.
+    for _ in 0..blocks.len() {
+        let short: HashMap<String, (Vec<Inst>, Vec<Option<(u32, u32)>>)> = blocks
+            .iter()
+            .enumerate()
+            .skip(1)
+            .filter(|(_, block)| {
+                let goto = computed.contains(block.label.as_str());
+                // "Don't try to tail-duplicate single-block loops": a dispatch that
+                // can reach itself stays.
+                let loops = indirect.iter().any(|(label, targets)| *label == block.label && targets.contains(label));
+                copyable(block, &block.label, size, goto) && !loops
+            })
+            .map(|(_, block)| (block.label.clone(), (block.insts.clone(), block.locs.clone())))
+            .collect();
+        if short.is_empty() {
+            break;
         }
-        let to = to.clone();
-        let Some((insts, locs)) = short.get(&to) else { continue };
-        // "Don't duplicate into a fall-through predecessor."
-        if at[&to] == index + 1 {
-            continue;
+        let at: HashMap<String, usize> =
+            blocks.iter().enumerate().map(|(at, block)| (block.label.clone(), at)).collect();
+        let mut changed = false;
+        for (index, block) in blocks.iter_mut().enumerate() {
+            // Only a block whose one exit is the jump takes a copy.
+            let Some(Inst::Branch { link: false, target: Target::Label(to) }) = block.insts.last() else { continue };
+            if block.insts.iter().filter_map(label_of).count() != 1 || *to == block.label {
+                continue;
+            }
+            let to = to.clone();
+            let Some((insts, locs)) = short.get(&to) else { continue };
+            // "Don't duplicate into a fall-through predecessor."
+            if at[&to] == index + 1 {
+                continue;
+            }
+            block.insts.pop();
+            block.locs.pop();
+            block.insts.extend(insts.iter().cloned());
+            block.locs.extend(locs.iter().copied());
+            if computed.contains(&to) {
+                computed.insert(block.label.clone());
+            }
+            copies.push((block.label.clone(), to));
+            changed = true;
         }
-        block.insts.pop();
-        block.locs.pop();
-        block.insts.extend(insts.iter().cloned());
-        block.locs.extend(locs.iter().copied());
-        copies.push((block.label.clone(), to));
+        if !changed {
+            break;
+        }
     }
     copies
 }
