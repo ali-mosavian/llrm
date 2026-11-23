@@ -335,6 +335,27 @@ fn a_replacement_that_moves_keeps_only_what_both_loads_state() {
     assert_eq!(combined("!tbaa !4", "!tbaa !4", false), ["tbaa"]);
 }
 
+/// A scope declaration's list is the call's operand, not a fact about it:
+/// merging two equal declarations dropped it as an unknown kind, leaving
+/// `scope.decl()` that the pin's verifier refuses (QB pfpu.c, arm64 -Os).
+#[test]
+fn a_merged_scope_declaration_keeps_its_scope_list() {
+    for moves in [false, true] {
+        assert_eq!(combined("!noalias.scope.decl !6", "!noalias.scope.decl !6", moves), ["noalias.scope.decl"]);
+    }
+}
+
+/// Speculating a scope declaration (`dropUBImplyingAttrsAndMetadata`) dropped
+/// its list the same way: the pfpu.c arm64 -Os body had `scope.decl()`.
+#[test]
+fn a_speculated_scope_declaration_keeps_its_scope_list() {
+    let mut module = parsed(&LOADS.replace("KMETA", "!noalias.scope.decl !6, !tbaa !4").replace("JMETA", "!tbaa !4"));
+    let k = inst(&module, "k");
+    let (_, function) = module.function_mut("f").expect("@f");
+    crate::twoentryphi::metadata_dropped(function, k);
+    assert_eq!(kinds(&module, "k"), ["noalias.scope.decl"]);
+}
+
 /// A load that says its value is not undef (`!noundef`) keeps its range
 /// where it does not move.
 #[test]
