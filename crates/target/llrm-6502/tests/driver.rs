@@ -3303,7 +3303,7 @@ fn an_os_word_divide_takes_the_speed_routine_only_where_its_clocks_repay_the_byt
 
 /// At -Os the long multiply is the 32-step compact walk (mul_constants: 42.0M
 /// clocks in 200-trip loops, llvm-mos 13.6M); `__mulsi3_fast` stops at the
-/// multiplier's last byte and is 19 B larger, linked once. A module takes
+/// multiplier's top set bit and is 9 B larger, linked once. A module takes
 /// it where the share of its clocks it saves is worth the share of its bytes it
 /// adds: multiplies in its loops, not one beside loops of other work.
 #[test]
@@ -3327,7 +3327,7 @@ fn a_module_takes_the_speed_multiply_where_the_clocks_it_saves_are_its_own() {
     let work = "store volatile i32 %x, ptr @g0\n  ".repeat(12);
     let beside = multiplies(
         &format!("{work}%r2 = shl i32 %x, 3"),
-        "%p1 = mul i32 %t3, %b\n  %p2 = mul i32 %p1, %a\n  %p3 = mul i32 %p2, %b\n  %r3 = mul i32 %p3, %t3",
+        "%r3 = mul i32 %t3, %b",
     );
     let text = assembly(&beside, &Request::new(Level::Os)).unwrap();
     assert!(text.contains("__mulsi3\n") && !text.contains("__mulsi3_fast"), "{text}");
