@@ -1,6 +1,12 @@
 //! Repeated instruction sequences of a module as called routines, when that is
 //! fewer bytes.
 //!
+//! # Switches
+//! Off: the `Request` pass `-fno-outline` (tests; `llrm-cc` and `llrm-6502-llc` do
+//! not take it) or `LLRM_6502_NO_OUTLINE=1` in the environment (an A/B of one
+//! binary). `LLRM_6502_OUTLINE_PLAIN=0` drops only the variant outlined before
+//! known constants move.
+//!
 //! # How it works
 //! Translation of the pin's `MachineOutliner` (`llvm/lib/CodeGen/
 //! MachineOutliner.cpp`), over the finished text of the module:
