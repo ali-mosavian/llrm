@@ -754,6 +754,19 @@ fn test_a_tail_of_one_is_not_shared() {
     assert!(tailmerge::merged(&source, false, None).unwrap().is_none());
 }
 
+/// `BranchFolder` as a pass of its own, ahead of placement, asks for 3
+/// (`TailMergeSize`) at every level, and 2 only for a tail that is a whole
+/// block (`ProfitableToMerge`). At `-Os` a tail of one instruction and a jump
+/// shared by the ends of two arms was merged (minimum 2): QB `exec_loop` m32 -Os
+/// merged the handlers' tails into shared blocks, each ending in a jump to the
+/// dispatch, +21.0M executed jumps and 56 dispatch copies where the pin has 122.
+#[test]
+fn test_a_tail_of_one_is_not_shared_before_placement_at_os_either() {
+    let source = arms_sharing_a_tail(1);
+
+    assert!(tailmerge::merged_in(&source, true, None, false, false).unwrap().is_none());
+}
+
 /// A tail of one move and two zero-code anchors was shared: `x_cordic` -O3
 /// split each diamond's join into an empty block, every other arm paid a jump
 /// to it, +5.0% clocks. LLVM has no anchors after allocation, so they count for
