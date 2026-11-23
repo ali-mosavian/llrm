@@ -1,8 +1,9 @@
-//! x86-64 -O2 and -Os: the dispatch of an interpreter (`goto *tab[*pc]` after
-//! every handler) is copied into each handler after allocation, as the pin does
-//! for a computed goto. Before, one block held it and all twenty handlers
-//! jumped to it, with the phi copies of `pc` and `sp` in front of every
-//! dispatch (QB `exec_loop`, dbl_fn +15% over gcc). Needs `LLRM_LLC`.
+//! x86-64 -O1 to -O3 (-Os keeps it one block, TL4): the dispatch of an
+//! interpreter (`goto *tab[*pc]` after every handler) is copied into each
+//! handler after allocation, as the pin does for a computed goto. Before, one
+//! block held it and all twenty handlers jumped to it, with the phi copies of
+//! `pc` and `sp` in front of every dispatch (QB `exec_loop`, dbl_fn +15% over
+//! gcc). Needs `LLRM_LLC`.
 
 use std::path::Path;
 use std::process::Command;
@@ -25,22 +26,26 @@ fn assembly(level: &str) -> String {
     std::fs::read_to_string(&asm).unwrap()
 }
 
-/// Twenty handlers and the entry: one indirect jump each, not one shared one.
-/// At -O2 placement finished what the pass left (11 jumps); at -Os, where the
-/// tail merge nests (pairs), the pass itself left 11 (QB exec_loop arrays
-/// +22%).
-fn jumps(level: &str) {
+fn jumps(level: &str) -> usize {
     let text = assembly(level);
-    let jumps = text.lines().filter(|line| line.trim_start().starts_with("jmp") && line.contains('[')).count();
-    assert!(jumps >= 20, "{jumps} indirect jumps at {level} in:\n{text}");
+    text.lines().filter(|line| line.trim_start().starts_with("jmp") && line.contains('[')).count()
 }
 
+/// Twenty handlers and the entry: one indirect jump each, not one shared one.
+/// -O2 left 11 (the tail merge nests; placement refused an indirect jump).
 #[test]
 fn a_computed_goto_dispatch_is_one_indirect_jump_per_handler() {
-    jumps("-O2");
+    for level in ["-O1", "-O2", "-O3"] {
+        let found = jumps(level);
+        assert!(found >= 20, "{found} indirect jumps at {level}: the dispatch is still shared");
+    }
 }
 
+/// DEVIATE TL4 (`skip_computed_goto_copies_at_size`): at -Os the dispatch stays
+/// one block, the shape before the copies (QB exec.c is over the best of gcc
+/// and clang in bytes when copied).
 #[test]
-fn a_computed_goto_dispatch_is_one_indirect_jump_per_handler_at_os() {
-    jumps("-Os");
+fn an_os_dispatch_stays_one_block() {
+    let found = jumps("-Os");
+    assert!(found <= 4, "{found} indirect jumps at -Os: the dispatch was copied into the handlers (bytes first)");
 }

@@ -46,6 +46,10 @@ post_ra_tail_duplicate 1
 tail_merge_pin_faithful 1
 # DEVIATE TM-PAIR (owner w12, exit 2026-12-13): see CpuTable::tail_merge_pairs_at_size.
 tail_merge_pairs_at_size 1
+# DEVIATE TL4 (owner x87, exit: the per-copy size of the dispatch is closed, row M64-OS-EXEC-LOOP-CLOCKS): see
+# TimingTable::skip_computed_goto_copies_at_size. Copied at -Os, QB exec.c is 12,080 -> 13,095 B (.text), over the
+# best of gcc and clang (12,633).
+skip_computed_goto_copies_at_size 1
 [clocks]
 alu_rr              =
 cmov                =
