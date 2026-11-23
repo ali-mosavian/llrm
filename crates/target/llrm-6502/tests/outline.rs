@@ -307,3 +307,43 @@ fn a_function_a_loop_calls_keeps_its_shift_inline_at_os_and_a_cold_one_outlines_
     let cold = assembly(&ir(false), &Request::new(Level::Os)).unwrap_or_else(|e| panic!("{e}"));
     assert!(cold.contains("__outl_") || !cold.contains("asl"), "called once:\n{cold}");
 }
+
+/// Four volatile 32-bit adds of two globals, as one function writes them.
+const FOUR_ADDS: &str = "@x = global i32 0
+@y = global i32 0
+define void @f() {
+  %a1 = load volatile i32, ptr @x
+  %b1 = load volatile i32, ptr @y
+  %s1 = add i32 %a1, %b1
+  store volatile i32 %s1, ptr @x
+  %a2 = load volatile i32, ptr @x
+  %b2 = load volatile i32, ptr @y
+  %s2 = add i32 %a2, %b2
+  store volatile i32 %s2, ptr @x
+  %a3 = load volatile i32, ptr @x
+  %b3 = load volatile i32, ptr @y
+  %s3 = add i32 %a3, %b3
+  store volatile i32 %s3, ptr @x
+  %a4 = load volatile i32, ptr @x
+  %b4 = load volatile i32, ptr @y
+  %s4 = add i32 %a4, %b4
+  store volatile i32 %s4, ptr @x
+  ret void
+}";
+
+/// `-fno-outline` (a `Request` pass, the only kill switch: `llrm-6502-llc` and
+/// `llrm-cc` do not take it, and `LLRM_6502_OUTLINE_PLAIN=0` only drops the
+/// variant outlined before known constants move) must change the output: an A/B
+/// "outliner off" that does not switch it off measures nothing. The 2026-11-23
+/// volatile_bitfield run found `LLRM_6502_OUTLINE_PLAIN=0` leaving all 28
+/// `__outl` references in place.
+#[test]
+fn the_no_outline_request_flag_removes_every_outlined_routine() {
+    let ir = format!("target datalayout = \"{}\"\n{FOUR_ADDS}\n", datalayout());
+    let on = assembly(&ir, &Request::new(Level::Os)).expect("compiles");
+    let mut request = Request::new(Level::Os);
+    request.passes.push("-fno-outline".to_owned());
+    let off = assembly(&ir, &request).expect("compiles");
+    assert!(on.contains("__outl_"), "no routine to remove:\n{on}");
+    assert!(!off.contains("__outl_"), "-fno-outline left a routine:\n{off}");
+}
