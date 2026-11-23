@@ -229,6 +229,7 @@ mod narrow_mul_no_long_multiply;
 mod no_cmov;
 mod o1_licm_constants;
 mod o1_trial_growth;
+mod branch_long;
 mod object;
 mod object_data;
 mod odd_width_memory;
