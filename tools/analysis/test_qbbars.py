@@ -20,6 +20,14 @@ def test_zero_is_kept_by_the_filter():
 
 GCC = 'for a; do shift; case "$a" in -std=c23) a=-std=c2x;; esac; set -- "$@" "$a"; done\nexec gcc "$@"\n'
 
+
+def stub_make(tmp_path, mods):
+    """A `make` that prints the compile lines of `mods` [(source, own flags)], as `make -n -B` does, and builds nothing."""
+    (tmp_path / 'bin').mkdir(exist_ok=True)
+    body = ''.join(f'echo "cc -std=c23 -O1 -g -Wall {own} -MMD -MP -MF x.d -MT x.o -c {src} -o x.o"\n' for src, own in mods)
+    (tmp_path / 'bin/make').write_text('#!/bin/sh\n' + body); (tmp_path / 'bin/make').chmod(0o755)
+    return f'{tmp_path / "bin"}:' + os.environ['PATH']
+
 def test_a_refused_module_is_listed_as_failed_not_compared(tmp_path):
     """A module llrm-cc refuses must read as failed, never as a (gcc-built or missing) bar compared against gcc: the QB wrapper once fell back to gcc and a refused module read 'unchanged'."""
     tree, dist, pin = tmp_path / 'tree', tmp_path / 'dist', tmp_path / 'pin'
@@ -28,9 +36,9 @@ def test_a_refused_module_is_listed_as_failed_not_compared(tmp_path):
     (dist / 'llrm-cc').write_text('#!/bin/sh\n' + 'case "$*" in *a.c*) exit 1;; esac\n' + GCC)
     (pin / 'clang').write_text('#!/bin/sh\n' + GCC)
     for p in (dist / 'llrm-cc', pin / 'clang'): p.chmod(0o755)
-    env = dict(os.environ, QB_TREE=str(tree), QB_SCRATCH=str(tmp_path), PIN_BIN=str(pin))
+    env = dict(os.environ, QB_TREE=str(tree), QB_SCRATCH=str(tmp_path), PIN_BIN=str(pin), PATH=stub_make(tmp_path, [('src/core/a.c', ''), ('src/core/b.c', '')]))
     out = subprocess.run(['python3', os.path.join(os.path.dirname(__file__), 'qbbars.py'), 'm64', 'Os', str(dist)], capture_output=True, text=True, env=env, cwd=tree).stdout
-    assert '1/2 files with all three' in out and "failed: ['a.c']" in out, out
+    assert '1/2 files with all three' in out and "failed: ['src/core/a.c']" in out, out
 
 
 def test_unset_pin_bin_is_a_message_not_a_home_path(tmp_path):
@@ -56,17 +64,28 @@ def test_a_table_in_data_ranks_equal_to_one_in_rodata():
     assert ns['whole'](a) == ns['whole'](b) == ns['text'](a) + 64
 
 
-def test_extra_modules_outside_core_are_counted(tmp_path):
-    """insns.c and os.c are outside src/core: the m32 census counted 79 modules and never the two the coordinator asked for."""
-    tree, dist, pin = tmp_path / 'tree', tmp_path / 'dist', tmp_path / 'pin'
+def test_the_module_set_and_defines_come_from_the_product_build(tmp_path):
+    """w11's and my censuses disagreed on the same 77 modules in all three columns: hand-written module lists and defines (mine had -DEXEC_COUNT, the perf build has none). The set and each file's own -D/-I come from `make -n -B`."""
+    tree, dist, pin, log = tmp_path / 'tree', tmp_path / 'dist', tmp_path / 'pin', tmp_path / 'log'
     (tree / 'src/core').mkdir(parents=True); (tree / 'src/plat').mkdir(); dist.mkdir(); pin.mkdir()
-    (tree / 'src/core/a.c').write_text('int a(int x){return x*3+1;}')
-    (tree / 'src/plat/b.c').write_text('int b(int x){return x*5+1;}')
-    (dist / 'llrm-cc').write_text('#!/bin/sh\n' + GCC); (pin / 'clang').write_text('#!/bin/sh\n' + GCC)
-    for p in (dist / 'llrm-cc', pin / 'clang'): p.chmod(0o755)
-    env = dict(os.environ, QB_TREE=str(tree), QB_SCRATCH=str(tmp_path), PIN_BIN=str(pin), QB_EXTRA='src/plat/b.c')
+    for p in ('src/core/a.c', 'src/plat/b.c', 'src/core/c.c'): (tree / p).write_text('int f(int x){return x*3+1;}')
+    real = shutil.which('gcc')
+    spy = f'#!/bin/sh\ncase " $* " in *" -c "*) echo "$0 $*" >> {log};; esac\n' + GCC.replace('exec gcc', f'exec {real}')
+    stub = stub_make(tmp_path, [('src/core/a.c', '-DFOO=1 -Iinc -isystem sys'), ('src/plat/b.c', '-DBAR')])
+    (tmp_path / 'bin/gcc-15').write_text(spy); (dist / 'llrm-cc').write_text(spy); (pin / 'clang').write_text(spy)
+    for p in (dist / 'llrm-cc', pin / 'clang', tmp_path / 'bin/gcc-15'): p.chmod(0o755)
+    env = dict(os.environ, QB_TREE=str(tree), QB_SCRATCH=str(tmp_path), PIN_BIN=str(pin), PATH=stub)
     out = subprocess.run(['python3', os.path.join(os.path.dirname(__file__), 'qbbars.py'), 'm64', 'Os', str(dist)], capture_output=True, text=True, env=env, cwd=tree).stdout
     assert '2/2 files with all three' in out, out
+    lines = log.read_text().splitlines()
+    assert len(lines) == 6 and not any('c.c ' in l.split('-c')[1] for l in lines), lines
+    for line in lines:
+        words = line.split()
+        if 'src/core/a.c' in words:
+            assert '-DFOO=1' in words and '-Iinc' in words and ('-isystem sys' in line), line
+            assert '-DBAR' not in words and '-DEXEC_COUNT' not in words, line
+        else:
+            assert '-DBAR' in words and '-DFOO=1' not in words, line
 
 
 def test_every_bar_carries_the_shared_external_flags(tmp_path):
@@ -84,10 +103,12 @@ def test_every_bar_carries_the_shared_external_flags(tmp_path):
             'm32': ['-fomit-frame-pointer', '-fno-stack-protector', '-fcf-protection=none', '-fno-pic', '-fno-pie', '-march=i486']}
     for arch, flags in want.items():
         log.write_text('')
-        env = dict(os.environ, QB_TREE=str(tree), QB_SCRATCH=str(tmp_path), PIN_BIN=str(pin), PATH=f'{tmp_path / "bin"}:' + os.environ['PATH'])
+        env = dict(os.environ, QB_TREE=str(tree), QB_SCRATCH=str(tmp_path), PIN_BIN=str(pin), PATH=stub_make(tmp_path, [('src/core/a.c', '')]))
         subprocess.run(['python3', os.path.join(os.path.dirname(__file__), 'qbbars.py'), arch, 'Os', str(dist)], capture_output=True, text=True, env=env, cwd=tree)
         lines = log.read_text().splitlines()
         assert len(lines) == 3, lines
         for line in lines:
             for flag in flags:
                 assert flag in line.split(), f'{arch}: {flag} missing in {line}'
+        assert (arch != 'm32') or any('-fexcess-precision=fast' in l.split() for l in lines), 'gcc -m32 cannot compile pfpu.c without it (the module was dropped)'
+        assert any('-D__cdecl=' in l.split() for l in lines), 'gcc cannot compile qbrt.c without -D__cdecl= (the column dropped the module)'
