@@ -1014,6 +1014,16 @@ mod tests {
         let said = physical_vector(&wide(vec![sub()]), &BTreeSet::new());
         assert!(said.iter().any(|complaint| complaint.contains("reads xmm1 before any path writes it")), "{said:?}");
         assert!(physical_vector(&wide(vec![zero, sub()]), &BTreeSet::new()).is_empty());
+        // A register the entry delivers is defined: a variadic function's save
+        // of xmm3 names it so (`x86_64_stdarg_fp_save`); the one undelivered
+        // register is still read before any write.
+        let held = |value| ir::Held { value, width: 16, offset: 0 };
+        let arrives = Insn {
+            defines: vec![9],
+            delivers: vec![(held(9), RegId::XMM1)],
+            ..Insn::new(4, Some((4, 4)), Some(semantics(Operation::Nothing, "", vec![], vec![])), vec![], vec![])
+        };
+        assert!(physical_vector(&wide(vec![arrives, sub()]), &BTreeSet::new()).is_empty());
     }
 
     /// `movzx ebx, bx` before a loop that writes the word (STATIC.BAS -O2,
