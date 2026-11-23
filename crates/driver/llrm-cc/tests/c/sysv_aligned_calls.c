@@ -20,3 +20,12 @@ int local_alone(void) {
     sink(&x);
     return x;
 }
+
+/* Three calls of 4, 4 and 8 bytes: the cleanup of one is the pad of the next. */
+void g1(int);
+int trio(int a) {
+    g1(a);
+    g1(a + 1);
+    g(a, 1);
+    return a;
+}
