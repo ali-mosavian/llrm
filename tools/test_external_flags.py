@@ -128,3 +128,25 @@ def test_any_other_difference_between_gcc_and_the_program_is_refused(gcc):
 def test_a_flag_gcc_cannot_take_has_no_gcc_column():
     with pytest.raises(ValueError, match="no gcc column"):
         external_flags.check_gcc_flags(["-ffixed-point"], [])
+
+
+def test_the_m68k_gcc_bar_is_soft_float_in_every_builder():
+    """gcc's 68020 default is 68881 hardware float and ours has no FPU: a bar built without the flag read 332 B low on QB double.c
+    (3746 B against 4078 B soft). One source: the matrix and the clock harness take it from external_flags, no copy."""
+    import m68k_corpus_matrix
+
+    assert external_flags.gcc_float("m68k") == ("-msoft-float",)
+    assert m68k_corpus_matrix.GCC_FLOAT == external_flags.gcc_float("m68k")
+    for builder in ("m68k_clk.py", "m68k_corpus_matrix.py"):
+        text = (ROOT / "tools" / builder).read_text()
+        assert '"-msoft-float"' not in text, f"{builder} carries its own float flag, not external_flags.gcc_float"
+
+
+def test_every_bar_arch_has_a_float_ruling_and_it_is_in_the_config_hash():
+    assert set(external_flags.GCC_FLOAT) == {"m68k", "m32", "m64", "arm64"}
+    before = external_flags.config_hash()
+    external_flags.GCC_FLOAT["m68k"] = ()
+    try:
+        assert external_flags.config_hash() != before
+    finally:
+        external_flags.GCC_FLOAT["m68k"] = ("-msoft-float",)
