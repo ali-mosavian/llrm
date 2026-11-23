@@ -994,8 +994,9 @@ impl Printer<'_> {
                     _ => self.push(format!("jp {}, {target}", op[2..].to_lowercase())),
                 }
             }
-            // The carry is set for a pair at most zero: `scf` stands for the zero (which `or` left clear), the sign
-            // is the carry of doubling the high byte. 7 B where the biased subtract is 13.
+            // The carry is set for a pair at most zero: `scf` stands for the
+            // zero (which `or` left clear), the sign is the carry of doubling
+            // the high byte. 7 B where the biased subtract is 13.
             "TSTP16" => {
                 let (low, high) = lanes(self.register(inst, 1)?)?;
                 let (low, high) = (name(low), name(high));
@@ -3636,7 +3637,8 @@ pub fn price_emitted_calls(
     let mut calls = Vec::new();
     for ((line, weight), trips) in lines.iter().zip(&weights).zip(&trips) {
         let Line::Inst(text) = line else { continue };
-        let Some(name) = text.strip_prefix("call ").or_else(|| text.strip_prefix("jp ")) else { continue };
+        let call = crate::runtime_size::split_note(text).0;
+        let Some(name) = call.strip_prefix("call ").or_else(|| call.strip_prefix("jp ")) else { continue };
         let name = name.trim();
         if name.starts_with('_') && !name.starts_with("__") {
             calls.push((name.to_owned(), weight * trips));

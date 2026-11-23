@@ -70,6 +70,14 @@ impl BuilderTarget {
     }
 }
 
+/// What the middle end proves of a divide's dividend: it lies in
+/// `low..=high`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DividendRange {
+    pub low: i64,
+    pub high: i64,
+}
+
 /// The target facts the builder asks (`TLI->` in the pin).
 #[derive(Clone, Debug)]
 pub struct BuilderTarget {
@@ -158,6 +166,14 @@ pub struct BuilderTarget {
     /// `-fexcess-precision=standard`: an integer too wide for its float type's
     /// mantissa is rounded to that type (x87 would keep it exact).
     pub float_store: bool,
+    /// The bits the middle end proves a divide's dividend needs, by divide:
+    /// the divide libcall's target hook reads them
+    /// (`SelectionDAG::libcall_dividend`). DEVIATE DIV-RANGE-NOTE (owner
+    /// w12, exit 2026-12-13): the pin's libcall has no operand facts but
+    /// the DAG's known bits; a target opt-in (z80), none elsewhere. Exit:
+    /// the ranges ride on the IR as metadata the builder reads and the DAG
+    /// asserts.
+    pub dividend_ranges: std::sync::Arc<HashMap<InstId, DividendRange>>,
     /// A dense switch may be a jump table: the target prices one (the MIR pass
     /// reads the same cost).
     pub jump_tables: bool,
@@ -354,6 +370,16 @@ impl BuilderTarget {
         on: bool,
     ) -> BuilderTarget {
         self.tail_calls = on;
+        self
+    }
+
+    /// This target with the dividend ranges of its divides asserted
+    /// ([`BuilderTarget::dividend_ranges`]).
+    pub fn with_dividend_ranges(
+        mut self,
+        ranges: HashMap<InstId, DividendRange>,
+    ) -> BuilderTarget {
+        self.dividend_ranges = std::sync::Arc::new(ranges);
         self
     }
 
@@ -566,6 +592,7 @@ impl BuilderTarget {
             max_alloca_align: None,
             va_arg_align_cap: None,
             float_store: false,
+            dividend_ranges: Default::default(),
             jump_tables: true,
             opt_size: false,
             bytes_strict: false,
@@ -4042,6 +4069,9 @@ impl Builder<'_> {
         }
         let vt = self.dag.value_type(lhs);
         let node = self.dag.get_node_flags(opcode, vt, &[lhs, rhs], flags);
+        if let Some(range) = self.current.and_then(|at| self.target.dividend_ranges.get(&at)) {
+            self.dag.dividend_ranges.insert(node.node, *range);
+        }
         self.set_value(instruction.result.expect("a binary operator has a result"), node);
         Ok(())
     }
