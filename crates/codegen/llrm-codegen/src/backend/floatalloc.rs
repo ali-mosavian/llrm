@@ -607,7 +607,20 @@ fn _exact(one: &Insn) -> bool {
         Operation::FloatArith | Operation::FloatArithPop | Operation::FloatUnary => {
             matches!(
                 name,
-                "fxch" | "fcom" | "fcomp" | "fcompp" | "fucom" | "fucomp" | "fucompp" | "ftst" | "fabs" | "fchs"
+                "fxch"
+                    | "fcom"
+                    | "fcomp"
+                    | "fcompp"
+                    | "fucom"
+                    | "fucomp"
+                    | "fucompp"
+                    | "fcomi"
+                    | "fcomip"
+                    | "fucomi"
+                    | "fucomip"
+                    | "ftst"
+                    | "fabs"
+                    | "fchs"
             )
         }
         _ => true,
