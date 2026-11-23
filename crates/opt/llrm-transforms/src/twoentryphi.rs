@@ -72,6 +72,7 @@ use llrm_mir::tti::{Cost, CostKind, Tti};
 
 
 use crate::edges;
+use crate::inlinemetadata::DECL;
 
 /// `two-entry-phi-node-folding-threshold`, in `TCC_Basic`.
 const THRESHOLD: i64 = 4;
@@ -556,7 +557,8 @@ pub(crate) fn metadata_dropped(
         .instruction(inst)
         .metadata
         .iter()
-        .filter(|(kind, _)| !KEPT_METADATA.contains(&kind.as_str()))
+        // A scope declaration's list is its operand in the pin, not metadata.
+        .filter(|(kind, _)| kind != DECL && !KEPT_METADATA.contains(&kind.as_str()))
         .map(|(kind, _)| kind.clone())
         .collect();
     for kind in kinds {

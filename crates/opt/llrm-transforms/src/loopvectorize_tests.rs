@@ -817,6 +817,19 @@ fn a_memory_check_keeps_the_remainder_of_a_divisible_constant_trip() {
     assert_eq!(count(&text, "load <8 x i16>"), 2, "{text}");
 }
 
+/// `computeMaxVF` at `optsize` (`runtimeChecksRequired`): a loop that needs a
+/// memory check stays scalar even where the lanes divide its trip count. arm64
+/// -Os `host_text_row` was widened with a `vector.memcheck` and a scalar
+/// fallback, 31 instructions against the pin's scalar 19.
+#[test]
+fn an_optsize_loop_that_needs_a_memory_check_stays_scalar() {
+    for attribute in ["optsize", "minsize"] {
+        let text = run(&MEMCHECK_COPY_CONST.replace("i64 %n) {", &format!("i64 %n) {attribute} {{")));
+        assert_eq!(count(&text, "vector.memcheck:"), 0, "{attribute}: {text}");
+        assert_eq!(count(&text, "<8 x i16>"), 0, "{attribute}: {text}");
+    }
+}
+
 const INDUCTION_TRUNC: &str = include_str!("../tests/lv/induction_trunc.ll");
 const INDUCTION_VALUE: &str = include_str!("../tests/lv/induction_value.ll");
 const INDUCTION_START: &str = include_str!("../tests/lv/induction_start.ll");

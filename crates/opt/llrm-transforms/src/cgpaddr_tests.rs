@@ -556,3 +556,57 @@ pos:
     let (entry, _) = after.split_once("neg:").expect("the first arm");
     assert!(entry.contains("sext"), "{after}");
 }
+
+/// An address that is also stored as a value (`store ptr %q, ...`) stays one
+/// register: sinking it made a `gep` in the load's block and left the first for
+/// the store, so the post-indexed load could not take the base's increment
+/// (QB operands.c, arm64 -Os, +4 B in about 50 functions). The pin's
+/// `isProfitableToFoldIntoAddressingMode` refuses to fold an address with a use
+/// that is not a memory access.
+#[test]
+fn an_address_with_a_use_that_is_not_an_access_is_not_sunk() {
+    let after = sunk_flat(
+        "define i32 @f(ptr %p, i32 %c) {
+b0:
+  %q = getelementptr inbounds nuw i8, ptr %p, i32 8
+  %v = load i32, ptr %p
+  %t = icmp eq i32 %c, 0
+  br i1 %t, label %b1, label %b2
+
+b1:
+  %x = load i32, ptr %q
+  ret i32 %x
+
+b2:
+  store ptr %q, ptr %p
+  ret i32 %v
+}
+",
+    );
+    assert_eq!(after.matches("getelementptr").count(), 1, "the address is made once: {after}");
+}
+
+/// The same with a scaled index (`base + 4 * i`): the address read as a value
+/// elsewhere is made once, not again beside the load.
+#[test]
+fn a_scaled_address_with_a_use_that_is_not_an_access_is_not_sunk() {
+    let after = sunk_flat(
+        "define i32 @f(ptr %p, i32 %i, i32 %c) {
+b0:
+  %q = getelementptr inbounds i32, ptr %p, i32 %i
+  %v = load i32, ptr %p
+  %t = icmp eq i32 %c, 0
+  br i1 %t, label %b1, label %b2
+
+b1:
+  %x = load i32, ptr %q
+  ret i32 %x
+
+b2:
+  store ptr %q, ptr %p
+  ret i32 %v
+}
+",
+    );
+    assert_eq!(after.matches("getelementptr").count(), 1, "the address is made once: {after}");
+}

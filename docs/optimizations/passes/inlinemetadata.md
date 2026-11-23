@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/inlinemetadata.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/inlinemetadata.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/inlinemetadata.rs sha256:385e5670af3dadfb45344825d5556db1839c7c17e08f99ca4e0cafaed90842e9 -->
+<!-- src: crates/opt/llrm-transforms/src/inlinemetadata.rs sha256:3097b5bbe9dd419ff174c37e69383e780f570c6ed0b62a03c59ea968f96bc1d0 -->
 
 # inlinemetadata
 
@@ -32,4 +32,4 @@ copy:       %v = load i32, ptr %p, !alias.scope !1
 ```
 
 ## Used by
-Named by `inline`, `inlinealias`, `noaliasscopes`.
+Named by `inline`, `inlinealias`, `local`, `noaliasscopes`, `twoentryphi`.

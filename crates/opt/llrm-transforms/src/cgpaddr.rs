@@ -847,6 +847,17 @@ fn matched_over(
     if !tti.is_legal_addressing_mode_at(space, bytes, reg.is_some(), displacement, true, scale) {
         return plain();
     }
+    // `matchAddr`: `I->hasOneUse() || isProfitableToFoldIntoAddressingMode`.
+    // A `gep` read by more than the accesses that fold it, and whose mode
+    // needs a register, stays: it is the base register of the mode above it.
+    let registers = !(is_global(unit.context, inner.base) && reg.is_none() && index.is_none());
+    if let Some(result) = instruction.result
+        && registers
+        && unit.function.users(result).iter().count() > 1
+        && !crate::spill::address_only(unit.function, result, DEPTH)
+    {
+        return plain();
+    }
     insts.push(gep);
     Mode { base: inner.base, reg, offset: total, index, insts, in_bounds }
 }

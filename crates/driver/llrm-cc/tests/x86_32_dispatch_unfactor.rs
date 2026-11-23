@@ -38,13 +38,13 @@ fn a_computed_goto_dispatch_is_copied_into_each_handler() {
     assert!(jumps >= 20, "{jumps} indirect jumps: the dispatch is still one shared block (the pin: 21)");
 }
 
-/// DEVIATE TL5 (`latetaildup::UNFACTOR_AT_SIZE`): -Os keeps the tree's partial
-/// state ON PURPOSE (8 of 21 dispatches copied: the test that asked for 20 was
-/// red since #10641): copied to the end, QB exec.c is over the best of gcc and
-/// clang in bytes. Row M32-OS-EXEC-LOOP-CLOCKS; the lever that closes the
-/// copy's size flips it.
+/// OPEN, row M32-OS-EXEC-LOOP-CLOCKS: at -Os the dispatch is copied only twice
+/// (the pin: 21). The tail duplicator is not the cause: our dispatch holds 11
+/// instructions at -Os (`pc` and the `count` address spilled to the stack), the
+/// pin's 5, past the bound of 10. Flip to `>= 20` when the allocation holds
+/// them in registers.
 #[test]
-fn an_os_dispatch_keeps_the_trees_partial_state() {
+fn an_os_dispatch_is_still_shared_on_m32_while_it_holds_spills() {
     let jumps = indirect_jumps("-Os");
-    assert_eq!(jumps, 8, "{jumps} indirect jumps at -Os: the tree's state before the unfactoring is 8");
+    assert_eq!(jumps, 2, "{jumps} indirect jumps at -Os: the dispatch holds 11 instructions, over the bound of 10");
 }

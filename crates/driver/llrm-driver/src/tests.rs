@@ -1262,6 +1262,30 @@ fn a_constant_copy_of_bytes_at_m32_os_is_rep_movsb_up_to_128_and_a_call_past_it(
     assert!(long.contains("call") && long.contains("memcpy") && !long.contains("rep movs"), "{long}");
 }
 
+/// exec.c's table copy (1576 B, dword-aligned) was `rep movs` at m32 -Os: its fixed ESI/EDI/ECX at entry kept the
+/// whole-function values out of ESI/EDI and the interpreter pc was reloaded in every handler (+250 `[esp+..]` loads, +7.2%
+/// instructions). The pin's 128-byte limit holds at any alignment: up to it `rep movs`, past it the call.
+#[test]
+fn an_aligned_constant_copy_at_m32_os_is_rep_movs_up_to_128_and_a_call_past_it() {
+    let text = |bytes: u32| {
+        format!(
+            "target datalayout = \"@m32-datalayout@\"\n\
+             target triple = \"i486-unknown-linux-gnu\"\n\
+             declare void @llvm.memcpy.p0.p0.i32(ptr, ptr, i32, i1)\n\
+             define void @f(ptr align 4 %d, ptr align 4 %s) optsize {{\n\
+             \x20 call void @llvm.memcpy.p0.p0.i32(ptr align 4 %d, ptr align 4 %s, i32 {bytes}, i1 false)\n  ret void\n}}\n"
+        )
+    };
+    let listing = |bytes| {
+        let (built, _) = compiled(&flags(&["-mabi=sysv", "-Os"]), &text(bytes), "f").unwrap();
+        llrm_codegen::backend::masm::text(&built).unwrap()
+    };
+    let short = listing(128);
+    assert!(short.contains("rep movs") && !short.contains("call"), "{short}");
+    let long = listing(1576);
+    assert!(long.contains("call") && long.contains("memcpy") && !long.contains("rep movs"), "{long}");
+}
+
 /// `push imm8; pop r` is 5 clocks on the 486 against the `mov`'s 1, and the pin writes it at `minsize` only: at m32 -Os it
 /// was also written in once-per-call blocks (`push 0x4d; pop edx` in x_histo2), +3..+9 clk in nine -Os cells and 244k pops
 /// in jpeg_fixed, each of them over by that much with bytes under the bar. -Os and -O2 keep the `mov`; `minsize` pushes.
@@ -6699,8 +6723,8 @@ fn a_copy_loop_of_run_time_length_is_a_memcpy_at_m32_o2_and_rep_movsb_at_os() {
 
 /// REP-MOVS-OS (m32 -Os): a constant copy is `rep movs` in the widest block its size and alignment allow, not `movsb`:
 /// the same bytes, a third to a quarter of the clocks. A block under a dword stops at 128 bytes (scroll -Os: 4000 bytes of
-/// two-byte-aligned shorts as `rep movsw` took 682,269 clk, the call 533,965); a dword-aligned copy stays `rep movsd`
-/// whatever its size, the library copies by dwords too.
+/// two-byte-aligned shorts as `rep movsw` took 682,269 clk, the call 533,965); so does a dword-aligned copy (the pin's
+/// `emitConstantSizeRepmov` limit: exec.c's 1576 bytes at entry as `rep movsd` spilled the interpreter pc).
 #[test]
 fn an_aligned_constant_copy_is_rep_movs_in_wide_blocks_at_m32_os() {
     let text = |align: u32, bytes: u32| {
@@ -6720,10 +6744,12 @@ fn an_aligned_constant_copy_is_rep_movs_in_wide_blocks_at_m32_os() {
     assert!(listing(2, 120).contains("movsw"), "two-byte aligned, within 128:\n{}", listing(2, 120));
     let call = listing(2, 4000);
     assert!(call.contains("memcpy") && !call.contains("rep movs"), "two-byte aligned past 128 is the call:\n{call}");
-    assert!(listing(4, 4000).contains("movsd"), "four-byte aligned:\n{}", listing(4, 4000));
+    assert!(listing(4, 120).contains("movsd"), "four-byte aligned, within 128:\n{}", listing(4, 120));
+    let aligned = listing(4, 4000);
+    assert!(aligned.contains("memcpy") && !aligned.contains("rep movs"), "four-byte aligned past 128 is the call:\n{aligned}");
     assert!(listing(1, 120).contains("movsb") && !listing(1, 120).contains("movsw"), "unaligned stays bytes");
     assert!(!listing(2, 30).contains("movsw"), "a short copy would pay the operand-size prefix for nothing:\n{}", listing(2, 30));
-    assert!(listing(4, 4002).contains("movsw") && !listing(4, 4002).contains("movsd"), "a size of 2 mod 4 stays whole blocks of 2");
+    assert!(listing(4, 126).contains("movsw") && !listing(4, 126).contains("movsd"), "a size of 2 mod 4 stays whole blocks of 2");
 }
 
 /// x86-m64 shellsort -O2: the 64-trip fill loop is vectorized (v8i16 `pmullw`,

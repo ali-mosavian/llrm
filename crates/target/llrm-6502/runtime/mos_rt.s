@@ -860,8 +860,9 @@ __mulsi3:                       ; A:X:rc2:rc3 * rc4..rc7 -> A:X:rc2:rc3 (the low
   bne @next
   jmp out32_st
 
-; __mulsi3 for speed: the multiplier is walked a byte at a time and the walk
-; stops at its last set byte, 19 bytes more, a third of the clocks for a byte.
+; __mulsi3 for speed: llvm-mos's `__mulsi3` (compiler-rt, the same shift-and-add): the walk stops
+; after the multiplier's top set bit, not at a byte, and the top two bytes of the product are kept in
+; y:x. Its zero test on entry is left out: a zero multiplier walks one trip.
 .export __mulsi3_fast
 __mulsi3_fast:                       ; A:X:rc2:rc3 * rc4..rc7 -> A:X:rc2:rc3 (the low 32 bits)
   sta __sa
@@ -869,11 +870,8 @@ __mulsi3_fast:                       ; A:X:rc2:rc3 * rc4..rc7 -> A:X:rc2:rc3 (th
   lda #0
   sta __st
   sta __st+1
-  sta __st+2
-  sta __st+3
-  ldy #4
-@byte:
-  ldx #8
+  tay
+  tax
 @next:
   lsr rc7
   ror rc6
@@ -887,28 +885,30 @@ __mulsi3_fast:                       ; A:X:rc2:rc3 * rc4..rc7 -> A:X:rc2:rc3 (th
   lda __st+1
   adc __sa+1
   sta __st+1
-  lda __st+2
+  tya
   adc rc2
-  sta __st+2
-  lda __st+3
+  tay
+  txa
   adc rc3
-  sta __st+3
+  tax
 @skip:
   asl __sa
   rol __sa+1
   rol rc2
   rol rc3
-  dex
+  lda rc7
+  bne @next
+  lda rc6
+  bne @next
+  lda rc5
   bne @next
   lda rc4
-  ora rc5
-  ora rc6
-  ora rc7
-  beq @done
-  dey
-  bne @byte
-@done:
-  jmp out32_st
+  bne @next
+  sty rc2
+  stx rc3
+  ldx __st+1
+  lda __st
+  rts
 
 ; 16 x 16 -> 32: the words A:X and rc4:rc5 in, the product in A:X:rc2:rc3. The product is built in
 ; __st:rc4:rc5, the multiplier shifting out of rc4:rc5 as the low half shifts in. A multiplier whose
