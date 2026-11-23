@@ -308,7 +308,7 @@ fn liftable(
     let (mut read, mut written) = (crate::backend::lanes::Lanes::new(), crate::backend::lanes::Lanes::new());
     let mut found = Vec::new();
     for (rank, (at, insn)) in block.insns.iter().enumerate().filter(|(_, insn)| !insn.is_meta()).enumerate() {
-        let Some((reads, writes)) = crate::backend::peephole::_register_effects(regs, bits, insn, true, true) else {
+        let Some((reads, writes)) = effects(regs, bits, insn) else {
             break;
         };
         if rank < open
@@ -324,6 +324,28 @@ fn liftable(
         written = written.or(&writes);
     }
     found
+}
+
+/// What `insn` reads and writes, `None` where that is not known. The lanes
+/// name integer registers only: an operand in another class (an SSE or x87
+/// register) read and wrote nothing, so the instructions `subsd xmm5, xmm3`
+/// after each way's own `movsd xmm3, [g]` were hoisted above the branch and
+/// read `xmm3` before either load (QB `PMAP`: 2 for 199).
+fn effects(
+    regs: llrm_lir::registers::Regs,
+    bits: u32,
+    insn: &Insn,
+) -> Option<(crate::backend::lanes::Lanes, crate::backend::lanes::Lanes)> {
+    let unmodelled = insn.what.as_ref().is_some_and(|what| {
+        what.dests.iter().chain(&what.sources).any(|loc| {
+            matches!(loc, crate::model::ir::Loc::Reg(one)
+                if !regs.in_class(one.register, llrm_lir::registers::class::INT) && !regs.is_segment(one.register))
+        })
+    });
+    if unmodelled {
+        return None;
+    }
+    crate::backend::peephole::_register_effects(regs, bits, insn, true, true)
 }
 
 /// An instruction `isSafeToMove` allows above a branch: a move or arithmetic
@@ -712,7 +734,7 @@ impl<'a> Folder<'a> {
         let branches =
             |insn: &Insn| insn.what.as_ref().is_some_and(|what| matches!(what.op, Operation::Branch | Operation::Jump));
         for insn in block.insns[from..].iter().filter(|insn| !insn.is_meta() && !branches(insn)) {
-            let Some((read, write)) = crate::backend::peephole::_register_effects(regs, bits, insn, true, true) else {
+            let Some((read, write)) = effects(regs, bits, insn) else {
                 return false;
             };
             used = used.or(&read);
@@ -725,7 +747,7 @@ impl<'a> Folder<'a> {
         let mut run = Vec::new();
         while let Some((at, by)) = pairs(run.len()) {
             let head = &first.insns[at];
-            let Some((reads, writes)) = crate::backend::peephole::_register_effects(regs, bits, head, true, true)
+            let Some((reads, writes)) = effects(regs, bits, head)
             else {
                 break;
             };
