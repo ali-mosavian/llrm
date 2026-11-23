@@ -51,3 +51,14 @@ fn an_os_dispatch_keeps_the_trees_partial_state() {
     let found = jumps("-Os");
     assert_eq!(found, 9, "{found} indirect jumps at -Os: the tree's state before the unfactoring is 9");
 }
+
+/// The tail duplicator's new phis (`pc`, `sp`) went after the old ones, so the
+/// copies at the dispatch came out reversed against the pin's and `pc + K` tied
+/// to `K`: a `mov` of `pc` in every handler (278 instructions, the pin's 259).
+#[test]
+fn a_dispatch_handler_ties_the_sum_to_pc_without_a_copy() {
+    for level in ["-O1", "-O2", "-O3"] {
+        let count = assembly(level).lines().filter(|line| line.starts_with("    ") && !line.trim_start().starts_with(['d', '.'])).count();
+        assert!(count <= 259, "{count} instructions at {level}: a handler copies pc");
+    }
+}
