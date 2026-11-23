@@ -4,7 +4,8 @@ import sys,os,glob,subprocess,tempfile,shutil
 from concurrent.futures import ThreadPoolExecutor
 A,L,D=sys.argv[1:4]; T=os.environ['QB_TREE']; b=os.environ.get('QB_SCRATCH',tempfile.gettempdir())
 m,tgt=('-m64','x86_64-linux') if A=='m64' else ('-m32','x86_32-linux'); extra=['-isystem','/usr/include/x86_64-linux-gnu'] if A=='m32' else []
-CLANG=os.path.join(os.environ.get('PIN_BIN',os.path.expanduser('~/scratch/llvm-build/bin')),'clang')
+PIN_BIN=os.environ.get('PIN_BIN') or sys.exit('qbbars: set PIN_BIN to the pin build bin directory (clang)')
+CLANG=os.path.join(PIN_BIN,'clang')
 CF=['-std=c23','-D_DEFAULT_SOURCE',f'-{L}',m,*extra,'-fno-asynchronous-unwind-tables','-fno-unwind-tables','-fno-stack-protector','-fcf-protection=none','-U_FORTIFY_SOURCE','-D_FORTIFY_SOURCE=0','-fno-pic','-w','-DARENA_AT_ZERO=0','-DPFIL_PATH=4096','-DEXEC_COUNT','-Isrc/plat/host/include','-Isrc','-Isrc/core']
 def text(o):
     r=subprocess.run(['size','-A',o],capture_output=True,text=True).stdout

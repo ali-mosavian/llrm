@@ -31,3 +31,16 @@ def test_a_refused_module_is_listed_as_failed_not_compared(tmp_path):
     env = dict(os.environ, QB_TREE=str(tree), QB_SCRATCH=str(tmp_path), PIN_BIN=str(pin))
     out = subprocess.run(['python3', os.path.join(os.path.dirname(__file__), 'qbbars.py'), 'm64', 'Os', str(dist)], capture_output=True, text=True, env=env, cwd=tree).stdout
     assert '1/2 files with all three' in out and "failed: ['a.c']" in out, out
+
+
+def test_unset_pin_bin_is_a_message_not_a_home_path(tmp_path):
+    """qbbars and pinfn32.sh defaulted to a build directory under the home folder: a path of one machine in the repo. Unset PIN_BIN must say so."""
+    env = {k: v for k, v in os.environ.items() if k != 'PIN_BIN'}
+    env.update(QB_TREE=str(tmp_path), D=str(tmp_path))
+    d = os.path.dirname(__file__)
+    q = subprocess.run(['python3', os.path.join(d, 'qbbars.py'), 'm64', 'Os', str(tmp_path)], capture_output=True, text=True, env=env)
+    p = subprocess.run(['sh', os.path.join(d, 'pinfn32.sh'), 'x.c'], capture_output=True, text=True, env=env)
+    for r in (q, p):
+        assert r.returncode != 0 and 'PIN_BIN' in r.stderr and 'llvm-build' not in r.stderr, r.stderr
+    for name in ('qbbars.py', 'pinfn32.sh', 'spillcensus.py'):
+        assert not re.search('|'.join(['scr' + 'atch', '/ho' + 'me/', '/var/' + 'tmp', r'\$HO' + 'ME']), open(os.path.join(d, name)).read()), name
