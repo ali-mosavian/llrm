@@ -4,7 +4,17 @@ import sys,os,glob,subprocess,tempfile,shutil,re
 from concurrent.futures import ThreadPoolExecutor
 A,L,D=sys.argv[1:4]; T=os.environ['QB_TREE']; b=os.environ.get('QB_SCRATCH',tempfile.gettempdir())
 m,tgt,sp=('-m64','x86_64-linux','%rsp') if A=='m64' else ('-m32','x86_32-linux','%esp'); extra=['-isystem','/usr/include/x86_64-linux-gnu'] if A=='m32' else []
-CF=['-D_DEFAULT_SOURCE',f'-{L}',m,*extra,'-fno-asynchronous-unwind-tables','-fno-unwind-tables','-fno-stack-protector','-fcf-protection=none','-U_FORTIFY_SOURCE','-D_FORTIFY_SOURCE=0','-fno-pic','-w','-DARENA_AT_ZERO=0','-DPFIL_PATH=4096','-DEXEC_COUNT','-Isrc/plat/host/include','-Isrc','-Isrc/core']
+GCC=os.environ.get('QB_GCC','gcc-15')  # the baselines' gcc; plain `gcc` is the distro's 13.4
+sys.path.insert(0,os.path.join(os.path.dirname(os.path.abspath(__file__)),'..'))
+from external_flags import flags as bar_flags  # the one flag set every external bar is built with
+major=None
+try: major=int(subprocess.run([GCC,'-dumpversion'],capture_output=True,text=True).stdout.split('.')[0])
+except (ValueError,OSError): pass
+RELOC=('-fPIE',) if A=='m64' else ('-fno-pic','-fno-pie')
+CPU=['-march=i486'] if A=='m32' else []
+BASE=['-D_DEFAULT_SOURCE',f'-{L}',m,*CPU,*extra,'-fno-unwind-tables','-D_FORTIFY_SOURCE=0','-w','-DARENA_AT_ZERO=0','-DPFIL_PATH=4096','-DEXEC_COUNT','-Isrc/plat/host/include','-Isrc','-Isrc/core']
+CF=[*BASE,*bar_flags('x86',RELOC)]
+GCC_CF=['-D__cdecl=',*BASE,*bar_flags('x86',RELOC,major)]
 slot=re.compile(r'\(%[re]sp\)')
 def count(o):
     """(stores, reloads) of spill slots: an %rsp-relative slot is a spill only if every access to its offset in the function is a plain mov of a register and no lea takes its address or lies within 128 B below it (an aggregate)."""
@@ -45,7 +55,7 @@ def one(f):
     t=tempfile.mkdtemp(dir=b); out={}
     try:
         for v,cmd,env in (('ours',[f'{D}/llrm-cc','-std=c23',*CF,'-c',f,'-o',f'{t}/o.o'],dict(os.environ,LLRM_CC_TARGET=tgt,LLRM_LLC=f'{D}/llrm-llc')),
-                          ('gcc',['gcc','-std=c2x',*CF,'-c',f,'-o',f'{t}/g.o'],os.environ)):
+                          ('gcc',[GCC,'-std=c2x',*GCC_CF,'-c',f,'-o',f'{t}/g.o'],os.environ)):
             r=subprocess.run(cmd,cwd=T,env=env,capture_output=True); o=cmd[-1]
             out[v]=(text(o),*count(o)) if r.returncode==0 and os.path.exists(o) else None
     finally: shutil.rmtree(t,ignore_errors=True)
