@@ -178,6 +178,8 @@ pub struct LoopFacts {
     /// `optsize` and the target prices a vector loop by size, outside work
     /// included (`Tti::vectorizes_size_priced`).
     pub size_priced: bool,
+    /// The loop needs runtime memory checks (`RuntimePointerChecking::Need`).
+    pub runtime_checks: bool,
     /// The loop carries reductions (`!Legal->getReductionVars().empty()`).
     pub has_reductions: bool,
     /// The recurrence types' widths of the reductions
@@ -1101,6 +1103,12 @@ pub fn plan(
     tti: &dyn Tti,
     facts: &LoopFacts,
 ) -> Result<Plan, NotPlanned> {
+    // `computeMaxVF` where no epilogue is allowed (`optsize`, or a constant
+    // trip count under 16): `runtimeChecksRequired`. The pin's SCEV predicate
+    // and symbolic stride arms are not here: those loops are not widened.
+    if facts.runtime_checks && !epilogue_allowed(facts) {
+        return Err(NotPlanned("Runtime ptr check is required with -Os/-Oz"));
+    }
     let chosen = choose(tti, facts)?;
     let covers = facts.trip_count != 0 && facts.trip_count % (u64::from(chosen.vf) * u64::from(chosen.ic)) == 0;
     if !covers && !epilogue_allowed(facts) {

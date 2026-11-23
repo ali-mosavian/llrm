@@ -504,7 +504,7 @@ fn compiled_module_at_o1(
     }
     let mut again = options.clone();
     again.dump = None;
-    let other = trial::with(limit, || optimized_program(module, &again))?;
+    let other = trial::with(limit, || optimized_program(module.clone(), &again))?;
     let kept = assembled(&kept, name, options)?;
     let other = assembled(&other, name, &again)?;
     let price = |built: &masm::Module| -> Option<(i64, f64)> {
@@ -518,6 +518,11 @@ fn compiled_module_at_o1(
     let pays = trial::keeps_at_o1(saved, added, rate);
     if llrm_support::debug::enabled("trial") {
         eprintln!("trial unroll: {added:+} bytes, {saved:+} work saved: {}", if pays { "kept" } else { "put back" });
+    }
+    if pays && options.dump.is_some() {
+        // The stage files are the compile that was put back: the kept one is
+        // dumped.
+        trial::with(limit, || optimized_program(module, options))?;
     }
     Ok(if pays { other } else { kept })
 }
@@ -633,6 +638,11 @@ fn compiled_module_at_size(
         } else {
             accepted.pop();
         }
+    }
+    // The stage files written so far are the base compile's: the module the
+    // kept decisions made is dumped again.
+    if options.dump.is_some() {
+        compiled_with(&accepted, || optimized_program(module.clone(), options))?;
     }
     stage_files(options, "", &chosen.built)?;
     with_leaf_trial(chosen, name, options, unpadded)

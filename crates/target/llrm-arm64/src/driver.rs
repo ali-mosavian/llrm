@@ -188,7 +188,18 @@ pub fn optimized_at(
     program: &mut Program,
     level: Level,
 ) -> Result<(), String> {
-    let dump = std::env::var_os("LLRM_MIR_STAGES").filter(|one| !one.is_empty()).map(Into::into);
+    optimized_dumping(program, level, true)
+}
+
+/// `optimized_at`, writing the stages where `LLRM_MIR_STAGES` names only if
+/// `dumped`: a trial compiles the module again and again, and the stages must
+/// be the compile that was kept.
+pub fn optimized_dumping(
+    program: &mut Program,
+    level: Level,
+    dumped: bool,
+) -> Result<(), String> {
+    let dump = std::env::var_os("LLRM_MIR_STAGES").filter(|one| !one.is_empty() && dumped).map(Into::into);
     let mut options = level.options();
     {
         let policy = POLICY.lock().unwrap();
@@ -576,6 +587,7 @@ fn compiled(
     let hint_trial = divide_trial
         && crate::tti::AArch64::of_cpu(platform.cpu())
             .is_some_and(|tti| llrm_mir::tti::Tti::opt_size_inline_guard_yields_to_inlinehint(&tti));
+    let dumping = std::cell::Cell::new(true);
     let once = |(unrotated, more, unmerged, divided, hinted): (bool, bool, bool, bool, u8)| -> Result<Built, String> {
         let mut program = program(text, platform)?;
         if refuse_aliases {
@@ -586,7 +598,9 @@ fn compiled(
             llrm_mir::dbgimport::types_and_globals(&mut program.modules[0]);
         }
         if level != Level::O0 {
-            let run = |program: &mut Program| with_aliases(!refuse_aliases, || optimized_at(program, level));
+            let run = |program: &mut Program| {
+                with_aliases(!refuse_aliases, || optimized_dumping(program, level, dumping.get()))
+            };
             let go = |program: &mut Program| match (unrotated, more) {
                 (true, _) => llrm_transforms::trial::with_unrotated(|| run(program)),
                 (_, true) => llrm_transforms::trial::with_more_rotation(|| run(program)),
@@ -650,6 +664,8 @@ fn compiled(
         trial::take_negative_yields(),
     );
     trial::clear_rotated_loops();
+    // Only the compile that is kept writes the stages, where it is made again.
+    dumping.set(false);
     let mut best = once((false, false, false, false, 0))?;
     let notes = std::mem::take(&mut best.3);
     let mut state = (false, false, false, 0u8);
@@ -710,10 +726,15 @@ fn compiled(
     {
         state.1 = true;
     }
+    let mut divided = false;
     if notes.divides {
-        try_one(&mut best, (state.0, state.1, state.2, true, state.3), "divides", &|kept, now| {
+        divided = try_one(&mut best, (state.0, state.1, state.2, true, state.3), "divides", &|kept, now| {
             !crate::trial::expansion_pays(kept, now)
         })?;
+    }
+    if std::env::var_os("LLRM_MIR_STAGES").is_some_and(|one| !one.is_empty()) {
+        dumping.set(true);
+        once((state.0, state.1, state.2, divided, state.3))?;
     }
     Ok((best.0, best.1))
 }
