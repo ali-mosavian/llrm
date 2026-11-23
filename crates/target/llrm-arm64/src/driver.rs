@@ -325,6 +325,21 @@ fn lower_function(
     dump("MemCluster", &machine);
     crate::sibcall::run(&mut machine);
     dump("SibCall", &machine);
+    machine.calls_never_return = {
+        let has = |attrs: &[llrm_mir::opcode::Attribute], name: &str| {
+            attrs.iter().any(|attr| matches!(attr, llrm_mir::opcode::Attribute::Flag(flag) if flag == name))
+        };
+        crate::frame::calls_never_return(
+            &machine,
+            llrm_mir::opcode::unwind_table(&function.attrs).is_some(),
+            |callee| {
+                module
+                    .named(callee)
+                    .and_then(|id| module.global(id).function())
+                    .is_some_and(|called| has(&called.attrs, "noreturn") && has(&called.attrs, "nounwind"))
+            },
+        )
+    };
     crate::prepass::order_copies(&mut machine);
     dump("OrderCopies", &machine);
     if crate::lir_body::checking() {
