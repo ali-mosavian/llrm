@@ -1,6 +1,8 @@
-//! m32 -Os: a one-slot frame is released where `emitEpilogue` stands, before the first callee-saved `pop`, where
-//! `findDeadCallerSavedReg` answers 0: an `add esp, 4`. A `pop ecx` there cost 3 clocks on a 486 against clang
-//! (sfm16_float_{add,sub,mul,div} -Os, 14,426 against 14,423 clk). With nothing to restore the `ret` is next: `pop`.
+//! m32 -Os: a one-slot frame is released where `emitEpilogue` stands, before
+//! the first callee-saved `pop`, where `findDeadCallerSavedReg` answers 0: an
+//! `add esp, 4`. A `pop ecx` there cost 3 clocks on a 486 against clang
+//! (sfm16_float_{add,sub,mul,div} -Os, 14,426 against 14,423 clk). With nothing
+//! to restore the `ret` is next: `pop`.
 
 #[path = "common/target_dir.rs"]
 mod target_dir;
@@ -9,7 +11,7 @@ use std::path::Path;
 use std::process::Command;
 
 fn function(name: &str) -> Vec<String> {
-    let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("m32slot-{}", std::process::id()));
+    let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("m32slot-{name}-{}", std::process::id()));
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
@@ -19,7 +21,9 @@ fn function(name: &str) -> Vec<String> {
             "LLRM_LLC",
             std::env::var_os("LLRM_LLC").unwrap_or_else(|| target_dir::of(&root).join("release/llrm-llc").into()),
         )
-        .args(["-Os", "-w", "-S", "-march=i486", "-mabi=sysv", "-o"])
+        // The one-slot epilogue shapes pin the 4-aligned frame; the 16-aligned
+        // default has its own (x86_32_sysv_aligned_calls).
+        .args(["-Os", "-w", "-S", "-march=i486", "-mabi=sysv", "-mstack-alignment=4", "-o"])
         .arg(dir.join("d.s"))
         .arg(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/c/m32_slot_release.c"))
         .output()

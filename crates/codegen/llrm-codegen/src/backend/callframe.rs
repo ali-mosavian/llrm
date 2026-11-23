@@ -183,8 +183,13 @@ impl LIRTransform for ReserveCallFrame {
         };
         let dynamic = probe.allocates_dynamically(&body);
         let phase = if dynamic { 0 } else { self.call_phase(&body) };
-        let mut lowering =
-            LowerCallFrame { stack: self.stack, width: self.width, call_alignment: self.call_alignment, phase };
+        let mut lowering = LowerCallFrame {
+            stack: self.stack,
+            width: self.width,
+            call_alignment: self.call_alignment,
+            phase,
+            defer: self.call_alignment > i64::from(self.width),
+        };
         let Some(frame) = self.frame.as_ref().filter(|_| !pushed && !dynamic) else {
             let mut out = lowering.transform(body)?;
             out.call_phase = phase;
@@ -198,9 +203,10 @@ impl LIRTransform for ReserveCallFrame {
             .filter_map(|one| imm_of(one, 0))
             .max()
             .unwrap_or(0);
-        // The area is not padded: the frame's own size is aligned to the call alignment past the return address (a
-        // 40-byte Win64 area is `sub rsp, 40`, not 48 + 8).
-        // The destroys that re-reserve what a callee popped become `sub`.
+        // The area is not padded: the frame's own size is aligned to the call
+        // alignment past the return address (a 40-byte Win64 area is
+        // `sub rsp, 40`, not 48 + 8). The destroys that re-reserve what
+        // a callee popped become `sub`.
         let mut out = body.clone();
         for block in &mut out.blocks {
             let insns: Vec<Arc<Insn>> = block
@@ -276,9 +282,22 @@ impl ReserveCallFrame {
             })
             .collect();
         let pushed = self.saved.iter().filter(|whole| written.contains(whole)).count() as i64;
-        let locals = self.frame.as_ref().map_or(0, |frame| frame.borrow().size());
+        // The frame's own size is the spill slots below the floor; the objects
+        // the body addresses itself (static allocas) lie above it, and the
+        // phase counts them too: a four-byte local read as no local put the
+        // phase four bytes off and padded the frame and every call.
+        let locals = self
+            .frame
+            .as_ref()
+            .map_or(
+                0,
+                |frame| {
+                    let frame = frame.borrow();
+                    frame.size() - frame.floor
+                },
+            );
         let base = (slot + slot * pushed + (locals + slot - 1) / slot * slot) % align;
-        best_phase(&sizes, Some(base), align, self.phase_step.max(slot))
+        best_phase(&sizes, Some(base), align, self.phase_step.max(slot), locals > 0)
     }
 }
 
@@ -290,10 +309,14 @@ fn best_phase(
     base: Option<i64>,
     align: i64,
     step: i64,
+    has_locals: bool,
 ) -> i64 {
     let cost = |phase: i64| -> i64 {
+        // A frame that has locals has its `sub` already: the pad is a larger
+        // immediate, no code.
         let frame = match base.map_or(0, |base| (phase - base).rem_euclid(align)) {
             0 => 0,
+            _ if has_locals => 0,
             4 => 2,
             _ => 6,
         };
@@ -324,6 +347,9 @@ struct LowerCallFrame {
     pub call_alignment: i64,
     /// `LirBody::call_phase`.
     pub phase: i64,
+    /// Whether the cleanup of one call is deferred into the padding of the
+    /// next ([`defer_cleanup`]).
+    pub defer: bool,
 }
 
 impl LIRTransform for LowerCallFrame {
@@ -385,9 +411,132 @@ impl LIRTransform for LowerCallFrame {
                     insns.push(Arc::new(Insn::new(one.at, one.covers, Some(what), vec![], vec![])));
                 }
             }
+            if self.defer && body.over_aligned.is_empty() {
+                insns = defer_cleanup(insns, self.stack);
+            }
             out.blocks[at] = block.with_insns(insns);
         }
         Ok(out)
+    }
+}
+
+/// The amount of a `sub sp, n` (negative) or `add sp, n` of the stack pointer
+/// `stack` that lowering made, else none.
+fn sp_step(
+    one: &Insn,
+    stack: RegId,
+) -> Option<i64> {
+    let what = one.what.as_ref()?;
+    let [Loc::Reg(dest)] = what.dests.as_slice() else { return None };
+    let (name, [Loc::Reg(source), Loc::Imm(amount)]) = (what.name.as_deref()?, what.sources.as_slice()) else {
+        return None;
+    };
+    if dest.register != stack || source.register != stack {
+        return None;
+    }
+    match name {
+        "add" => Some(amount.value),
+        "sub" => Some(-amount.value),
+        _ => None,
+    }
+}
+
+/// Whether an instruction between two stack steps pins them apart: a call (it
+/// finds the stack aligned), a push or a pop, or anything that names the stack
+/// pointer but as the base of a memory operand, whose displacement the frame
+/// readers keep right whatever the steps before it.
+fn pins_stack(
+    one: &Insn,
+    stack: RegId,
+) -> bool {
+    let Some(what) = one.what.as_ref() else { return true };
+    // Only what computes, loads and stores moves past a stack step: anything
+    // else (a call, a push or pop, a jump, inline assembly, a frame pseudo)
+    // may look at the stack pointer or leave it in a place of its own.
+    let plain = matches!(
+        what.op,
+        Operation::Move
+            | Operation::Exchange
+            | Operation::Address
+            | Operation::Binary
+            | Operation::Multiply
+            | Operation::Divide
+            | Operation::Compare
+            | Operation::Unary
+            | Operation::Funnel
+            | Operation::Extend
+            | Operation::Select
+            | Operation::BitField
+            | Operation::FloatLoad
+            | Operation::FloatStore
+            | Operation::FloatArith
+            | Operation::FloatArithPop
+            | Operation::FloatUnary
+    );
+    if !plain {
+        return true;
+    }
+    let names = |loc: &Loc| matches!(loc, Loc::Reg(reg) if reg.register == stack);
+    what.dests.iter().chain(&what.sources).any(names) || !one.requires.is_empty() || !one.delivers.is_empty()
+}
+
+/// GCC's deferred stack adjustment (`expr.c`: `pending_stack_adjust`,
+/// `do_pending_stack_adjust`; `compute_argument_block_size` pads a call's
+/// arguments against the bytes still pending). The bytes a call's cleanup
+/// frees are not freed until something needs the stack pointer where it was:
+/// the next call's pad is taken out of them. Here: an `add sp, A` and a later
+/// `sub sp, B` of one block with nothing between that pins the stack
+/// ([`pins_stack`]) become the one step `A - B`, where the later of the two
+/// was. Every call keeps the alignment it had: the stack at the `sub` is the
+/// same either way, and no call lies between the two.
+fn defer_cleanup(
+    mut insns: Vec<Arc<Insn>>,
+    stack: RegId,
+) -> Vec<Arc<Insn>> {
+    let mut at = 0;
+    while at < insns.len() {
+        let Some(freed) = sp_step(&insns[at], stack).filter(|&step| step > 0) else {
+            at += 1;
+            continue;
+        };
+        let mut next = at + 1;
+        while next < insns.len() && sp_step(&insns[next], stack).is_none() && !pins_stack(&insns[next], stack) {
+            next += 1;
+        }
+        let Some(taken) = insns.get(next).and_then(|one| sp_step(one, stack)).filter(|&step| step < 0) else {
+            at += 1;
+            continue;
+        };
+        let net = freed + taken;
+        let (keep, drop) = if net >= 0 { (at, next) } else { (next, at) };
+        if net == 0 {
+            insns.remove(next);
+            insns.remove(at);
+            continue;
+        }
+        let one = &insns[keep];
+        let what = one.what.as_ref().expect("a stack step");
+        let (name, count) = if net > 0 { ("add", net) } else { ("sub", -net) };
+        let amount = Loc::Imm(Imm { value: count, width: stack_width(what), address: None });
+        let what = Semantics {
+            name: Some(name.into()),
+            dests: what.dests.clone(),
+            sources: vec![what.sources[0].clone(), amount],
+            ..Semantics::new(Operation::Binary)
+        };
+        insns[keep] = Arc::new(Insn::new(one.at, one.covers, Some(what), vec![], vec![]));
+        insns.remove(drop);
+        // The merged step can take the next one too.
+        at = keep.min(drop);
+    }
+    insns
+}
+
+/// The width of the stack pointer a step of `what` was written for.
+fn stack_width(what: &Semantics) -> u32 {
+    match what.dests.first() {
+        Some(Loc::Reg(reg)) => reg.width,
+        _ => 4,
     }
 }
 
@@ -481,7 +630,7 @@ impl CallFrameOpt {
             return 0;
         }
         let sizes: Vec<i64> = contexts.iter().map(|one| imm_of(&one.setup, 0).unwrap_or(0)).collect();
-        best_phase(&sizes, None, align, self.phase_step.max(self.slot))
+        best_phase(&sizes, None, align, self.phase_step.max(self.slot), false)
     }
 
     // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86CallFrameOptimization.cpp#L147
@@ -1187,7 +1336,7 @@ mod tests {
         call_alignment: i64,
         phase: i64,
     ) -> Vec<(String, i64)> {
-        let mut lowering = LowerCallFrame { stack: RegId::SP, width: 4, call_alignment, phase };
+        let mut lowering = LowerCallFrame { stack: RegId::SP, width: 4, call_alignment, phase, defer: false };
         let after = lowering.transform(body(insns)).expect("lowers");
         after.blocks[0]
             .insns
@@ -1220,18 +1369,83 @@ mod tests {
     #[test]
     fn the_frame_takes_the_phase_that_pads_the_fewest_bytes() {
         // calls of 8, 8, 8 and 0 bytes
-        assert_eq!(best_phase(&[8, 8, 8, 0], Some(8), 16, 4), 8);
+        assert_eq!(best_phase(&[8, 8, 8, 0], Some(8), 16, 4, false), 8);
         // two calls of 0 bytes and one of 8: no pad at 0, and the frame is
         // aligned already
-        assert_eq!(best_phase(&[8, 0, 0], Some(0), 16, 4), 0);
+        assert_eq!(best_phase(&[8, 0, 0], Some(0), 16, 4, false), 0);
         // one call of 8 bytes from a frame whose own pad is 8 at phase 0: phase
         // 8 pays neither
-        assert_eq!(best_phase(&[8], Some(8), 16, 4), 8);
+        assert_eq!(best_phase(&[8], Some(8), 16, 4, false), 8);
         // a frame object 8-aligned keeps the phase a multiple of 8
-        assert_eq!(best_phase(&[4], Some(4), 16, 8) % 8, 0);
+        assert_eq!(best_phase(&[4], Some(4), 16, 8, false) % 8, 0);
         // `isProfitable` prices the calls alone: a one-argument call is aligned
         // at phase 12, not 0
-        assert_eq!(best_phase(&[4, 4], None, 16, 4), 12);
+        assert_eq!(best_phase(&[4, 4], None, 16, 4, false), 12);
+    }
+
+    fn lower_deferred(
+        insns: Vec<Arc<Insn>>,
+        over_aligned: bool,
+    ) -> Vec<(String, i64)> {
+        let mut lowering = LowerCallFrame { stack: RegId::SP, width: 4, call_alignment: 16, phase: 0, defer: true };
+        let mut input = body(insns);
+        if over_aligned {
+            input.over_aligned.push((0, 16));
+        }
+        let after = lowering.transform(input).expect("lowers");
+        after.blocks[0]
+            .insns
+            .iter()
+            .map(|one| (name_of(one).unwrap().to_owned(), imm_of(one, 1).unwrap_or(0)))
+            .collect()
+    }
+
+    fn pushed_call(n: i64) -> Vec<Arc<Insn>> {
+        let pushed =
+            insn(0, Operation::Barrier, "call_frame_setup", vec![], vec![imm(n), imm(0), imm(n)], vec![], vec![]);
+        vec![pushed, call(), destroy(n)]
+    }
+
+    /// Two calls of 4 bytes each freed 16 and padded 12 again: the stack where
+    /// the second finds it is the same, with one step of 4 between them
+    /// (GCC's `pending_stack_adjust`; a block of 4 bytes needs a pad of 12 at
+    /// phase 0).
+    #[test]
+    fn the_cleanup_of_one_call_is_the_pad_of_the_next() {
+        let calls: Vec<_> = pushed_call(4).into_iter().chain(pushed_call(4)).collect();
+        assert_eq!(
+            lower_deferred(calls, false),
+            [("sub".into(), 12), ("call".into(), 0), ("add".into(), 4), ("call".into(), 0), ("add".into(), 16)]
+        );
+    }
+
+    /// Nothing is deferred across what pins the stack: a push, a pop, a call
+    /// that is not between the two steps' own, a use of the stack pointer as a
+    /// register (an `alloca`), or a function that has an over-aligned object
+    /// addressed from the stack pointer.
+    #[test]
+    fn nothing_is_deferred_across_what_pins_the_stack() {
+        let cx = || Loc::Reg(Reg { register: RegId::CX, width: 4 });
+        let sp = || Loc::Reg(Reg { register: RegId::SP, width: 4 });
+        let kept = [("sub".into(), 12), ("call".into(), 0), ("add".into(), 16)];
+        let two = |between: Arc<Insn>| -> Vec<Arc<Insn>> {
+            pushed_call(4).into_iter().chain([between]).chain(pushed_call(4)).collect()
+        };
+        for between in [
+            insn(0, Operation::Push, "push", vec![], vec![cx()], vec![], vec![]),
+            insn(0, Operation::Pop, "pop", vec![cx()], vec![], vec![], vec![]),
+            insn(0, Operation::Binary, "sub", vec![sp()], vec![sp(), cx()], vec![], vec![]),
+            insn(0, Operation::Escape, "asm", vec![], vec![], vec![], vec![]),
+            call(),
+        ] {
+            let after = lower_deferred(two(between), false);
+            assert_eq!(&after[..3], &kept, "{after:?}");
+            let steps = |name: &str, amount: i64| after.iter().filter(|one| **one == (name.to_owned(), amount)).count();
+            assert_eq!((steps("sub", 12), steps("add", 16)), (2, 2), "both pads and both cleanups stay: {after:?}");
+        }
+        let calls: Vec<_> = pushed_call(4).into_iter().chain(pushed_call(4)).collect();
+        let after = lower_deferred(calls, true);
+        assert_eq!(after.iter().map(|(_, amount)| *amount).collect::<Vec<_>>(), [12, 0, 16, 12, 0, 16], "{after:?}");
     }
 
     /// The frame pseudos that no push replaced were `sub`/`add` in the DAG

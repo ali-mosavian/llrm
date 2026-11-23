@@ -4486,9 +4486,16 @@ impl Builder<'_> {
         &mut self,
         instruction: &llrm_mir::module::Instruction,
     ) -> Result<(), Refused> {
-        let value = self.get_value(instruction.operands[0])?;
-        let vt = self.dag.value_type(value);
-        let node = self.dag.get_node(ISD::Freeze, vt, &[value]);
+        // `visitFreeze`: a `FREEZE` of each leaf, merged.
+        let parts = self.value_parts(instruction.operands[0])?;
+        let frozen: Vec<SDValue> = parts
+            .into_iter()
+            .map(|part| {
+                let vt = self.dag.value_type(part);
+                self.dag.get_node(ISD::Freeze, vt, &[part])
+            })
+            .collect();
+        let node = self.merge(&frozen);
         self.set_value(instruction.result.expect("a freeze has a result"), node);
         Ok(())
     }
