@@ -1,6 +1,12 @@
 //! Takes LIR out of SSA: each phi becomes parallel copies on its incoming
 //! edges.
 //!
+//! The phase `PhiElimination` runs [`crate::phielimination::lowered_with`], the
+//! translation of LLVM's `PHIElimination` (a temporary per phi, one copy per
+//! incoming edge); this module keeps `unsplit` and `placed_on_edges`, and the
+//! parallel-copy description below is of the earlier lowering (no flag selects
+//! it any more).
+//!
 //! # How it works
 //! For each phi `r = phi [p1: v1, p2: v2]` the pass puts `r := v1` at the end
 //! of `p1` and `r := v2` at the end of `p2`, before the terminator. The copies
@@ -59,14 +65,6 @@
 //!
 //! The new block's label is above every physical offset (`(entry + 1) << 32`),
 //! in a namespace of its own per body entry.
-//!
-//! `LLRM_PHIELIM_LLVM=1` lowers the phis that are not x87 by the translation of
-//! LLVM's `PHIElimination` ([`crate::phielimination`]) first, and this pass the
-//! rest. Off by default: it leaves a cycle of loop-carried values to be broken
-//! by copies through a register, where the parallel copy here breaks it with an
-//! `xchg`, and the i64 Fibonacci loop
-//! (`test_an_i64_is_a_dword_pair_through_phis_calls_and_returns`)
-//! spills a dword with it.
 //!
 //! `unsplit` undoes a split whose copies coalescing removed: a block of only a
 //! jump is bypassed, so the jump is not taken on every pass. The peephole calls

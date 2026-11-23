@@ -39,7 +39,8 @@ def header_of(text: str) -> list[str]:
     for raw in text.splitlines():
         stripped = raw.strip()
         if not stripped.startswith("//!"):
-            if lines or stripped:
+            # A licence line (`// SPDX-...`) above the header is not the header's end.
+            if lines or (stripped and not stripped.startswith("// SPDX-")):
                 break
             continue
         stripped = stripped[3:]
