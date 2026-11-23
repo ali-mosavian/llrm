@@ -471,6 +471,18 @@ impl Tti for M68k {
         Some(crate::sizes::call_sequence(self.cpu, shape, kind))
     }
 
+    /// DEVIATE INLINE-BODY-CALL (the z80's `body_call_cost`; the pin prices a
+    /// call as one instruction): a call inside an inlined body is its `jsr` and
+    /// pushed arguments, as bytes. Priced flat, a helper of two calls looked 15 B
+    /// and was copied into seven wrappers at -Os (num_fpmath +252 B).
+    fn body_call_cost(
+        &self,
+        shape: &llrm_mir::tti::CallShape,
+        kind: CostKind,
+    ) -> Option<Cost> {
+        Some(crate::sizes::body_call_sequence(self.cpu, shape, kind))
+    }
+
     fn callee_frame_cost(
         &self,
         shape: &llrm_mir::tti::CallShape,
