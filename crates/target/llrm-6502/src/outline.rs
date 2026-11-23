@@ -176,12 +176,76 @@ fn weights(lines: &[Line]) -> Vec<u64> {
         }
     }
     let mut depth = 0i32;
-    change[..lines.len()]
+    let in_function: Vec<u64> = change[..lines.len()]
         .iter()
         .map(|delta| {
             depth += delta;
             LOOP_TRIPS.pow((depth as u32).min(MOST_LOOPS))
         })
+        .collect();
+    scaled_by_callers(lines, in_function)
+}
+
+/// `in_function` weights each line by the loops of its own function; a
+/// function called from a loop runs as often as that loop does, so its lines
+/// are scaled by the weight of its call sites (`staticlocals::call_weights`:
+/// each `jsr` counts the run of its own line, the callers' entry runs
+/// included). A call of a function by itself adds nothing.
+fn scaled_by_callers(
+    lines: &[Line],
+    in_function: Vec<u64>,
+) -> Vec<u64> {
+    let calls = |line: &Line| match line {
+        Line::Inst(Inst { op: Op::Jsr, operand, .. }) => operand.name().map(str::to_owned),
+        _ => None,
+    };
+    // a function is a label something calls or the module exports
+    let mut callees: std::collections::HashSet<String> = lines.iter().filter_map(calls).collect();
+    for line in lines {
+        if let Line::Raw(text) = line {
+            if let Some(name) = text.trim().strip_prefix(".export ") {
+                callees.insert(name.trim().to_owned());
+            }
+        }
+    }
+    // the function a line is in: the last label that something calls
+    let mut owner: Vec<Option<usize>> = Vec::with_capacity(lines.len());
+    let mut names: Vec<&str> = Vec::new();
+    let mut at_name: HashMap<&str, usize> = HashMap::new();
+    let mut current = None;
+    for line in lines {
+        if let Line::Label(name) = line {
+            if callees.contains(name.as_str()) {
+                names.push(name);
+                at_name.insert(name, names.len() - 1);
+                current = Some(names.len() - 1);
+            }
+        }
+        owner.push(current);
+    }
+    if names.is_empty() {
+        return in_function;
+    }
+    let most = LOOP_TRIPS.pow(MOST_LOOPS);
+    let mut entry = vec![1u64; names.len()];
+    for _ in 0..4 {
+        let mut next = vec![0u64; names.len()];
+        for (at, line) in lines.iter().enumerate() {
+            let Some(callee) = calls(line).and_then(|name| at_name.get(name.as_str()).copied()) else { continue };
+            if owner[at] == Some(callee) {
+                continue;
+            }
+            let caller = owner[at].map_or(1, |function| entry[function]);
+            next[callee] = (next[callee] + in_function[at] * caller).min(most);
+        }
+        for (one, sum) in entry.iter_mut().zip(next) {
+            *one = sum.max(1);
+        }
+    }
+    in_function
+        .iter()
+        .zip(&owner)
+        .map(|(weight, function)| (weight * function.map_or(1, |one| entry[one])).min(most))
         .collect()
 }
 
