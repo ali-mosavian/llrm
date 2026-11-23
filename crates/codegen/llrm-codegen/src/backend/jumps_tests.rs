@@ -801,19 +801,7 @@ fn test_a_tail_of_one_is_not_shared() {
 fn test_a_tail_of_one_is_not_shared_before_placement_at_os_either() {
     let source = arms_sharing_a_tail(1);
 
-    assert!(tailmerge::merged_in(&source, true, None, false, false, false).unwrap().is_none());
-}
-
-/// `tail_merge_pairs_at_size` (m64, DEVIATE TM-PAIR): the same arms are merged
-/// at `-Os` ahead of placement. The pin's three-instruction minimum left QB
-/// `vm/exec.c` m64 -Os 13,963 B against 12,655 B before, 462 B under the best
-/// compiler to 846 B over it.
-#[test]
-fn test_a_tail_of_one_is_shared_before_placement_at_os_where_the_target_takes_pairs() {
-    let source = arms_sharing_a_tail(1);
-
-    assert!(tailmerge::merged_in(&source, true, None, false, false, true).unwrap().is_some());
-    assert!(tailmerge::merged_in(&source, false, None, false, false, true).unwrap().is_none(), "only at -Os");
+    assert!(tailmerge::merged_in(&source, true, None, false, false).unwrap().is_none());
 }
 
 /// A tail of one move and two zero-code anchors was shared: `x_cordic` -O3

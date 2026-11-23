@@ -49,7 +49,9 @@ fn a_computed_goto_dispatch_is_one_indirect_jump_per_handler() {
 #[test]
 fn an_os_dispatch_keeps_the_trees_partial_state() {
     let found = jumps("-Os");
-    assert_eq!(found, 9, "{found} indirect jumps at -Os: the tree's state before the unfactoring is 9");
+    // Two-instruction tails of partial blocks were shared before placement
+    // (TM-PAIR, deleted): 9; the pin's `TailMergeSize` of 3 leaves 11.
+    assert_eq!(found, 11, "{found} indirect jumps at -Os: the tree's state before the unfactoring is 11");
 }
 
 /// The tail duplicator's new phis (`pc`, `sp`) went after the old ones, so the

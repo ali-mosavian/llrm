@@ -107,11 +107,6 @@ pub struct CpuTable {
     /// and no three-block minimum (T14 and D1 of jumps-tailmerge-check.md
     /// lifted). Off: the guards stand.
     pub tail_merge_pin_faithful: bool,
-    /// DEVIATE TM-PAIR (owner w12, exit 2026-12-13): at -Os the merge ahead of
-    /// placement shares a common tail of two instructions, as
-    /// `MachineBlockPlacement`'s does, where the pin's pass of its own takes
-    /// three (`TailMergeSize`). Off: the pin's three.
-    pub tail_merge_pairs_at_size: bool,
     /// Runs of equal literal stores outside loops share a register where bytes
     /// are strict (DEVIATE ISS1, owner x86-m32, exit 2026-11-30); -Os
     /// always. Off: the pin's `MOV32mi`s.
@@ -304,7 +299,6 @@ impl Timings {
                         table.register_inline_frees_frame_at_size = number()? != 0
                     }
                     ("scalars", "tail_merge_pin_faithful") => table.tail_merge_pin_faithful = number()? != 0,
-                    ("scalars", "tail_merge_pairs_at_size") => table.tail_merge_pairs_at_size = number()? != 0,
                     ("scalars", "unordered_branch_odds") => table.unordered_branch_odds = number()? != 0,
                     ("scalars", "share_literal_stores") => table.share_literal_stores = number()? != 0,
                     ("scalars", "share_literal_stores_at_speed") => {

@@ -180,7 +180,6 @@ impl LIRTransform for BranchFolder<'_> {
             self.calls.as_ref(),
             false,
             self.cpu.tail_merge_pin_faithful,
-            self.cpu.tail_merge_pairs_at_size,
         )
         .map_err(|error| error.0)?;
         Ok(merged)
@@ -266,7 +265,7 @@ pub fn optimized_folded(
     let early = if folded {
         hoisted
     } else {
-        tails_merged(hoisted, size, calls, false, cpu.tail_merge_pin_faithful, cpu.tail_merge_pairs_at_size)?.0
+        tails_merged(hoisted, size, calls, false, cpu.tail_merge_pin_faithful)?.0
     };
     let start = early.with_blocks(_explicit(&early)?);
     let mut placed = threaded(&_placed_ext(
@@ -286,7 +285,7 @@ pub fn optimized_folded(
     // the branches optimised (`threaded`), until neither changes anything. A
     // merge can leave a compare nothing selects on; LLVM leaves it (T6).
     let (merged, any) =
-        tails_merged(placed, size, calls, true, cpu.tail_merge_pin_faithful, cpu.tail_merge_pairs_at_size)?;
+        tails_merged(placed, size, calls, true, cpu.tail_merge_pin_faithful)?;
     placed = merged;
     if any {
         // `MachineBlockPlacement::runOnMachineFunction`: "Redo the layout if
@@ -321,12 +320,11 @@ fn tails_merged(
     calls: Option<&IndexMap<i64, String>>,
     after_placement: bool,
     faithful: bool,
-    pairs: bool,
 ) -> Result<(LirBody, bool), masm::Unprintable> {
     let mut any = false;
     for _round in 0..std::cmp::max(1, placed.blocks.len() + placed.insns().len()) {
         let explicit = placed.with_blocks(_explicit(&placed)?);
-        let Some(merged) = tailmerge::merged_in(&explicit, size, calls, after_placement, faithful, pairs)? else {
+        let Some(merged) = tailmerge::merged_in(&explicit, size, calls, after_placement, faithful)? else {
             // `OptimizeFunction`: the branches optimised after each merge
             // attempt, and the merge tried again if they changed anything. A
             // body that was not threaded yet (before placement) has edge
@@ -353,7 +351,6 @@ pub fn tails_merged_after_exits(
     size: bool,
     calls: Option<&IndexMap<i64, String>>,
     faithful: bool,
-    pairs: bool,
 ) -> Result<LirBody, masm::Unprintable> {
     // Only the blocks that return gained something to share.
     let returns = body
@@ -366,7 +363,7 @@ pub fn tails_merged_after_exits(
     if returns < 2 {
         return Ok(body);
     }
-    let (merged, any) = tails_merged(body.clone(), size, calls, true, faithful, pairs)?;
+    let (merged, any) = tails_merged(body.clone(), size, calls, true, faithful)?;
     Ok(if any { inverted(&merged, size) } else { body })
 }
 
