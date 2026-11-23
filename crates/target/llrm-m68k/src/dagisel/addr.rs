@@ -466,7 +466,7 @@ pub fn select_ari<D: AddrDag>(
 /// index register: `move.w #272,%a1; move.l (0,%a0,%a1),%d0`. The sum is the
 /// base and the constant the 16-bit displacement: `add.l; move.l (272,%a0)`,
 /// what GCC's `m68k_legitimize_address` makes. Only for a constant `ARII`
-/// cannot hold. Owner m68k. Exit 2027-01-31: upstream the order, or keep.
+/// cannot hold. Owner w8. Exit 2027-01-31: upstream the order, or keep.
 fn base_and_far_offset<D: AddrDag>(
     dag: &mut D,
     n: SDValue,
