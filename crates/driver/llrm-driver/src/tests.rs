@@ -409,6 +409,25 @@ fn identical_dispatch_arms_are_merged_before_the_dispatch_is_copied_into_them() 
     assert_eq!(arms, 1, "{listing}");
 }
 
+/// QB exec_loop at m64 -Os: `sp - n` is `neg` and a `lea`, and `if (n == 0)` tested `n` again (`neg; lea; test; je`)
+/// where the pin reads `neg`'s carry (`neg; lea; jae`): `X86InstrInfo::optimizeCompareInstr` with
+/// `isUseDefConvertible`. One instruction more per call, 1M calls in `subcalls`.
+#[test]
+fn a_zero_test_of_a_negated_value_reads_the_negs_carry() {
+    let source = "target datalayout = \"@m64-datalayout@\"\ntarget triple = \"x86_64-unknown-linux-gnu\"\n\
+        @g = external global ptr\n\
+        define i64 @f(i64 %n, ptr %sp, ptr %out) {\n\
+        entry:\n  %neg = sub i64 0, %n\n  %p = getelementptr i64, ptr %sp, i64 %neg\n  store ptr %p, ptr @g\n\
+          %z = icmp eq i64 %n, 0\n  br i1 %z, label %no, label %yes\n\
+        yes:\n  store i64 1, ptr %out\n  ret i64 1\n\
+        no:\n  ret i64 0\n}\n";
+    let (built, _) = compiled(&flags(&["-m64", "-Os", "--isel=dag"]), source, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert!(listing.contains("neg"), "premise: the negation is a `neg`\n{listing}");
+    let tests = listing.lines().filter(|line| line.trim_start().starts_with("test")).count();
+    assert_eq!(tests, 0, "the carry of `neg` answers `n == 0`\n{listing}");
+}
+
 /// gcc -Os copies or fills a length known at run time with one `rep movsb`/`stosb` (`decide_alg`); the pin and clang
 /// call `memcpy`/`memset`. m32 -Os QB had 28 calls of them to gcc's 0, -638 B with them inline. In no loop it is the
 /// `rep`; in a loop and at -O2 it stays a call. m64 stays a call: QB `localarr` ran 51.0M clk against 44.1M (clang
