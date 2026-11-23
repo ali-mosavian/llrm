@@ -26,6 +26,12 @@ OURS = ("c", "nib", "bas", "bq16")
 OURS_ISA = "i486"
 
 
+# A reference that prints a value other than the host oracle's is no bar for that cell. Where the cause is open it is recorded here with its date, owner and exit.
+WRONG_OUTPUT_CAUSES = {
+    "stft_fixed~bounds": "2026-11-23: the Borland-family ~bounds build prints another value (bcc already on the full corpus); cause open, owner w12, exit 2026-12-13",
+}
+
+
 def counts(row: dict | None, program: str = "", name: str = "") -> dict | None:
     """The four axes of a measured row, None where the cell is missing or errored. `static` is data + bss + the arrays `name` allocates at
     run time for the BASIC `program` (bench.run_time_arrays): a reference that allocates what llrm holds in its data is not smaller for it."""
@@ -135,9 +141,13 @@ def rows(table: dict) -> tuple[list[tuple], collections.Counter]:
             note = ";".join([*found, *filter(None, [bytes_over(level, ours, have)])]) + (f" [bar {bar}]" if bar != program else "")
             row = (program, language, level, ours["code"], ours["data"], ours["static"], ours["clocks"], min(r["code"] for r in have.values()), min(r["clocks"] for r in have.values()), len(names) - len(have), verdict, note)
         bounds = [f"{name} {limit_bound(table.get(f'{bar}/{name}/{at}'))}" for name in names if limit_bound(table.get(f"{bar}/{name}/{at}"))]
-        broken = [f"{name} ({table[f'{bar}/{name}/{at}']['error'].splitlines()[0][:40]})" for name in names if "error" in table.get(f"{bar}/{name}/{at}", {}) and not limit_bound(table[f"{bar}/{name}/{at}"])]
-        if (bounds or broken) and ours:
-            notes = [row[11], "bound: " + ", ".join(bounds) + " instructions (stopped at the limit; no bar)" if bounds else "", "no bar from: " + ", ".join(broken) if broken else ""]
+        errors = {name: table[f"{bar}/{name}/{at}"]["error"].splitlines()[0] for name in names if "error" in table.get(f"{bar}/{name}/{at}", {}) and not limit_bound(table[f"{bar}/{name}/{at}"])}
+        wrong = [f"{name} ({error})" for name, error in errors.items() if error.startswith("prints ")]
+        broken = [f"{name} ({error[:40]})" for name, error in errors.items() if not error.startswith("prints ")]
+        if (bounds or broken or wrong) and ours:
+            notes = [row[11], "bound: " + ", ".join(bounds) + " instructions (stopped at the limit; no bar)" if bounds else "",
+                     "wrong output, not a bar: " + ", ".join(wrong) + (f" [{WRONG_OUTPUT_CAUSES[bar]}]" if wrong and bar in WRONG_OUTPUT_CAUSES else "") if wrong else "",
+                     "no bar from: " + ", ".join(broken) if broken else ""]
             row = (*row[:11], "; ".join(filter(None, notes)))
         tally[(level, row[10])] += 1
         plain_code = min((r["code"] for r in plain.values()), default="")

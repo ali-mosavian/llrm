@@ -221,7 +221,16 @@ def test_a_reference_that_miscompiled_is_named_in_the_note_as_no_bar_not_read_as
     """c-Os: six reference cells printed wrong values and one failed to compile; they were only a count in refs_missing."""
     wrong = {"error": "prints ['64'], want ['38421']"}
     row = by_row({"p/c/Os": cell(300, 1000)} | refs("p", "Os", 400, 2000) | {"p/tc/Os": wrong})[("p", "c", "Os")]
-    assert "no bar from: tc (prints ['64'], want ['38421'])" in row[11], row
+    assert "wrong output, not a bar: tc (prints ['64'], want ['38421'])" in row[11], row
+
+
+def test_a_bounds_twin_whose_references_all_print_wrong_values_has_no_bar_and_a_dated_cause():
+    """stft_fixed~bounds: bcc, tc and tcpp print another value than the host oracle. They are listed as wrong output, with the cause's date, owner and exit; the cell has no bar."""
+    wrong = {"error": "prints ['219192480'], want ['374810179']"}
+    measured = {"stft_fixed/nib/Os": cell(300, 1000), "stft_fixed~bounds/c/Os": cell(310, 1100)} | {f"stft_fixed~bounds/{name}/Os": wrong for name in ("bcc", "tc", "tcpp")}
+    row = by_row(measured)[("stft_fixed", "nib", "Os")]
+    assert row[10] == "NO_BAR", row
+    assert "wrong output, not a bar: bcc (prints ['219192480'], want ['374810179'])" in row[11] and "owner w12, exit 2026-12-13" in row[11], row
 
 
 def test_the_header_names_the_levels_the_table_holds_not_a_fixed_list(tmp_path):
