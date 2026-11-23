@@ -181,16 +181,19 @@ fn writes_flags_later(one: &Insn) -> bool {
 
 /// `fcom`, `fcomp`, `fcompp`, `fucom*`, `ficom*`, `ftst`, `fxam`: they set the
 /// FPU status word, whose condition bits `fnstsw; sahf` copy into the flags.
+/// `fcomi*` and `fucomi*` write the flags themselves, so they are not here.
 fn x87_compare(one: &Insn) -> bool {
     one.what
         .as_ref()
         .is_some_and(
             |what| what.op == Operation::Compare
                 && what.name.as_deref().is_some_and(|name| {
-                    name.starts_with("fcom")
-                        || name.starts_with("fucom")
-                        || name.starts_with("ficom")
-                        || matches!(name, "ftst" | "fxam")
+                    !name.starts_with("fcomi")
+                        && !name.starts_with("fucomi")
+                        && (name.starts_with("fcom")
+                            || name.starts_with("fucom")
+                            || name.starts_with("ficom")
+                            || matches!(name, "ftst" | "fxam"))
                 }),
         )
 }

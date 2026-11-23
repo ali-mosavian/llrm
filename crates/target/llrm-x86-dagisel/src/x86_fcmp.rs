@@ -3,10 +3,11 @@
 //!
 //! # How it works
 //! `fucom` leaves the result in the FPU status word. `fnstsw ax` copies it to
-//! `AX`, and `sahf` loads `AH` into `EFLAGS` as an unsigned compare. No CPU the
-//! tables are for has `fcomi` (it came with the P6), so the pin's `canUseCMOV`
-//! early exit never applies and the table's `UCOM_FpIr*` patterns (which
-//! require `HasCMOV`) never do.
+//! `AX`, and `sahf` loads `AH` into `EFLAGS` as an unsigned compare. No 32-bit
+//! CPU the tables are for has `fcomi` (it came with the P6), so there the pin's
+//! `canUseCMOV` early exit never applies and the table's `UCOM_FpIr*` patterns
+//! (which require `HasCMOV`) never do. x86-64 CPUs have it: `select_node`
+//! leaves the compare to the table, which selects `fucomi`.
 //!
 //! `STRICT_FCMP` and `STRICT_FCMPS` are the same selection with a chain: the
 //! compare hangs on the node's chain (`fcom` for the signaling one, which

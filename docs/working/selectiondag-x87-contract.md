@@ -24,7 +24,7 @@ Every float value is a vreg of class RFP32/64/80 from selection on; stack positi
 
 - `FP_TO_INT_IN_MEM` expands as the pin's custom inserter: `fnstcw`, set the rounding bits to truncate, `fldcw`, `fist`, `fldcw` of the saved word.
 - `CMOV` on RFP becomes a branch diamond (`EmitLoweredSelect`) on a 486; a P6 `fcmov` is out of scope (target is i486/P5).
-- `FCMP` is `fucom` + `fnstsw ax` + `sahf` on i486/P5 (m16 uses the same, 16-bit forms).
+- `FCMP` is `fucom` + `fnstsw ax` + `sahf` on i486/P5 (m16 uses the same, 16-bit forms); at m64 it is `fucomi`/`fucomip`, which set the flags themselves.
 
 ## What the stackifier may rely on (w-2)
 

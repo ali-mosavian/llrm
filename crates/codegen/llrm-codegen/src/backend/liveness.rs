@@ -190,13 +190,16 @@ pub fn with_effect<R>(
     if *was == bits { with(answer.as_ref()) } else { with(worked_out(regs, bits, one).as_ref()) }
 }
 
-/// An x87 compare pseudo (`fcom`, `ficom`, their pops).
+/// An x87 compare pseudo (`fcom`, `ficom`, their pops); not `fcomi`, which
+/// writes the flags itself and has no status word.
 pub fn is_x87_compare(one: &Insn) -> bool {
     one.what
         .as_ref()
         .is_some_and(
             |what| what.op == Operation::Compare
-                && what.name.as_deref().is_some_and(|name| name.starts_with("fcom") || name.starts_with("ficom")),
+                && what.name.as_deref().is_some_and(|name| {
+                    (name.starts_with("fcom") && !name.starts_with("fcomi")) || name.starts_with("ficom")
+                }),
         )
 }
 

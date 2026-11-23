@@ -907,8 +907,8 @@ fn _compare_with_integer(
         .as_ref()
         .filter(|what| what.op == Operation::Compare && matches!(what.dests.as_slice(), [] | [Loc::Held(_)]))?;
     // `fucom` has no memory form: the quiet compare of a constrained `fcmp`
-    // keeps its load.
-    if name_is(what, "fucom") {
+    // keeps its load; `fcomi` has none either.
+    if ["fucom", "fucomi", "fcomi"].iter().any(|name| name_is(what, name)) {
         return None;
     }
     let [Loc::Held(left), Loc::Held(right)] = what.sources.as_slice() else { return None };

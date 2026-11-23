@@ -596,8 +596,8 @@ pub fn jump_tables(
     for (number, procedure) in procedures.iter().enumerate() {
         let jumps =
             procedure.body.blocks.iter().flat_map(|block| block.insns.iter()).filter_map(|one| one.what.as_ref());
-        for what in jumps
-            .filter(|what| what.op == Operation::Jump && what.indirect && !what.computed && !what.table.is_empty())
+        for what in
+            jumps.filter(|what| what.op == Operation::Jump && what.indirect && !what.computed && !what.table.is_empty())
         {
             let index = match (what.sources.first(), what.table_id) {
                 (Some(Loc::Mem(ir::Mem { addr: Some(addr), .. })), _) => addr.index,
@@ -3387,9 +3387,10 @@ fn addressed_pass(
                         }
                         depth = None;
                     }
-                    // An indirect jump that names no table is an indirect sibling
-                    // call (`built` made its return a jump): its epilogue has
-                    // run, and it leaves the procedure as a return does.
+                    // An indirect jump that names no table is an indirect
+                    // sibling call (`built` made its return a jump): its
+                    // epilogue has run, and it leaves the procedure as a return
+                    // does.
                     Operation::Jump if what.indirect && what.table.is_empty() => {
                         if here != 0 && !in_dead {
                             return Err(stop(procedure, &format!("a sibling call at depth {here}")));
@@ -3911,6 +3912,10 @@ fn _instruction_unprefixed(
             vec![format!("{name} {}, {}", dests[0], sources[0])]
         }
         Operation::Unary => vec![format!("{name} {}", dests[0])],
+        // `fcomi` has no implicit operand: `fucomip st(0), st(1)`.
+        Operation::Compare if matches!(name, "fcomi" | "fcomip" | "fucomi" | "fucomip") => {
+            vec![format!("{name} {}, {}", sources[0], sources[1])]
+        }
         Operation::Compare if name.starts_with('f') => {
             let memory: Vec<&String> = sources
                 .iter()

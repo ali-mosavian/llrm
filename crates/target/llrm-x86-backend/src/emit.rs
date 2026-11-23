@@ -3204,6 +3204,13 @@ impl Emitter<'_, '_> {
                 // `fucom`, which does not raise invalid on a quiet NaN, and the
                 // signaling one `fcom`. The plain compare is `fcom` as before.
                 let mnemonic = if name.starts_with("UCOM") && node.ops.len() > 2 { "fucom" } else { "fcom" };
+                // `fcomi` (P6, every x86-64 CPU): the flags come from the
+                // compare, with no status word and no `sahf`.
+                if name.contains("FpIr") {
+                    let mnemonic = if name.starts_with("UCOM") { "fucomi" } else { "fcomi" };
+                    self.push(Operation::Compare, mnemonic, Vec::new(), vec![Loc::Held(left), Loc::Held(right)]);
+                    return Ok(Some(()));
+                }
                 match self.status_reader(n) {
                     Some(sahf) => {
                         self.pending_fcom.insert(sahf, (left, right, mnemonic));

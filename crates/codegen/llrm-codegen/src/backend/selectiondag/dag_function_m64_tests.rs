@@ -1082,7 +1082,8 @@ entry:
 }
 
 /// A `long double` compare at m64 was `Emit(Unmapped("UCOM_FpIr80"))`: the
-/// x86-64 CPUs have `fcomi`, so the table selects its flag-setting form.
+/// x86-64 CPUs have `fcomi`, so the table selects its flag-setting form, which
+/// is the `fucomi` compare with no status word.
 #[test]
 fn an_m64_long_double_compare_is_selected() {
     let text = "target datalayout = \"e-p:64:64-i64:64-f80:128-n8:16:32:64\"
@@ -1095,7 +1096,7 @@ entry:
     let module = llrm_mir::parse::module(text).expect("parses");
     let cpu = crate::backend::cpu::tuned_for(&llrm_x86_m64::M64, llrm_x86_m64::CPUS[0], false).expect("a cpu");
     let done = selected(&module, "f", &llrm_x86_m64::M64, cpu, &[]).expect("selected");
-    assert!(done.body.insns().iter().any(|i| i.what.as_ref().is_some_and(|w| w.name.as_deref() == Some("fcom"))));
+    assert!(done.body.insns().iter().any(|i| i.what.as_ref().is_some_and(|w| w.name.as_deref() == Some("fucomi"))));
 }
 
 /// A `long double` converted to `u64` at m64 was
