@@ -67,6 +67,13 @@ use crate::model::lir::{self, Block, Insn, LirBlock, LirBody};
 const SIZE: usize = 2;
 /// What a computed goto may hold after allocation.
 const COMPUTED_GOTO_SIZE: usize = 10;
+/// DEVIATE TL5 (owner x87, exit: the per-copy size of the dispatch is closed,
+/// rows M32/M64-OS-EXEC-LOOP-CLOCKS): the nested computed gotos left by the
+/// tail merge are unfactored (here, to a fixed point, and in placement) at
+/// -O1 and above only. At -Os the pass keeps the single sweep and placement
+/// copies no computed goto, the state of the tree before it: copied to the
+/// end, QB `exec.c` is over the best of gcc and clang in bytes.
+pub const UNFACTOR_AT_SIZE: bool = false;
 
 /// `terminatorIsComputedGotoWithSuccessors`: the block ends in an indirect jump
 /// and every successor is a block whose address is taken (a `goto *`, not a
@@ -263,6 +270,47 @@ pub fn duplicated_with(
             }
         }
         place += 1;
+    }
+    if size && !UNFACTOR_AT_SIZE {
+        return body;
+    }
+    unfactored(body, size, computed_at_size, epilogue)
+}
+
+/// A computed goto's tail copied into a block makes that block one, small
+/// enough to be copied in turn, but a block before it in the order has been
+/// passed: where merged tails nest (a tail inside a tail inside the dispatch),
+/// the pass leaves a shared copy at each level. The blocks that end in a
+/// computed goto are visited again until none changes.
+fn unfactored(
+    mut body: LirBody,
+    size: bool,
+    computed_at_size: bool,
+    epilogue: usize,
+) -> LirBody {
+    let mut graph = Preds::of(&body);
+    // Each round removes a block or copies into one: bounded by the blocks.
+    for _ in 0..body.blocks.len() {
+        let mut changed = false;
+        let mut place = 1;
+        while place < body.blocks.len() {
+            let at = body.blocks[place].at;
+            if computed_goto(&body, &body.blocks[place])
+                && copied(&body, &body.blocks[place], size, computed_at_size, epilogue).is_some()
+                && let Some(made) = tail_duplicate(&graph, &body, place, size, computed_at_size, epilogue)
+            {
+                body = made;
+                graph = Preds::of(&body);
+                changed = true;
+                if body.blocks.get(place).is_none_or(|block| block.at != at) {
+                    continue;
+                }
+            }
+            place += 1;
+        }
+        if !changed {
+            break;
+        }
     }
     body
 }

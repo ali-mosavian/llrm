@@ -7,18 +7,34 @@
 
 use std::sync::Arc;
 
-use super::{Placer, TAIL_DUPLICATION_PENALTY, TRIANGLE_CHAIN_COUNT};
+use super::{COMPUTED_GOTO_SIZE, Placer, TAIL_DUPLICATION_PENALTY, TRIANGLE_CHAIN_COUNT};
 use crate::backend::jumps::{_real, _unowned};
 use crate::model::ir::Operation;
 use crate::model::lir::{self, Insn, LirBlock};
 use crate::support::hash::IndexMap;
 
 impl Placer {
+    /// `terminatorIsComputedGotoWithSuccessors`: `block` ends in an indirect
+    /// jump and every successor is a block whose address is taken.
+    fn computed_goto(
+        &self,
+        block: usize,
+    ) -> bool {
+        let Some(targets) = &self.goto_targets else { return false };
+        !self.succ[block].is_empty()
+            && self.succ[block].iter().all(|&next| targets.contains(&self.at(next)))
+            && _real(&self.blocks[block])
+                .last()
+                .and_then(|one| one.what.as_ref())
+                .is_some_and(|what| what.op == Operation::Jump && what.indirect)
+    }
+
     /// The instructions `block` would be copied as, and whether it may be.
     /// Not copied: a block with a phi, a call's record, a group, a symbol or
     /// bytes spread over others (a copy claims no source bytes of its own), or
-    /// one of data, a barrier, a call, an indirect jump or a sibling call (its
-    /// callee is named by the instruction's id, which a copy does not keep).
+    /// one of data, a barrier, a call, an indirect jump that is not a computed
+    /// goto, or a sibling call (its callee is named by the instruction's id,
+    /// which a copy does not keep).
     fn copied(
         &self,
         block: usize,
@@ -32,6 +48,7 @@ impl Placer {
             return None;
         }
         let real = _real(made);
+        let computed = self.computed_goto(block);
         let plain = real
             .iter()
             .all(
@@ -43,7 +60,7 @@ impl Placer {
                             Operation::Barrier | Operation::Data | Operation::Call
                         )
                             && !what.is_sibling_call()
-                            && !(matches!(what.op, Operation::Jump | Operation::Branch) && what.indirect),
+                            && (computed || !(matches!(what.op, Operation::Jump | Operation::Branch) && what.indirect)),
                     ),
             );
         plain.then_some(real)
@@ -89,7 +106,10 @@ impl Placer {
                 count -= 1;
             }
         }
-        count <= self.dup_size || self.hot.is_some_and(|hot| self.hot_pays(hot, block, count))
+        // After allocation a computed goto may hold ten: the pin unfactors the
+        // dispatch of an interpreter that the middle end made one block.
+        let most = if self.computed_goto(block) { self.dup_size.max(COMPUTED_GOTO_SIZE) } else { self.dup_size };
+        count <= most || self.hot.is_some_and(|hot| self.hot_pays(hot, block, count))
     }
 
     /// DEVIATE TAILDUP-HOT: whether the copies of `block` into the predecessors
@@ -101,7 +121,8 @@ impl Placer {
         block: usize,
         count: usize,
     ) -> bool {
-        let jumpers: Vec<usize> = self.pred[block].iter().copied().filter(|&from| self.can_tail_duplicate(block, from)).collect();
+        let jumpers: Vec<usize> =
+            self.pred[block].iter().copied().filter(|&from| self.can_tail_duplicate(block, from)).collect();
         let jumped: f64 = jumpers.iter().map(|&from| self.freq[from]).sum();
         hot.pays(count, jumped, jumpers.len(), jumpers.len() == self.pred[block].len(), self.latch[block])
     }

@@ -2896,7 +2896,7 @@ fn test_the_latch_stays_below_the_inner_loop_it_falls_from() {
         made
     };
     let order = |top: Option<TopClocks>| {
-        let placed = super::_placed_ext(&source, false, false, None, None, top, 0, None).unwrap();
+        let placed = super::_placed_ext(&source, false, false, None, None, top, 0, None, true).unwrap();
         placed.blocks.iter().map(|one| one.at).collect::<Vec<_>>()
     };
     let at = |order: &[i64], block: i64| order.iter().position(|&one| one == block).unwrap();
@@ -2935,7 +2935,7 @@ fn test_a_latch_copied_into_two_arms_goes_above_the_header() {
         made
     };
     let order = |top: Option<TopClocks>| {
-        let placed = super::_placed_ext(&source, false, false, None, None, top, 0, None).unwrap();
+        let placed = super::_placed_ext(&source, false, false, None, None, top, 0, None, true).unwrap();
         placed.blocks.iter().map(|one| one.at).collect::<Vec<_>>()
     };
     let at = |order: &[i64], block: i64| order.iter().position(|&one| one == block).unwrap();
@@ -2955,7 +2955,7 @@ fn test_a_latch_copied_into_two_arms_goes_above_the_header() {
 fn test_a_diamond_is_placed_as_the_pin_does_under_the_loop_top_clocks() {
     use super::placement::TopClocks;
     let order = |top: Option<TopClocks>| {
-        let placed = super::_placed_ext(&weighted_diamond(0.7), false, false, None, None, top, 0, None).unwrap();
+        let placed = super::_placed_ext(&weighted_diamond(0.7), false, false, None, None, top, 0, None, true).unwrap();
         placed.blocks.iter().map(|one| one.at).collect::<Vec<_>>()
     };
     assert_eq!(order(Some(TopClocks { jump_clocks: 3.0, saved_clocks: 2.0 })), order(None));
@@ -2991,7 +2991,8 @@ fn loop_with_rare_arm(hot: f64) -> LirBody {
 #[test]
 fn test_ext_tsp_at_size_keeps_a_loops_hot_arm_falling_through_the_loop() {
     let order = |ext_tsp: Option<bool>| {
-        let placed = super::_placed_ext(&loop_with_rare_arm(0.9), true, false, None, None, None, 0, ext_tsp).unwrap();
+        let placed =
+            super::_placed_ext(&loop_with_rare_arm(0.9), true, false, None, None, None, 0, ext_tsp, true).unwrap();
         placed.blocks.iter().map(|one| one.at).collect::<Vec<_>>()
     };
     let falls = |order: &[i64]| order.windows(2).any(|pair| pair == [30, 3]);

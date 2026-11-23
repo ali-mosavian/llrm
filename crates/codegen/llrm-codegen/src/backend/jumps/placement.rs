@@ -22,6 +22,9 @@ const PREDECESSOR_LIMIT: usize = 1000;
 /// `TailDupPlacementThreshold`: the instructions a block may hold and be
 /// copied (1 for size).
 const TAIL_DUPLICATION: usize = 2;
+/// What a computed goto may hold after allocation (`TailDuplicator`'s
+/// `max(MaxDuplicateCount, 10)`).
+const COMPUTED_GOTO_SIZE: usize = 10;
 
 /// `TailDupPlacementAggressiveThreshold`, at -O3.
 const TAIL_DUPLICATION_AGGRESSIVE: usize = 4;
@@ -81,7 +84,8 @@ struct Placer {
     active: u32,
     serial: u32,
     optimize_size: bool,
-    /// DEVIATE LOOP-TOP-JMP: fall-throughs weighed in clocks; `None`: the pin's count.
+    /// DEVIATE LOOP-TOP-JMP: fall-throughs weighed in clocks; `None`: the pin's
+    /// count.
     top: Option<TopClocks>,
     entry: usize,
     /// The loop's blocks in layout order (`BlockFilterSet`), and where
@@ -95,6 +99,8 @@ struct Placer {
     /// reaching them.
     blocks: Vec<Block>,
     dead: Vec<bool>,
+    /// The blocks whose address is taken, where a computed goto is copied.
+    goto_targets: Option<HashSet<i64>>,
     /// The tail-duplication threshold in instructions (`TailDupSize`).
     dup_size: usize,
     /// DEVIATE TAILDUP-HOT: blocks above `dup_size` copied where it pays.
@@ -187,6 +193,7 @@ pub(super) fn order(
     top: Option<TopClocks>,
     epilogue: usize,
     ext_tsp: Option<bool>,
+    goto_targets: Option<HashSet<i64>>,
 ) -> (Vec<Block>, BlockOdds) {
     let index: IndexMap<i64, usize> = blocks.iter().enumerate().map(|(place, block)| (block.at, place)).collect();
     let entry = index.get(&entry).copied().unwrap_or(0);
@@ -199,6 +206,7 @@ pub(super) fn order(
     let mut placer = Placer::new(blocks, odds, busy, &index, size, aggressive, tail_dup, hot, entry);
     placer.top = top;
     placer.epilogue = epilogue;
+    placer.goto_targets = goto_targets;
     for found in natural {
         let Some(&header) = index.get(&found.header) else { continue };
         for at in found.body.to_set().iter() {
@@ -280,17 +288,22 @@ impl Placer {
             blocks: blocks.to_vec(),
             dead: vec![false; n],
             // DEVIATE (timings.times): a target may state a smaller bound.
-            dup_size: tail_dup.unwrap_or(usize::MAX).min(if size {
-                1
-            } else if aggressive {
-                TAIL_DUPLICATION_AGGRESSIVE
-            } else {
-                TAIL_DUPLICATION
-            }),
+            dup_size: tail_dup
+                .unwrap_or(usize::MAX)
+                .min(
+                    if size {
+                        1
+                    } else if aggressive {
+                        TAIL_DUPLICATION_AGGRESSIVE
+                    } else {
+                        TAIL_DUPLICATION
+                    },
+                ),
             hot: hot.filter(|_| !size),
             latch: vec![false; n],
             rerouted: Vec::new(),
             epilogue: 0,
+            goto_targets: None,
         }
     }
 
