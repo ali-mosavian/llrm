@@ -1008,6 +1008,7 @@ pub fn fold_with_odds(
         }
     }
     crate::taildup::drop_unreferenced(&mut ordered, tables, kept);
+    crate::taildup::propagate_forward(&mut ordered);
     crate::taildup::propagate_backward(&mut ordered, exits);
     // A branch to the next block falls through; a conditional branch over an
     // unconditional one is the inverse conditional (`cbz`/`tbz` too).

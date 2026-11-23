@@ -34,7 +34,12 @@
 //! DEVIATE: a block with a CFI directive or a jump-table label is not copied
 //! (the pin copies DWARF CFI); the backward propagation only looks in blocks
 //! that return, where the source is dead if it is caller-saved and not
-//! returned (the pin reads kill flags). Exit: 11-12.
+//! returned (the pin reads kill flags). Owner w11, exit 2026-12-06.
+//!
+//! DEVIATE ARM64-TD-AFTER-PLACEMENT (owner w11, exit 2026-12-06): the pin
+//! copies before block placement; this runs on the blocks placement ordered,
+//! then propagates copies forward and backward (`MachineCopyPropagation` follows
+//! `TailDuplicate` in `addMachineLateOptimization`).
 
 use std::collections::{HashMap, HashSet};
 
@@ -193,6 +198,63 @@ fn renamed(
     Some(out)
 }
 
+/// `ForwardCopyPropagateBlock` over the laid-out blocks, after tail duplication
+/// (the pin's `MachineCopyPropagation` runs again in
+/// `addMachineLateOptimization`, after `TailDuplicate`): a read of a register a
+/// live 64-bit copy filled reads the copy's source, a copy of a register back
+/// onto the one it was copied from, or onto itself, goes. A write to either
+/// register, a call, a return or an indirect jump ends the copy; so does a
+/// label inside the block (another path joins there).
+pub fn propagate_forward(blocks: &mut [Lowered]) {
+    for block in blocks.iter_mut() {
+        let mut copies: Vec<(Gpr, Gpr)> = Vec::new();
+        let mut at = 0;
+        while at < block.insts.len() {
+            let plain = !matches!(
+                block.insts[at],
+                Inst::Branch { .. } | Inst::BranchReg { .. } | Inst::Ret { .. } | Inst::Cfi(_) | Inst::Label(_)
+            );
+            if plain && !copies.is_empty() {
+                let mut inst = block.insts[at].clone();
+                inst.visit(&mut |register, role| {
+                    let RegRef::Gpr(used) = register else { return };
+                    if role != Role::Use || used.0 == 31 {
+                        return;
+                    }
+                    if let Some(&(_, source)) = copies.iter().find(|&&(dst, _)| dst == *used) {
+                        *used = source;
+                    }
+                });
+                block.insts[at] = inst;
+            }
+            if let Some((dst, src, Width::X)) = copy_of(&block.insts[at])
+                && (dst == src || copies.iter().any(|&(d, s)| d == src && s == dst))
+            {
+                block.insts.remove(at);
+                block.locs.remove(at);
+                continue;
+            }
+            match &block.insts[at] {
+                Inst::Label(_)
+                | Inst::Branch { link: true, .. }
+                | Inst::BranchReg { .. }
+                | Inst::Ret { .. } => copies.clear(),
+                inst => {
+                    let (defs, _) = inst.defs_and_uses();
+                    copies.retain(|&(d, s)| !defs.contains(&Reg::Gpr(d)) && !defs.contains(&Reg::Gpr(s)));
+                    if let Some((dst, src, Width::X)) = copy_of(inst)
+                        && src != Gpr::R31
+                        && dst != src
+                    {
+                        copies.push((dst, src));
+                    }
+                }
+            }
+            at += 1;
+        }
+    }
+}
+
 /// The backward propagation in the blocks that return. `exits` are the
 /// registers the function returns.
 pub fn propagate_backward(
@@ -311,5 +373,73 @@ pub fn drop_unreferenced(
         for at in dead.into_iter().rev() {
             blocks.remove(at);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::mc::inst::AddSub;
+
+    fn mov(
+        dst: u32,
+        src: u32,
+    ) -> Inst {
+        Inst::LogicShifted {
+            op: Logic::Orr,
+            invert: false,
+            width: Width::X,
+            rd: Gpr(dst),
+            rn: Gpr(31),
+            rm: Gpr(src),
+            shift: Shift::Lsl,
+            amount: 0,
+        }
+    }
+
+    fn add(
+        rd: u32,
+        rn: u32,
+    ) -> Inst {
+        Inst::AddSubImm {
+            op: AddSub { subtract: false, set_flags: false },
+            width: Width::X,
+            rd: Gpr(rd),
+            rn: Gpr(rn),
+            imm12: 1,
+            shift12: false,
+        }
+    }
+
+    fn after(insts: Vec<Inst>) -> Vec<Inst> {
+        let locs = vec![None; insts.len()];
+        let mut blocks = vec![Lowered { label: "f".into(), insts, locs }];
+        propagate_forward(&mut blocks);
+        blocks.remove(0).insts
+    }
+
+    /// A dispatch copied into a handler kept `mov x20, x25 ... mov x25, x20`: the
+    /// carried value moved to a second register and straight back (arm64 QB
+    /// `exec_loop` -Os: one wasted instruction per dispatched op).
+    #[test]
+    fn a_copy_back_onto_the_register_it_was_copied_from_goes() {
+        let ret = Inst::Ret { rn: Gpr(30) };
+        assert_eq!(after(vec![mov(20, 25), add(9, 23), mov(25, 20), ret.clone()]), vec![mov(20, 25), add(9, 23), ret]);
+    }
+
+    /// The dispatch copy of QB's arm64 `exec_loop`: the two carried-value
+    /// copies, the table lookup and the `br`. The bounce back is the only
+    /// instruction clang does not have (5 instructions, as its copy).
+    #[test]
+    fn a_dispatch_copy_keeps_its_carried_copies_and_loses_the_bounce_back() {
+        let branch = Inst::BranchReg { link: false, rn: Gpr(9) };
+        let copy = vec![mov(20, 25), mov(23, 9), add(9, 9), add(9, 26), mov(25, 20), branch.clone()];
+        assert_eq!(after(copy), vec![mov(20, 25), mov(23, 9), add(9, 9), add(9, 26), branch]);
+    }
+
+    #[test]
+    fn a_read_of_a_copys_destination_reads_its_source_and_a_write_ends_the_copy() {
+        assert_eq!(after(vec![mov(20, 25), add(0, 20)]), vec![mov(20, 25), add(0, 25)]);
+        assert_eq!(after(vec![mov(20, 25), add(25, 23), add(0, 20)]), vec![mov(20, 25), add(25, 23), add(0, 20)]);
     }
 }
