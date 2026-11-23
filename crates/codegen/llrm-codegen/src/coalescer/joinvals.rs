@@ -331,6 +331,23 @@ impl<'a> JoinVals<'a> {
         // Else the value written is valid in OtherVNI: a def that clobbers a
         // live value: when it kills Other it is an early clobber def (illegal
         // to merge), else it clobbers all of the one lane.
+        if super::driver::logging() {
+            eprintln!(
+                "COAL-IMPOSSIBLE\tv{} def {:?} (block {}, `{}`) clobbers v{} value defined {:?} (other is live there until {:?})",
+                self.sides[me].reg,
+                vni.def(),
+                self.lis.indexes.get_mbb_from_index(&vni.def()),
+                self.lis
+                    .instr(self.lis.defining_instr(&vni.def(), self.sides[me].reg))
+                    .what
+                    .as_ref()
+                    .and_then(|w| w.name.as_deref())
+                    .unwrap_or("copy/anchor"),
+                self.sides[other].reg,
+                other_vni.def(),
+                other_lrq.end_point()
+            );
+        }
         Resolution::Impossible
     }
 

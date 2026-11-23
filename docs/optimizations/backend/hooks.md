@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/hooks.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/hooks.rs); edit the header, not this file.
-<!-- src: crates/codegen/llrm-codegen/src/backend/hooks.rs sha256:7e961d13e6f6024254edb468fc42f2165d49d724d8bafe372111e5ee219c0595 -->
+<!-- src: crates/codegen/llrm-codegen/src/backend/hooks.rs sha256:5f2fc29f3f8ee4cea9e9f930b94ac21d84a90806563b95bb4109c7beda8bb391 -->
 
 # hooks
 
@@ -19,4 +19,4 @@ shared pass:       hooks::installed()?.select_function(module, name, ...)
 ```
 
 ## Used by
-Named by `assemble`, `builder`, `dag_select`, `shadow`.
+Named by `assemble`, `builder`, `dag_select`, `env`, `shadow`.

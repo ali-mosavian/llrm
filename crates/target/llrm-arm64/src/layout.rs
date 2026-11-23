@@ -277,6 +277,12 @@ fn common_tail(
 /// length, and at optsize two instructions are enough where a block is all tail
 /// (`ProfitableToMerge`'s layout-successor and `OptForSize` rules).
 ///
+/// DEVIATE TM-PAIRS-OS (owner w11, review 2027-01-31): at optsize two
+/// instructions are enough for any pair, not only where a block is all tail, as
+/// gcc's cross-jumping (`-fcrossjumping`, `min-crossjump-insns` 2) does: arm64
+/// QB -Os, 156 modules, -1,624 B, 48 modules smaller, none larger, none
+/// crossing its best of gcc and clang.
+///
 /// DEVIATE: the pin takes the pairs by the hash of their ends, not by the last
 /// instruction, and the first `TAIL_MERGE_THRESHOLD` predecessors of a block
 /// at a time, not chunks of a group. Exit: 2026-12-11.
@@ -377,7 +383,7 @@ fn merge_return_tails(
                         (length == blocks[*one].insts.len(), length == blocks[*other].insts.len());
                     let falls_in =
                         real >= 2 && ((*other == *one + 1 && other_full) || (*one == *other + 1 && one_full));
-                    let small = optsize && real >= 2 && (one_full || other_full);
+                    let small = optsize && real >= 2;
                     if (real >= TAIL_MERGE_SIZE || identical || falls_in || small)
                         && !whole
                         && best.is_none_or(|(a, b, longest)| {
@@ -1140,6 +1146,40 @@ mod tests {
         };
         assert_eq!(zeroings(true), 1);
         assert_eq!(zeroings(false), 2);
+    }
+
+    /// At optsize two common instructions merge though neither block is all
+    /// tail (gcc's `min-crossjump-insns` 2): QB arm64 -Os wrote `mov x0, x19;
+    /// mov w1, #n` before a shared `b` on every path, 1,624 B over 156 modules.
+    /// At speed they stay.
+    #[test]
+    fn a_two_instruction_tail_merges_at_optsize_though_neither_block_is_all_tail() {
+        use crate::mc::inst::{Logic, Shift};
+        let jump = |to: &str| Inst::Branch { link: false, target: Target::Label(to.into()) };
+        let zero = |rd| Inst::LogicShifted {
+            op: Logic::Orr,
+            invert: false,
+            width: Width::X,
+            rd: Gpr(rd),
+            rn: Gpr(31),
+            rm: Gpr(31),
+            shift: Shift::Lsl,
+            amount: 0,
+        };
+        let blocks = || {
+            vec![
+                block(".Lf.0", vec![cbz(1, ".Lf.2"), jump(".Lf.1")]),
+                block(".Lf.1", vec![Inst::Nop, zero(0), zero(1), jump(".Lf.4")]),
+                block(".Lf.2", vec![Inst::Nop, Inst::Nop, zero(2), zero(1), jump(".Lf.4")]),
+                block(".Lf.4", vec![Inst::Ret { rn: Gpr(30) }]),
+            ]
+        };
+        let writes = |optsize: bool| {
+            let out = fold(blocks(), &mut [], &Odds::default(), optsize, &[]);
+            out.iter().flat_map(|block| &block.insts).filter(|inst| **inst == zero(1)).count()
+        };
+        assert_eq!(writes(true), 1);
+        assert_eq!(writes(false), 2);
     }
 
     /// `-tail-merge-threshold` bounds the blocks compared at once, not the
