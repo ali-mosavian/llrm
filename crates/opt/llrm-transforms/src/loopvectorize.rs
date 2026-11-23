@@ -2408,6 +2408,7 @@ impl FunctionPass for LoopVectorize {
                                 // not `iteration_cost`; the pin adds no outside
                                 // work for it.
                                 size_priced: false,
+                                runtime_checks: false,
                                 has_reductions: false,
                                 reduction_bits: Vec::new(),
                                 pressure: None,
@@ -2465,6 +2466,7 @@ impl FunctionPass for LoopVectorize {
                             opt_size,
                             very_cheap,
                             size_priced: opt_size && tti.vectorizes_size_priced(),
+                            runtime_checks: memory_checks.is_some(),
                             has_reductions: !legality.reductions.is_empty(),
                             reduction_bits: widening
                                 .reductions
@@ -2549,6 +2551,7 @@ impl FunctionPass for LoopVectorize {
                         opt_size,
                         very_cheap,
                         size_priced: opt_size && tti.vectorizes_size_priced(),
+                        runtime_checks: memory_checks.is_some(),
                         has_reductions: !extracted.interleaving.reductions.is_empty(),
                         reduction_bits: extracted
                             .interleaving

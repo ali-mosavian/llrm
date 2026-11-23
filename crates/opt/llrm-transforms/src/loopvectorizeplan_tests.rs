@@ -32,6 +32,7 @@ fn facts(
         very_cheap: false,
         has_reductions: false,
         size_priced: false,
+        runtime_checks: false,
         reduction_bits: Vec::new(),
         pressure: None,
     }

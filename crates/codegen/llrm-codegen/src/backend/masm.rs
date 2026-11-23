@@ -2014,6 +2014,22 @@ pub fn listing(
     Ok(items)
 }
 
+/// The label of the block past the procedure's last that takes `pieces` back
+/// and jumps to `restore`: made once, whatever number of edges go through it.
+fn split_edge(
+    body: &lir::LirBody,
+    edges: &mut Vec<(i64, Option<i64>, Vec<crate::backend::shrinkwrap::Piece>)>,
+    restore: Option<i64>,
+    pieces: Vec<crate::backend::shrinkwrap::Piece>,
+) -> i64 {
+    if let Some((edge, ..)) = edges.iter().find(|(_, to, taken)| *to == restore && *taken == pieces) {
+        return *edge;
+    }
+    let edge = cold_at(body) + 1 + edges.len() as i64;
+    edges.push((edge, restore, pieces));
+    edge
+}
+
 /// Whether `branch` ends the block's code, or is followed only by the jump to
 /// the block's other successor: the branch whose taken edge an epilogue takes.
 fn is_taken_branch(
@@ -2496,6 +2512,28 @@ fn built(
         entry_items.extend(enter.iter().map(|one| entry_item(one, procedure.probe_stack.as_deref())));
     }
     let mut split_edges: Vec<(i64, Option<i64>, Vec<crate::backend::shrinkwrap::Piece>)> = Vec::new();
+    // `tryToSplitRestore` makes one block for the restore's paths that took
+    // something on; each of them goes to it. Edges into one restore that take
+    // the same pieces back are counted here, so that a lone one keeps its
+    // epilogue in line.
+    let mut edge_users: std::collections::BTreeMap<(Option<i64>, &Vec<crate::backend::shrinkwrap::Piece>), usize> =
+        std::collections::BTreeMap::new();
+    if let Some(wrap) = &wrap {
+        for block in blocks.iter() {
+            let last_printed = block.insns.iter().rev().find(|one| prints(one));
+            if let (Some(pieces), Some(last)) = (wrap.closes_after.get(&block.at), last_printed)
+                && let Some(what) = last.what.as_ref().filter(|what| what.op == Operation::Jump)
+            {
+                *edge_users.entry((what.target, pieces)).or_default() += 1;
+            }
+            if let Some(pieces) = wrap.closes_taken.get(&block.at)
+                && let Some(what) =
+                    block.insns.iter().find(|one| is_taken_branch(&block.insns, one)).and_then(|one| one.what.as_ref())
+            {
+                *edge_users.entry((what.target, pieces)).or_default() += 1;
+            }
+        }
+    }
     let mut out: Vec<Item> = line.map(&mut marked).into_iter().chain(arrived).chain(cells).chain(entry_items).collect();
     let body_from = out.len();
     // An item or two per instruction, a label and an alignment per block, and
@@ -2523,12 +2561,18 @@ fn built(
         let taken = wrap.as_ref().and_then(|wrap| wrap.closes_taken.get(&block.at));
         let ends_in_jump =
             last_printed.is_some_and(|one| one.what.as_ref().is_some_and(|what| what.op == Operation::Jump));
-        let mut closed = false;
+        let to_shared = closing.is_some_and(|pieces| {
+            ends_in_jump
+                && last_printed
+                    .and_then(|one| one.what.as_ref())
+                    .is_some_and(|what| edge_users.get(&(what.target, pieces)).is_some_and(|&users| users > 1))
+        });
+        let mut closed = to_shared;
         let mut top = index > 0;
         let mut first_lined = true;
         for one in &block.insns {
-            if let Some(pieces) =
-                closing.filter(|_| ends_in_jump && last_printed.is_some_and(|last| Arc::ptr_eq(last, one)))
+            if let Some(pieces) = closing
+                .filter(|_| ends_in_jump && !to_shared && last_printed.is_some_and(|last| Arc::ptr_eq(last, one)))
             {
                 out.extend(pieces.iter().flat_map(item_mid).map(Item::owned));
                 out.extend(wrapped_frame.then_some(Item::Mark(Mark::Closed)));
@@ -2672,12 +2716,18 @@ fn built(
                         callee: callee.name.clone(),
                     });
                 }
+                Operation::Jump if to_shared && last_printed.is_some_and(|last| Arc::ptr_eq(last, one)) => {
+                    let pieces = closing.cloned().unwrap_or_default();
+                    let edge = split_edge(&procedure.body, &mut split_edges, what.target, pieces);
+                    out.push(Item::owned(Semantics { target: Some(edge), ..what.clone() }));
+                }
                 Operation::Branch if taken.is_some() && is_taken_branch(&block.insns, one) => {
                     // The taken edge into the restore goes through a block of
                     // its own, past the procedure's last, that takes the
-                    // pieces back (`tryToSplitRestore`).
-                    let edge = cold_at(&procedure.body) + 1 + split_edges.len() as i64;
-                    split_edges.push((edge, what.target, taken.cloned().unwrap_or_default()));
+                    // pieces back (`tryToSplitRestore`): the one block the
+                    // restore's other such edges go through.
+                    let pieces = taken.cloned().unwrap_or_default();
+                    let edge = split_edge(&procedure.body, &mut split_edges, what.target, pieces);
                     out.push(Item::owned(Semantics { target: Some(edge), ..what.clone() }));
                 }
                 _ => out.push(Item::Semantics(std::borrow::Cow::Borrowed(what))),

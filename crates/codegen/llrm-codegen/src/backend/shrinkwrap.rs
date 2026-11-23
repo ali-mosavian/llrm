@@ -12,8 +12,8 @@
 //!
 //! A path that never reaches Save pays nothing: no push, no frame, a bare
 //! `ret`. A path that falls into a return the early paths share takes its
-//! registers back at its own end, before the jump or where it falls in
-//! (`tryToSplitRestore`'s split block, without the block).
+//! registers back at its own end, where it falls in, or, if it jumps, in the one
+//! split block (`tryToSplitRestore`) every such jump goes through.
 //!
 //! ```mermaid
 //! %%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, Helvetica Neue, Arial, DejaVu Sans, sans-serif','fontSize':'15px','primaryColor':'#475569','primaryTextColor':'#ffffff','primaryBorderColor':'#334155','lineColor':'#64748b','secondaryColor':'#475569','tertiaryColor':'transparent','clusterBkg':'transparent','clusterBorder':'#64748b','edgeLabelBackground':'#334155','textColor':'#64748b','titleColor':'#64748b'},'flowchart':{'curve':'basis','nodeSpacing':38,'rankSpacing':52,'padding':16,'wrappingWidth':360,'htmlLabels':true,'useMaxWidth':true}}}%%
@@ -139,9 +139,9 @@ pub enum Piece {
 pub struct Wrap {
     pub opens: BTreeMap<i64, Vec<Piece>>,
     pub closes: BTreeMap<i64, Vec<Piece>>,
-    /// Taken back at the end of the block, before its jump to the restore or
-    /// where it falls into it (the edge `tryToSplitRestore` puts the epilogue
-    /// on), in that order.
+    /// Taken back at the end of the block where it falls into the restore, or
+    /// in the one block its jump to the restore goes through (the edge
+    /// `tryToSplitRestore` puts the epilogue on), in that order.
     pub closes_after: BTreeMap<i64, Vec<Piece>>,
     /// Taken back on the taken edge of the block's conditional branch to the
     /// restore: `masm` makes the block `tryToSplitRestore` splits the edge
