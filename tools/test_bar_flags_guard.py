@@ -19,7 +19,6 @@ DEBT = {
     "tools/cc_cost.py": "unassigned, 2026-12-02",
     "tools/compile_map.py": "unassigned, 2026-12-02",
     "tools/scoreboard.py": "unassigned, 2026-12-02",
-    "tools/softfloat_cells/rows_bytes.sh": "unassigned, 2026-12-02",
     "tools/wasm_corpus.sh": "unassigned, 2026-12-02",
     "tools/wasm_flag_check.py": "unassigned, 2026-12-02",
     "tools/z80_flag_check.py": "unassigned, 2026-12-02",
