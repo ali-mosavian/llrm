@@ -195,6 +195,15 @@ fn position<C>(
     function.blocks.iter().position(|block| block.id == id).expect("a block that exists")
 }
 
+/// `MachineBasicBlock::hasAddressTaken`: a table or a `goto *` reaches the
+/// block by its symbol, so the fold keeps it where it is and as it is.
+fn address_taken<C>(
+    function: &MFunction<C>,
+    id: u32,
+) -> bool {
+    function.address_symbols.iter().any(|(block, _)| *block == id)
+}
+
 /// `MachineBasicBlock::canFallThrough`: control can run off the end into the
 /// next block, or a branch names the next block ("it can obviously reach, even
 /// though the branch should get folded to fall through implicitly").
@@ -204,7 +213,8 @@ fn can_fall_through<C>(
 ) -> bool {
     let Some(next) = function.blocks.get(at + 1) else { return false };
     !function.blocks[at].insts.last().is_some_and(|last| last.barrier)
-        || analyze(function, at).is_some_and(|branches| branches.taken == Some(next.id) || branches.other == Some(next.id))
+        || analyze(function, at)
+            .is_some_and(|branches| branches.taken == Some(next.id) || branches.other == Some(next.id))
 }
 
 /// The blocks that name `id` in a terminator, and the block before it when
@@ -307,7 +317,7 @@ impl<C, J: Jump> Folder<'_, C, J> {
         let fall_through = (at + 1 < self.function.blocks.len()).then(|| self.function.blocks[at + 1].id);
         let current = analyze(self.function, at);
 
-        if self.function.blocks[at].insts.is_empty() {
+        if self.function.blocks[at].insts.is_empty() && !address_taken(self.function, id) {
             let preds = predecessors(self.function, id);
             if preds.is_empty() {
                 return Step::Done(false);
@@ -338,6 +348,7 @@ impl<C, J: Jump> Folder<'_, C, J> {
                 && predecessors(self.function, id).len() == 1
                 && prior_successors(self.function, prev) == 1
                 && is_successor(self.function, prev, id)
+                && !address_taken(self.function, id)
             {
                 let block = self.function.blocks.remove(at);
                 self.function.blocks[prev].insts.extend(block.insts);
@@ -408,6 +419,7 @@ impl<C, J: Jump> Folder<'_, C, J> {
                     .first()
                     .is_some_and(|first| first.terminator && target(first).is_some() && !names_many(first))
                     && taken != id
+                    && !address_taken(self.function, id)
                 {
                     remove_branch(self.function, at);
                     let prev_falls = can_fall_through(self.function, prev);
@@ -519,7 +531,7 @@ impl<C, J: Jump> Folder<'_, C, J> {
             }
             // dead: nothing branches to it and nothing falls into it
             if let Some(now) = self.function.blocks.iter().position(|block| block.id == id) {
-                if now > 0 && predecessors(self.function, id).is_empty() {
+                if now > 0 && predecessors(self.function, id).is_empty() && !address_taken(self.function, id) {
                     self.function.blocks.remove(now);
                     changed = true;
                 }
