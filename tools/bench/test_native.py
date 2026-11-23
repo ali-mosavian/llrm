@@ -59,11 +59,13 @@ def test_a_program_that_prints_the_wrong_value_is_an_error_not_a_count(tmp_path)
     assert "prints" in row.get("error", "") and "instructions" not in row
 
 
-def test_ours_is_flagless_pie_and_the_externals_beside_it_are_fpie(tmp_path):
-    """llrm-cc -m64 is flagless PIE (rip-relative); gcc and clang built -fno-pic wrote absolute data references and faked a +10.6% hanoi2 gap. Every external column is -fPIE."""
+def test_ours_and_the_externals_beside_it_are_all_fpie(tmp_path):
+    """gcc and clang built -fno-pic wrote absolute data references and faked a +10.6% hanoi2 gap; ours flagless read an external variable through the GOT where the -fPIE bars do not
+    (`direct_extern_at_pie` takes only the explicit flag). Every column but the reported -fno-pic one is -fPIE."""
     def command(column):
         return native.compile_command(column, tmp_path, tmp_path / "a.c", "O2", tmp_path / "a.o", tmp_path)[0]
 
+    assert "-fPIE" in command(native.OURS), "flagless ours is not the -fPIE the bars are"
     assert "-fno-pic" not in command(native.OURS)
     assert all("-fno-pic" not in command(column) for column in (native.OURS, *(c for c in native.REPORTED if c != native.NOPIC)))
     assert all("-fPIE" in command(column) for column in native.REPORTED if column != native.NOPIC)

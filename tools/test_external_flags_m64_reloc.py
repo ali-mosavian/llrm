@@ -4,7 +4,9 @@
 import os
 import re
 import shutil
+import sys
 import subprocess
+from pathlib import Path
 
 import pytest
 
@@ -39,3 +41,24 @@ def test_the_probe_sees_that_fno_pic_differs(compiler, tmp_path):
     ours = kinds([LLRM_CC, "-m64"], tmp_path, "ours")
     absolute = kinds([compiler, "-fno-pie", "-no-pie", *external_flags.flags("x86", ("-fno-pic",))], tmp_path, compiler)
     assert absolute != ours, (compiler, absolute, ours)
+
+
+EXTERN_DATA = "extern int use(int);\nextern int shared[8];\nint f(int n) { return use(shared[n & 7]) + shared[1]; }\n"
+
+
+@pytest.mark.skipif(not LLRM_CC, reason="LLRM_CC (a dist's llrm-cc) is not set")
+@pytest.mark.skipif(not shutil.which("gcc"), reason="no gcc")
+def test_the_bench_ours_column_reads_an_external_variable_as_the_fpie_bar_does(tmp_path):
+    """#10709: with -fPIE ours reads an external variable rip-relative like gcc (a copy relocation); flagless it went through the GOT, so a column built flagless was not the one
+    the bars are compared with. The command is the bench's own: its ours column must have gcc -fPIE's relocation kinds for `extern int shared[8]`."""
+    sys.path.insert(0, str(Path(__file__).parent / "bench"))
+    import native
+
+    (tmp_path / "e.c").write_text(EXTERN_DATA)
+    command, env = native.compile_command(native.OURS, Path(LLRM_CC).parent, tmp_path / "e.c", "Os", tmp_path / "ours.o", tmp_path)
+    done = subprocess.run(command, capture_output=True, text=True, env=env)
+    assert done.returncode == 0, done.stderr
+    dump = lambda obj: set(re.findall(r"R_X86_64_\w+", subprocess.run(["objdump", "-r", str(obj)], capture_output=True, text=True, check=True).stdout))
+    gcc = subprocess.run(["gcc", *external_flags.flags("x86", ("-fPIE",)), "-Os", "-c", "-o", str(tmp_path / "gcc.o"), str(tmp_path / "e.c")], capture_output=True, text=True)
+    assert gcc.returncode == 0, gcc.stderr
+    assert dump(tmp_path / "ours.o") == dump(tmp_path / "gcc.o")
