@@ -83,7 +83,7 @@ pub fn prepare(
         cached_both(ir, request)?
     } else {
         let (selections, alternatives) = selections_with_alternatives(ir, request)?;
-        (Selections::new(selections), Selections::new(alternatives))
+        settled(Selections::new(selections), Selections::new(alternatives), request)
     };
     Ok(Prepared { selections, alternatives, sources, level: request.level })
 }
@@ -534,6 +534,82 @@ fn cached_selections(
     cached_both(ir, request).map(|(selected, _)| selected)
 }
 
+thread_local! {
+    /// The selections and alternatives as the driver made them, and as
+    /// [`settled`] left them.
+    static SETTLED: std::cell::RefCell<Option<(Selections, Selections, Selections, Selections)>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// The main selections and the alternatives with the divide's speed routines
+/// settled first: a sized function with a multiply alternative and a long
+/// divide has the speed routines as an alternative of its own
+/// (`driver::DIVIDE`) and beside the multiply's (`driver::BOTH`). The module
+/// chooser ([`decomposed_functions`]) takes the divide's over the functions'
+/// plain forms; the functions it takes become the main form (`DIVIDE`), their
+/// multiply alternative the one with both (`BOTH`), and the chooser of the
+/// multiplies then runs as it always did. Priced one axis at a time, a function
+/// has the choice on each (bench/switch -Os kept `__s_modsi3` because the
+/// multiply's alternative held its one slot).
+fn settled(
+    main: Selections,
+    alternatives: Selections,
+    request: &Request,
+) -> (Selections, Selections) {
+    use crate::driver::{BOTH, DIVIDE, EXTRA};
+    if !alternatives.iter().any(|(name, ..)| name.contains(EXTRA)) {
+        return (main, alternatives);
+    }
+    let held = SETTLED.with(|held| {
+        held.borrow()
+            .as_ref()
+            .filter(|(one, other, ..)| std::rc::Rc::ptr_eq(one, &main) && std::rc::Rc::ptr_eq(other, &alternatives))
+            .map(|(.., one, other)| (one.clone(), other.clone()))
+    });
+    if let Some(done) = held {
+        return done;
+    }
+    let extra = |name: &str, kind: &str| {
+        name.split_once(EXTRA).filter(|(_, rest)| *rest == kind).map(|(base, _)| base.to_owned())
+    };
+    let renamed = |kind: &str| -> Vec<_> {
+        alternatives
+            .iter()
+            .filter_map(|(name, source, scheduled)| {
+                extra(name, kind).map(|base| (base, source.clone(), scheduled.clone()))
+            })
+            .collect()
+    };
+    let divides = Selections::new(renamed(DIVIDE));
+    let mut both = renamed(BOTH);
+    // the multiply's choice is its own: the combined form is not priced by the
+    // regret rule
+    for (_, source, scheduled) in &mut both {
+        for form in [source, scheduled].into_iter().filter_map(|form| form.as_mut().ok()) {
+            form.wide_alternative = false;
+        }
+    }
+    let taken = decomposed_functions(&main, &divides, request);
+    let main_after: Vec<_> = main
+        .iter()
+        .map(|entry| match divides.iter().find(|(name, ..)| *name == entry.0).filter(|_| taken.contains(&entry.0)) {
+            Some(speed) => speed.clone(),
+            None => entry.clone(),
+        })
+        .collect();
+    let alternatives_after: Vec<_> = alternatives
+        .iter()
+        .filter(|(name, ..)| !name.contains(EXTRA))
+        .map(|entry| match both.iter().find(|(name, ..)| *name == entry.0).filter(|_| taken.contains(&entry.0)) {
+            Some(combined) => combined.clone(),
+            None => entry.clone(),
+        })
+        .collect();
+    let (one, other) = (Selections::new(main_after), Selections::new(alternatives_after));
+    SETTLED.with(|held| *held.borrow_mut() = Some((main.clone(), alternatives.clone(), one.clone(), other.clone())));
+    (one, other)
+}
+
 /// [`cached_selections`] and the alternatives of the functions that call
 /// `__mulsi3`.
 fn cached_both(
@@ -560,8 +636,9 @@ fn cached_with_copies(
             .find(|(text, was, ..)| text == ir && *was == key)
             .map(|(_, _, one, other, copies, _)| (one.clone(), other.clone(), *copies))
     });
-    if let Some(one) = held {
-        return Ok(one);
+    if let Some((one, other, copies)) = held {
+        let (one, other) = settled(one, other, request);
+        return Ok((one, other, copies));
     }
     SELECTION_RUNS.with(|runs| runs.set(runs.get() + 1));
     // the twin of a compile held (`Request::lsr_alternate`) keeps what that
@@ -604,6 +681,7 @@ fn cached_with_copies(
         held.insert(0, (ir.to_owned(), key, one.clone(), other.clone(), copies, digests));
         held.truncate(6);
     });
+    let (one, other) = settled(one, other, request);
     Ok((one, other, copies))
 }
 
