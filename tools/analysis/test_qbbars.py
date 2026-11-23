@@ -2,7 +2,7 @@
 import re, subprocess, tempfile, os
 src = open(os.path.join(os.path.dirname(__file__), 'qbbars.py')).read()
 ns = {'subprocess': subprocess}
-exec(re.search(r'def text\(o\):.*?\n(?=def one)', src, re.S).group(0), ns)
+exec(re.search(r'def sizes\(o,prefixes\):.*?\n(?=def one)', src, re.S).group(0), ns)
 
 def obj(code):
     d = tempfile.mkdtemp(); o = d + '/o.o'
@@ -44,3 +44,13 @@ def test_unset_pin_bin_is_a_message_not_a_home_path(tmp_path):
         assert r.returncode != 0 and 'PIN_BIN' in r.stderr and 'llvm-build' not in r.stderr, r.stderr
     for name in ('qbbars.py', 'pinfn32.sh', 'spillcensus.py'):
         assert not re.search('|'.join(['scr' + 'atch', '/ho' + 'me/', '/var/' + 'tmp', r'\$HO' + 'ME']), open(os.path.join(d, name)).read()), name
+
+
+def test_a_table_in_data_ranks_equal_to_one_in_rodata():
+    """Ours put jump tables in .data, gcc and clang in .rodata: `.text` alone ranked a module 462 B worse (exec.o m64) though the object was the same size."""
+    asm = lambda sec: f'.text\nf: ret\n.section {sec},"aw",@progbits\nt: .zero 64\n'
+    def build(sec):
+        d = tempfile.mkdtemp(); o = d + '/o.o'
+        subprocess.run(['gcc', '-c', '-x', 'assembler', '-', '-o', o], input=asm(sec), text=True, check=True); return o
+    a, b = build('.data'), build('.rodata')
+    assert ns['whole'](a) == ns['whole'](b) == ns['text'](a) + 64
