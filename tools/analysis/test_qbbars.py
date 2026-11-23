@@ -77,9 +77,9 @@ def test_every_bar_carries_the_shared_external_flags(tmp_path):
     (tree / 'src/core/a.c').write_text('int a(int x){return x*3+1;}')
     real = shutil.which('gcc')
     spy = f'#!/bin/sh\ncase " $* " in *" -c "*) echo "$0 $*" >> {log};; esac\n' + GCC.replace('exec gcc', f'exec {real}')
-    (tmp_path / 'bin').mkdir(); (tmp_path / 'bin/gcc').write_text(spy)
+    (tmp_path / 'bin').mkdir(); (tmp_path / 'bin/gcc-15').write_text(spy)
     (dist / 'llrm-cc').write_text(spy); (pin / 'clang').write_text(spy)
-    for p in (dist / 'llrm-cc', pin / 'clang', tmp_path / 'bin/gcc'): p.chmod(0o755)
+    for p in (dist / 'llrm-cc', pin / 'clang', tmp_path / 'bin/gcc-15'): p.chmod(0o755)
     want = {'m64': ['-fomit-frame-pointer', '-fno-stack-protector', '-fcf-protection=none', '-fno-stack-clash-protection', '-fPIE'],
             'm32': ['-fomit-frame-pointer', '-fno-stack-protector', '-fcf-protection=none', '-fno-pic', '-fno-pie', '-march=i486']}
     for arch, flags in want.items():

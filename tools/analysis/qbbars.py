@@ -6,10 +6,11 @@ A,L,D=sys.argv[1:4]; T=os.environ['QB_TREE']; b=os.environ.get('QB_SCRATCH',temp
 m,tgt=('-m64','x86_64-linux') if A=='m64' else ('-m32','x86_32-linux'); extra=['-isystem','/usr/include/x86_64-linux-gnu'] if A=='m32' else []
 PIN_BIN=os.environ.get('PIN_BIN') or sys.exit('qbbars: set PIN_BIN to the pin build bin directory (clang)')
 CLANG=os.path.join(PIN_BIN,'clang')
+GCC=os.environ.get('QB_GCC','gcc-15')  # the baselines' gcc (15.2); plain `gcc` is the distro's 13.4
 sys.path.insert(0,os.path.join(os.path.dirname(os.path.abspath(__file__)),'..'))
 from external_flags import flags as bar_flags  # the one flag set every external bar is built with
 def gcc_major():
-    try: return int(subprocess.run(['gcc','-dumpversion'],capture_output=True,text=True).stdout.split('.')[0])
+    try: return int(subprocess.run([GCC,'-dumpversion'],capture_output=True,text=True).stdout.split('.')[0])
     except (ValueError,OSError): return None
 RELOC=('-fPIE',) if A=='m64' else ('-fno-pic','-fno-pie')
 CPU=['-march=i486'] if A=='m32' else []  # ours is a 486 (no SSE); a bar left at the distro's i686 default builds SSE  # what ours emits at the target; every column gets the same
@@ -28,7 +29,7 @@ def one(f):
     t=tempfile.mkdtemp(dir=b)
     try:
         for v,cmd,env in (('ours',[f'{D}/llrm-cc',*CF,'-c',f,'-o',f'{t}/o.o'],dict(os.environ,LLRM_CC_TARGET=tgt,LLRM_LLC=f'{D}/llrm-llc')),
-                          ('gcc',['gcc',*GCC_CF,'-c',f,'-o',f'{t}/g.o'],os.environ),
+                          ('gcc',[GCC,*GCC_CF,'-c',f,'-o',f'{t}/g.o'],os.environ),
                           ('clang',[CLANG,*CF,'-c',f,'-o',f'{t}/c.o'],os.environ)):
             r=subprocess.run(cmd,cwd=T,env=env,capture_output=True)
             o=cmd[-1]
