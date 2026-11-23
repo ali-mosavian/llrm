@@ -64,11 +64,11 @@ fn the_compact_signed_word_divide_image_is_bounded() {
     assert!(image_bytes(&remainder) <= 98, "{remainder:?}: {} B", image_bytes(&remainder));
 }
 
-/// idiv_loop_os -Os linked the compact remainder (2.31M clocks against llvm-mos's
-/// 1.07M) because the share rule priced the speed routine's bytes against the
-/// module's, while the pin's own flow links 285 B for a signed 16-bit remainder
-/// and 174 B for an unsigned one (`[pin.division16]`, llvm-mos a40207a, linked
-/// image). Ours link 229 B and 169 B.
+/// idiv_loop_os -Os linked the compact remainder (2.31M clocks against
+/// llvm-mos's 1.07M) because the share rule priced the speed routine's bytes
+/// against the module's, while the pin's own flow links 285 B for a signed
+/// 16-bit remainder and 174 B for an unsigned one (`[pin.division16]`, llvm-mos
+/// a40207a, linked image). Ours link 229 B and 169 B.
 #[test]
 fn the_speed_remainders_link_no_more_than_the_pin_does_for_the_same_kind() {
     use llrm_6502::mulimage::{image_bytes, image_of_texts};
