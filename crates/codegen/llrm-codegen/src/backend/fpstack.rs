@@ -544,7 +544,7 @@ impl Fps<'_> {
             self.values.push(results[0]);
             self.vacate();
         } else if what.op == Operation::FloatStore && unnamed(&what) && what.dests.is_empty() && !operands.is_empty() {
-            self.handle_stack_values(&operands)?;
+            self.handle_stack_values(&operands, &step.live_after)?;
         } else if what.op == Operation::Compare && operands.len() == 2 && results.is_empty() {
             self.handle_compare_fp(step, operands[0], operands[1])?;
         } else if what.op == Operation::Compare
@@ -607,8 +607,15 @@ impl Fps<'_> {
     fn handle_stack_values(
         &mut self,
         values: &[u32],
+        live_after: &HashSet<u32>,
     ) -> Result<(), Raised> {
         let distinct: BTreeSet<u32> = values.iter().copied().collect();
+        // The block clears the stack (`handleCall`): a value read after it,
+        // still on the stack, would be dropped with the inputs and found
+        // missing at its next read.
+        if self.values.iter().any(|value| !distinct.contains(value) && live_after.contains(value)) {
+            return Err(unlowered("a floating value is live across a boundary"));
+        }
         self.adjust_live_regs(&distinct)?;
         let mut wanted = values.to_vec();
         for at in (1..wanted.len()).rev() {
