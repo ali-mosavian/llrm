@@ -58,7 +58,10 @@ fn an_os_dispatch_keeps_the_trees_partial_state() {
 #[test]
 fn a_dispatch_handler_ties_the_sum_to_pc_without_a_copy() {
     for level in ["-O1", "-O2", "-O3"] {
-        let count = assembly(level).lines().filter(|line| line.starts_with("    ") && !line.trim_start().starts_with(['d', '.'])).count();
+        let count = assembly(level)
+            .lines()
+            .filter(|line| line.starts_with("    ") && !line.trim_start().starts_with(['d', '.']))
+            .count();
         assert!(count <= 259, "{count} instructions at {level}: a handler copies pc");
     }
 }
