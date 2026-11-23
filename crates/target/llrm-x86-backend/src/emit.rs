@@ -840,6 +840,7 @@ fn based_areas(
 
 /// `X86::CondCode` order, the jump on each.
 const NE: usize = 5;
+
 const CONDITIONS: [&str; 16] =
     ["jo", "jno", "jb", "jae", "je", "jne", "jbe", "ja", "js", "jns", "jp", "jnp", "jl", "jge", "jle", "jg"];
 
@@ -3200,6 +3201,13 @@ impl Emitter<'_, '_> {
                 else {
                     return Err(EmitError::Unsupported(format!("{name}: an operand that is no register")));
                 };
+                // `UCOM_FpIr*` / `COM_FpIr*` (CMOV targets): `fucomi` / `fcomi`
+                // write the flags themselves: no status word, no `sahf`.
+                if name.contains("FpIr") {
+                    let flags = if name.starts_with("UCOM") { "fucomi" } else { "fcomi" };
+                    self.push(Operation::Compare, flags, Vec::new(), vec![Loc::Held(left), Loc::Held(right)]);
+                    return Ok(Some(()));
+                }
                 // A chained compare is a constrained one: the quiet one is
                 // `fucom`, which does not raise invalid on a quiet NaN, and the
                 // signaling one `fcom`. The plain compare is `fcom` as before.

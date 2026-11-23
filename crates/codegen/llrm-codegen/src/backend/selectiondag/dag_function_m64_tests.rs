@@ -739,7 +739,8 @@ entry:
     let module = llrm_mir::parse::module(text).expect("parses");
     let cpu = crate::backend::cpu::tuned_for(&llrm_x86_m64::M64, llrm_x86_m64::CPUS[0], false).expect("a cpu");
     let zero = selected(&module, "z", &llrm_x86_m64::M64, cpu, &[]).expect("a zero double is selected");
-    let names: Vec<_> = zero.body.insns().iter().filter_map(|i| i.what.as_ref()?.name.clone()).collect();
+    let names: Vec<_> =
+        zero.body.insns().iter().filter_map(|i| Some(i.what.as_ref()?.name.as_deref()?.to_string())).collect();
     assert!(names.iter().any(|n| &**n == "xorps"), "{names:?}");
     let cpu = crate::backend::cpu::tuned_for(&llrm_x86_m64::M64, llrm_x86_m64::CPUS[0], false).expect("a cpu");
     let select = selected(&module, "s", &llrm_x86_m64::M64, cpu, &[]).expect("a double select is selected");
@@ -1095,7 +1096,31 @@ entry:
     let module = llrm_mir::parse::module(text).expect("parses");
     let cpu = crate::backend::cpu::tuned_for(&llrm_x86_m64::M64, llrm_x86_m64::CPUS[0], false).expect("a cpu");
     let done = selected(&module, "f", &llrm_x86_m64::M64, cpu, &[]).expect("selected");
-    assert!(done.body.insns().iter().any(|i| i.what.as_ref().is_some_and(|w| w.name.as_deref() == Some("fcom"))));
+    let names: Vec<_> =
+        done.body.insns().iter().filter_map(|i| Some(i.what.as_ref()?.name.as_deref()?.to_string())).collect();
+    assert!(names.iter().any(|n| n == "fucomi"), "{names:?}");
+    assert!(!names.iter().any(|n| n == "fcom" || n == "sahf" || n.starts_with("fnstsw")), "{names:?}");
+}
+
+/// `a < b ? a : b` on `long double` at m64 read the status word (`fcom;
+/// fnstsw ax; sahf`) where the pin's `canUseCMOV` path sets the flags with
+/// `fucomi`.
+#[test]
+fn an_m64_long_double_min_compares_with_fucomi_not_the_status_word() {
+    let text = "target datalayout = \"e-p:64:64-i64:64-f80:128-n8:16:32:64\"
+define x86_fp80 @f(x86_fp80 %a, x86_fp80 %b) {
+entry:
+  %c = fcmp olt x86_fp80 %a, %b
+  %r = select i1 %c, x86_fp80 %a, x86_fp80 %b
+  ret x86_fp80 %r
+}
+";
+    let module = llrm_mir::parse::module(text).expect("parses");
+    let cpu = crate::backend::cpu::tuned_for(&llrm_x86_m64::M64, llrm_x86_m64::CPUS[0], false).expect("a cpu");
+    let done = selected(&module, "f", &llrm_x86_m64::M64, cpu, &[]).expect("selected");
+    let names: Vec<_> =
+        done.body.insns().iter().filter_map(|i| Some(i.what.as_ref()?.name.as_deref()?.to_string())).collect();
+    assert!(!names.iter().any(|n| n == "fcom" || n == "sahf" || n.starts_with("fnstsw")), "{names:?}");
 }
 
 /// A `long double` converted to `u64` at m64 was
@@ -1450,9 +1475,11 @@ entry:
     assert!(!names.iter().any(|n| &**n == "add"), "x*5 is shared, +15 folds into the sum's lea: {names:?}");
 }
 
-/// The carry out of a 128-bit unsigned add was the constant false: the combiner's "cannot overflow" test summed the two
-/// operands' possible maxima in a `u128`, which wraps at 128 bits and read as "fits". `llvm.uadd.with.overflow.i128`
-/// compiled to `add; adc` and `xor eax, eax` (u128 max + 1 reported no overflow).
+/// The carry out of a 128-bit unsigned add was the constant false: the
+/// combiner's "cannot overflow" test summed the two operands' possible maxima
+/// in a `u128`, which wraps at 128 bits and read as "fits".
+/// `llvm.uadd.with.overflow.i128` compiled to `add; adc` and `xor eax, eax`
+/// (u128 max + 1 reported no overflow).
 #[test]
 fn an_m64_128_bit_unsigned_add_keeps_its_carry_out() {
     let text = "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"
@@ -1491,10 +1518,12 @@ entry:
     assert!(names.iter().all(|n| n != "ucomiss" && !n.starts_with('j')), "{names:?}");
 }
 
-/// A signed saturating subtract compared `x - y` through a second `sub` that kept its difference (and a `test` of
-/// it), beside the `sub` whose overflow selects: `mov rax, rdi; sub rax, rsi; setns cl; ..; sub rdi, rsi; cmovno`
-/// where the pin has `cmp rdi, rsi; setns cl; ..; sub; cmovno` (sat_builtins m64 -O1 +28 B). `EmitTest` takes
-/// `SSUBO`'s flags as an `X86ISD::SUB`'s, whose unread difference the peephole makes a `cmp`.
+/// A signed saturating subtract compared `x - y` through a second `sub` that
+/// kept its difference (and a `test` of it), beside the `sub` whose overflow
+/// selects: `mov rax, rdi; sub rax, rsi; setns cl; ..; sub rdi, rsi; cmovno`
+/// where the pin has `cmp rdi, rsi; setns cl; ..; sub; cmovno` (sat_builtins
+/// m64 -O1 +28 B). `EmitTest` takes `SSUBO`'s flags as an `X86ISD::SUB`'s,
+/// whose unread difference the peephole makes a `cmp`.
 #[test]
 fn an_m64_signed_saturating_subtract_compares_with_a_cmp_beside_its_one_sub() {
     let text = "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"
@@ -1514,7 +1543,8 @@ define i64 @f(i64 %a, i64 %b) {
     assert_eq!((count("sub"), count("cmp"), count("test")), (1, 1, 0), "{names:?}");
 }
 
-/// The unsigned form: the borrow and the zero difference are read from one `cmp`, not a `sub` that keeps its difference.
+/// The unsigned form: the borrow and the zero difference are read from one
+/// `cmp`, not a `sub` that keeps its difference.
 #[test]
 fn an_m64_unsigned_subtract_with_borrow_and_zero_test_is_one_cmp() {
     let text = "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"
@@ -1541,8 +1571,10 @@ define i64 @f(i64 %a, i64 %b) {
     assert_eq!((count("sub"), count("cmp"), count("test")), (0, 1, 0), "{names:?}");
 }
 
-/// `ctlz(x)` with a defined zero took `bsr; cmove; xor` at m64: `hasBitScanPassThrough` (is64Bit) lets the `bsr`
-/// keep its destination when `x` is zero, so a constant preloaded there is the answer (bitcount_u32 -O1, +7 B).
+/// `ctlz(x)` with a defined zero took `bsr; cmove; xor` at m64:
+/// `hasBitScanPassThrough` (is64Bit) lets the `bsr` keep its destination when
+/// `x` is zero, so a constant preloaded there is the answer (bitcount_u32 -O1,
+/// +7 B).
 #[test]
 fn an_m64_ctlz_with_a_defined_zero_is_a_bsr_with_no_cmov() {
     let names = m64_names(
@@ -1559,7 +1591,8 @@ declare i32 @llvm.ctlz.i32(i32, i1)
     assert!(names.iter().all(|n| !n.starts_with("cmov")), "{names:?}");
 }
 
-/// The same for `cttz(x)`: `bsf` passes its destination through, so no compare and no `cmove` (bitcount_u32 -O1).
+/// The same for `cttz(x)`: `bsf` passes its destination through, so no compare
+/// and no `cmove` (bitcount_u32 -O1).
 #[test]
 fn an_m64_cttz_with_a_defined_zero_is_a_bsf_with_no_cmov() {
     let names = m64_names(
@@ -1576,8 +1609,9 @@ declare i32 @llvm.cttz.i32(i32, i1)
     assert!(names.iter().all(|n| !n.starts_with("cmov")), "{names:?}");
 }
 
-/// `xor (zext i32 a), (zext i32 b)` stayed two zero-extending loads and a 64-bit `xor` of registers: the pin's
-/// `hoistLogicOpWithSameOpcodeHands` makes it `zext (xor a, b)`, a 32-bit `xor` with a memory operand
+/// `xor (zext i32 a), (zext i32 b)` stayed two zero-extending loads and a
+/// 64-bit `xor` of registers: the pin's `hoistLogicOpWithSameOpcodeHands` makes
+/// it `zext (xor a, b)`, a 32-bit `xor` with a memory operand
 /// (merge_icmps_fields `same` m64 -O1, 22 B against the pin's 19).
 #[test]
 fn an_xor_of_two_zero_extended_words_is_a_word_xor_at_m64() {
@@ -1662,10 +1696,10 @@ define void @sext_v3(ptr %p, ptr %q) {
     }
 }
 
-/// A `<2 x i8>` phi (SLP's, QB `them_set`) had no register type: `getVectorTypeBreakdown` was only the halving, missing the
-/// pin's first step (`TypeWidenVector` to the legal `<16 x i8>`), so every
-/// narrow vector live across a block was refused "vector with no register
-/// class".
+/// A `<2 x i8>` phi (SLP's, QB `them_set`) had no register type:
+/// `getVectorTypeBreakdown` was only the halving, missing the pin's first step
+/// (`TypeWidenVector` to the legal `<16 x i8>`), so every narrow vector live
+/// across a block was refused "vector with no register class".
 #[test]
 fn an_m64_narrow_vector_live_across_blocks_is_carried_in_a_register() {
     let text = "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"
@@ -1696,20 +1730,28 @@ join:
 /// half to multiply.
 #[test]
 fn an_m64_v2i64_multiply_is_pmuludq() {
-    let layout = "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"\n";
+    let layout =
+        "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"\n";
     let pmuludq = |body: &str| -> usize {
-        let text = format!("{layout}define void @f(ptr %p, ptr %q) {{\n{body}  store <2 x i64> %r, ptr %p, align 16\n  ret void\n}}\n");
+        let text = format!(
+            "{layout}define void @f(ptr %p, ptr %q) {{\n{body}  store <2 x i64> %r, ptr %p, align 16\n  ret void\n}}\n"
+        );
         let module = llrm_mir::parse::module(&text).expect("parses");
         let cpu = crate::backend::cpu::tuned_for(&llrm_x86_m64::M64, llrm_x86_m64::CPUS[0], false).expect("a cpu");
         let done = selected(&module, "f", &llrm_x86_m64::M64, cpu, &[]).expect("selected");
-        done.body.insns().iter().filter(|i| i.what.as_ref().is_some_and(|w| w.name.as_deref() == Some("pmuludq"))).count()
+        done.body
+            .insns()
+            .iter()
+            .filter(|i| i.what.as_ref().is_some_and(|w| w.name.as_deref() == Some("pmuludq")))
+            .count()
     };
     let load = "  %a = load <2 x i64>, ptr %p, align 16\n  %b = load <2 x i64>, ptr %q, align 16\n";
     assert_eq!(pmuludq(&format!("{load}  %r = mul <2 x i64> %a, %b\n")), 3);
     let by_constant = "  %a = load <2 x i64>, ptr %p, align 16\n  %r = mul <2 x i64> %a, <i64 1000003, i64 1000003>\n";
     assert_eq!(pmuludq(by_constant), 2);
-    // A factor of `(y & 15) + 1` has no high half either: `computeKnownBits` of a vector `add` (scroll's
-    // weighted sum kept all three, 10 instructions a lane).
+    // A factor of `(y & 15) + 1` has no high half either: `computeKnownBits` of
+    // a vector `add` (scroll's weighted sum kept all three, 10 instructions
+    // a lane).
     let by_small = format!(
         "{load}  %m = and <2 x i64> %b, <i64 15, i64 15>\n  %s = add <2 x i64> %m, <i64 1, i64 1>\n  \
          %r = mul <2 x i64> %a, %s\n"
@@ -1717,12 +1759,14 @@ fn an_m64_v2i64_multiply_is_pmuludq() {
     assert_eq!(pmuludq(&by_small), 2);
 }
 
-/// A product of two `i16` values widened to `i64` (`(long)a[i] * b[i]`, dot's loop) took eight `pmuludq`
-/// ladders for `<8 x i64>`; gcc's `vect_recog_widen_mult_pattern` and the pin's `reduceVMULWidth` (for `i32`) do
-/// it with `pmullw` and `pmulhw` and unpack the halves.
+/// A product of two `i16` values widened to `i64` (`(long)a[i] * b[i]`, dot's
+/// loop) took eight `pmuludq` ladders for `<8 x i64>`; gcc's
+/// `vect_recog_widen_mult_pattern` and the pin's `reduceVMULWidth` (for `i32`)
+/// do it with `pmullw` and `pmulhw` and unpack the halves.
 #[test]
 fn an_m64_vector_multiply_of_shorts_is_pmullw_and_pmulhw() {
-    let layout = "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"\n";
+    let layout =
+        "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"\n";
     let count = |wide: &str, store: &str| -> (usize, usize, usize) {
         let text = format!(
             "{layout}define void @f(ptr %p, ptr %q, ptr %r) {{\n  %a = load <8 x i16>, ptr %p, align 16\n  \
@@ -1743,11 +1787,13 @@ fn an_m64_vector_multiply_of_shorts_is_pmullw_and_pmulhw() {
     assert_eq!(count("i32", "16"), (0, 1, 1), "i32");
 }
 
-/// A splat of a scalar `i16` into `<8 x i16>` (`insertelement` and a zero-mask shuffle, matmul's `a[i][k]`) was
-/// eight word stores and a reload; `LowerBUILD_VECTOR` makes it `movd`, `pshuflw` and `pshufd`.
+/// A splat of a scalar `i16` into `<8 x i16>` (`insertelement` and a zero-mask
+/// shuffle, matmul's `a[i][k]`) was eight word stores and a reload;
+/// `LowerBUILD_VECTOR` makes it `movd`, `pshuflw` and `pshufd`.
 #[test]
 fn an_m64_v8i16_splat_is_pshuflw_and_pshufd() {
-    let layout = "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"\n";
+    let layout =
+        "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"\n";
     let text = format!(
         "{layout}define void @f(ptr %p, i16 %x) {{\n  %i = insertelement <8 x i16> poison, i16 %x, i64 0\n  \
          %s = shufflevector <8 x i16> %i, <8 x i16> poison, <8 x i32> zeroinitializer\n  \
@@ -1763,11 +1809,13 @@ fn an_m64_v8i16_splat_is_pshuflw_and_pshufd() {
     assert!(named("mov") <= 1, "word stores of the splat: {}", named("mov"));
 }
 
-/// A constant 4000-byte `memcpy` at -O2 was a call (gcc's table: 257..8192 bytes is `rep movsq`, and `perf`
-/// counts it as one instruction against the library's 190: scroll O2 +163 instructions a round).
+/// A constant 4000-byte `memcpy` at -O2 was a call (gcc's table: 257..8192
+/// bytes is `rep movsq`, and `perf` counts it as one instruction against the
+/// library's 190: scroll O2 +163 instructions a round).
 #[test]
 fn an_m64_constant_memcpy_up_to_8192_bytes_is_rep_movsq_at_o2() {
-    let layout = "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"\n";
+    let layout =
+        "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"\n";
     let names = |bytes: u32| -> Vec<String> {
         let text = format!(
             "{layout}declare void @llvm.memcpy.p0.p0.i64(ptr, ptr, i64, i1)\n\
@@ -1776,7 +1824,8 @@ fn an_m64_constant_memcpy_up_to_8192_bytes_is_rep_movsq_at_o2() {
         );
         let module = llrm_mir::parse::module(&text).expect("parses");
         let cpu = crate::backend::cpu::tuned_for(&llrm_x86_m64::M64, llrm_x86_m64::CPUS[0], false).expect("a cpu");
-        let done = selected(&module, "f", &llrm_x86_m64::M64, cpu, &[("memcpy".to_string(), 0, "memcpy".to_string())]).expect("selected");
+        let done = selected(&module, "f", &llrm_x86_m64::M64, cpu, &[("memcpy".to_string(), 0, "memcpy".to_string())])
+            .expect("selected");
         let insns = done.body.insns();
         insns.iter().filter_map(|i| i.what.as_ref().and_then(|w| w.name.as_deref()).map(str::to_string)).collect()
     };
