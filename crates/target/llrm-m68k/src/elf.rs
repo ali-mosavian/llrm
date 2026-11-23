@@ -25,7 +25,7 @@ use llrm_support::hash::HashMap;
 
 use crate::compile::Item;
 use crate::encode::encode;
-use crate::object::relaxed;
+use crate::object::{relax_step, relaxed_long};
 
 const R_68K_32: u32 = 1;
 const R_68K_16: u32 = 2;
@@ -136,13 +136,27 @@ pub fn object_with(
     exports: &HashMap<String, Export>,
     variables: &[Variable],
 ) -> Result<Object, String> {
+    object_with_branches(name, items, exports, variables, false)
+}
+
+/// [`object_with`] where `long_branches` (68020 and later) lets a 16-bit branch
+/// whose displacement needs more take its 32-bit form
+/// (`M68kAsmBackend::getRelaxedOpcodeBranch`, 16 -> 32).
+pub fn object_with_branches(
+    name: &str,
+    items: &[Item],
+    exports: &HashMap<String, Export>,
+    variables: &[Variable],
+    long_branches: bool,
+) -> Result<Object, String> {
     let mut items = crate::object::tail_jumps_narrowed(items);
     loop {
-        match place(name, &items, exports, variables)? {
+        match place(name, &items, exports, variables, long_branches)? {
             Placed::Wide(wide) => {
                 for at in wide {
                     let Item::Inst(inst) = &mut items[at] else { continue };
-                    inst.opcode = relaxed(inst.opcode).ok_or_else(|| format!("{} cannot be relaxed", inst.opcode))?;
+                    inst.opcode =
+                        relax_step(inst.opcode, long_branches).ok_or_else(|| format!("{} cannot be relaxed", inst.opcode))?;
                 }
             }
             Placed::Done(object) => return Ok(object),
@@ -160,6 +174,7 @@ fn place(
     items: &[Item],
     exports: &HashMap<String, Export>,
     variables: &[Variable],
+    long_branches: bool,
 ) -> Result<Placed, String> {
     let mut code = Vec::new();
     let mut labels: Vec<(&str, usize)> = Vec::new();
@@ -204,6 +219,16 @@ fn place(
             {
                 wide.push(*index);
             }
+        }
+        // a 16-bit branch past +-32 KiB
+        if long_branches
+            && let Item::Inst(inst) = &items[*index]
+            && relaxed_long(inst.opcode).is_some()
+            && fixups.iter().filter(|one| one.size == 2).any(|fixup| {
+                resolved(*start, fixup).is_some_and(|value| i16::try_from(value).is_err())
+            })
+        {
+            wide.push(*index);
         }
     }
     if !wide.is_empty() {
@@ -349,6 +374,17 @@ pub fn relocatable(
     items: &[Item],
 ) -> Result<Vec<u8>, String> {
     write(&object(name, items)?).map_err(|error| error.0)
+}
+
+/// [`object_with_branches`] as ELF bytes.
+pub fn relocatable_with_branches(
+    name: &str,
+    items: &[Item],
+    exports: &HashMap<String, Export>,
+    variables: &[Variable],
+    long_branches: bool,
+) -> Result<Vec<u8>, String> {
+    write(&object_with_branches(name, items, exports, variables, long_branches)?).map_err(|error| error.0)
 }
 
 /// [`relocatable`] with the module's globals; see [`object_with`].

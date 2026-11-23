@@ -751,7 +751,7 @@ pub fn object_flagged(
         &|name| crate::data::symbol(name),
         Some(&llrm_codegen::backend::blockaddress::symbol),
     )?)?;
-    crate::elf::relocatable_with(name, &items, &exports, &variables)
+    crate::elf::relocatable_with_branches(name, &items, &exports, &variables, cpu.at_least(Cpu::M68020))
 }
 
 /// The compare routines of the platform's C library, by their IR names:
