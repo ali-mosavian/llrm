@@ -254,6 +254,9 @@ pub fn optimized_folded(
     folded: bool,
 ) -> Result<LirBody, masm::Unprintable> {
     let size = cpu.size;
+    // DEVIATE TL5 (`latetaildup::UNFACTOR_AT_SIZE`): placement copies a
+    // computed goto above -Os only.
+    let goto_copies = !size || crate::backend::latetaildup::UNFACTOR_AT_SIZE;
     // `BranchFolder` ahead of placement: in the order the blocks were made,
     // where a block falling into the common successor takes any tail.
     let hoisted = _hoisted(body);
@@ -275,6 +278,7 @@ pub fn optimized_folded(
         cpu.loop_top_clocks(),
         epilogue,
         cpu.operations.ext_tsp_for_size.then_some(cpu.operations.ext_tsp_by_frequency),
+        goto_copies,
     )?);
     // Tail duplication before the merge, as LLVM places with it: after, the
     // merge would give back what the copy gained.
@@ -297,6 +301,7 @@ pub fn optimized_folded(
             cpu.loop_top_clocks(),
             epilogue,
             cpu.operations.ext_tsp_for_size.then_some(cpu.operations.ext_tsp_by_frequency),
+            goto_copies,
         )?);
     }
     let done = aligned(&inverted(&placed, size), cpu);
@@ -592,7 +597,7 @@ fn _placed(
     hot: Option<placement::HotTailDup>,
     epilogue: usize,
 ) -> Result<LirBody, masm::Unprintable> {
-    _placed_ext(body, size, aggressive, tail_dup, hot, None, epilogue, None)
+    _placed_ext(body, size, aggressive, tail_dup, hot, None, epilogue, None, true)
 }
 
 /// `_placed`, with the size order of `-apply-ext-tsp-for-size` where
@@ -606,12 +611,13 @@ fn _placed_ext(
     top: Option<placement::TopClocks>,
     epilogue: usize,
     ext_tsp: Option<bool>,
+    goto_copies: bool,
 ) -> Result<LirBody, masm::Unprintable> {
     let explicit = _explicit(body)?;
     if body.source_order {
         return Ok(body.with_blocks(explicit));
     }
-    Ok(placed_explicit(body, explicit, size, aggressive, tail_dup, hot, top, epilogue, ext_tsp))
+    Ok(placed_explicit(body, explicit, size, aggressive, tail_dup, hot, top, epilogue, ext_tsp, goto_copies))
 }
 
 /// `_placed_ext` for blocks whose fall-throughs are already jumps: a target
@@ -627,11 +633,24 @@ pub fn placed_explicit(
     top: Option<placement::TopClocks>,
     epilogue: usize,
     ext_tsp: Option<bool>,
+    goto_copies: bool,
 ) -> LirBody {
     let natural = loopy::loops(&explicit, Some(body.entry));
     let busy = Frequency::of(body);
     let (blocks, odds) = placement::order(
-        &explicit, body.entry, &body.odds, &busy, &natural, size, aggressive, tail_dup, hot, top, epilogue, ext_tsp,
+        &explicit,
+        body.entry,
+        &body.odds,
+        &busy,
+        &natural,
+        size,
+        aggressive,
+        tail_dup,
+        hot,
+        top,
+        epilogue,
+        ext_tsp,
+        goto_copies.then(|| body.address_symbols.keys().copied().collect()),
     );
     _reachable(&LirBody { odds, ..body.clone() }, blocks)
 }
