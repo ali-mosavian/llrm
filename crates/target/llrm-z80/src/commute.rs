@@ -116,6 +116,37 @@ pub fn commute_to_the_dying_source(function: &mut MFunction) {
         )
     };
     let live_out = live_out(function, &dead);
+    // the virtual registers one value is held in: a copy of a register defined
+    // once is that register, so a value read again through the register it
+    // was copied from is still read again (#10681 left x's later reads on the
+    // register it arrived in, and the copy made for this add looked dead)
+    let mut same_value: HashMap<u32, Vec<u32>> = HashMap::default();
+    let mut parent: Vec<u32> = (0..function.classes.len() as u32).collect();
+    fn root(
+        parent: &mut [u32],
+        mut v: u32,
+    ) -> u32 {
+        while parent[v as usize] != v {
+            parent[v as usize] = parent[parent[v as usize] as usize];
+            v = parent[v as usize];
+        }
+        v
+    }
+    for inst in function.blocks.iter().flat_map(|block| &block.insts) {
+        if let (Kind::Copy, [Operand::Def(Reg::Virt(d)), Operand::Use(Reg::Virt(s))]) = (inst.kind, &inst.operands[..])
+            && defs.get(d) == Some(&1)
+            && defs.get(s).is_none_or(|&n| n == 1)
+        {
+            let (a, b) = (root(&mut parent, *d), root(&mut parent, *s));
+            parent[a as usize] = b;
+        }
+    }
+    for v in 0..function.classes.len() as u32 {
+        let r = root(&mut parent, v);
+        same_value.entry(r).or_default().push(v);
+    }
+    let same_value: HashMap<u32, Vec<u32>> =
+        (0..function.classes.len() as u32).map(|v| (v, same_value[&root(&mut parent, v)].clone())).collect();
     let reads_in = |insts: &[llrm_spike_mf::Inst], v: u32| {
         insts
             .iter()
@@ -171,7 +202,8 @@ pub fn commute_to_the_dying_source(function: &mut MFunction) {
                 .find(|i| i.operands.iter().any(|o| matches!(o, Operand::Def(Reg::Virt(w)) if *w == dying)))
                 .is_some_and(|i| i.kind != Kind::Copy);
             let dies = made_here && reads.get(&dying) == Some(&1) && defs.get(&dying) == Some(&1);
-            let after = reads_in(&block.insts[at + 1..], kept) > 0 || bit(&live_out[b], kept);
+            let after =
+                same_value[&kept].iter().any(|&v| reads_in(&block.insts[at + 1..], v) > 0 || bit(&live_out[b], v));
             // a call after it takes every register: the first source is in the
             // frame by then, and the copy is wasted
             let across_call = block.insts[at + 1..].iter().any(|i| i.call);
