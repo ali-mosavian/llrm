@@ -998,7 +998,9 @@ pub fn merged_in(
         touched: IndexMap::default(),
         rename: IndexMap::default(),
         next: body.blocks.iter().map(|block| block.at).max().unwrap_or(0) + 1,
-        minimum: if size { 2 } else { 3 },
+        // The pass of its own takes `TailMergeSize` (3) at every level; the one in
+        // `MachineBlockPlacement` takes `TailDupSize + 1`, 2 at `-Os` (T7).
+        minimum: if size && after_placement { 2 } else { 3 },
         size,
         after_placement,
         faithful,

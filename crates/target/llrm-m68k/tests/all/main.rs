@@ -113,6 +113,7 @@ mod encode_range;
 mod ext_load_pc;
 mod ext_of_shared_load;
 mod extb;
+mod extension_source_class;
 mod extract_subreg_data;
 mod far_index_store;
 mod fib_registers;
