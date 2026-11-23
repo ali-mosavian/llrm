@@ -20,10 +20,12 @@ import tempfile
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 from external_flags import flags as external_flags  # noqa: E402
 
+# The bar compiler: baselines name gcc-15 (15.2); plain `gcc` is the distro's 13.4, which does not inline what 15 does (QB arrays.bas ran 2.6x the cycles).
+GCC = os.environ.get("QB_GCC", "gcc-15")
 MULTIARCH = ("-isystem", "/usr/include/x86_64-linux-gnu")
 
 
-def gcc_major(gcc="gcc"):
+def gcc_major(gcc=GCC):
     try:
         return int(subprocess.run([gcc, "-dumpversion"], capture_output=True, text=True).stdout.split(".")[0])
     except (ValueError, OSError):
@@ -44,12 +46,12 @@ def refuse_cc(message):
 def cc(argv, env=os.environ):
     arch, variant, dist, pin = env["QBA"], env["QBV"], env["QBDIST"], env.get("PIN_BIN", "")
     if "-c" not in argv:
-        return subprocess.call(["gcc", f"-{arch}", "-no-pie", *argv, "-latomic"])
+        return subprocess.call([GCC, f"-{arch}", "-no-pie", *argv, "-latomic"])
     if variant == "gcc":
         args = ["-std=c2x" if one == "-std=c23" else one for one in argv]
         # gcc -m32 -std=c2x rejects pfpu.c's `constexpr` doubles under x87 excess precision: the same flag the old column used.
         fast = ["-fexcess-precision=fast"] if arch == "m32" else []
-        return subprocess.call(["gcc", *args, *bar_flags(arch, gcc_major()), *fast, "-D__cdecl="])
+        return subprocess.call([GCC, *args, *bar_flags(arch, gcc_major()), *fast, "-D__cdecl="])
     if variant == "clang":
         return subprocess.call([os.path.join(pin, "clang"), *argv, *bar_flags(arch)])
     drop, kept = False, []

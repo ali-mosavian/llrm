@@ -15,10 +15,10 @@ def rig(tmp_path, refuse=False):
     for one in (dist, pin, bindir):
         one.mkdir()
     spy = f'#!/bin/sh\ncase " $* " in *" -c "*) echo "$0 $*" >> {log};; esac\nexit 0\n'
-    (bindir / "gcc").write_text(f'#!/bin/sh\ncase " $* " in *" -c "*) echo "$0 $*" >> {log};; esac\ncase "$1" in -dumpversion) exec {REAL_GCC} "$@";; esac\nexit 0\n')
+    (bindir / "gcc-15").write_text(f'#!/bin/sh\ncase " $* " in *" -c "*) echo "$0 $*" >> {log};; esac\ncase "$1" in -dumpversion) exec {REAL_GCC} "$@";; esac\nexit 0\n')
     (pin / "clang").write_text(spy)
     (dist / "llrm-cc").write_text(spy.replace("exit 0", "echo refused >&2; exit 1") if refuse else spy)
-    for one in (bindir / "gcc", pin / "clang", dist / "llrm-cc"):
+    for one in (bindir / "gcc-15", pin / "clang", dist / "llrm-cc"):
         one.chmod(0o755)
     env = dict(os.environ, QBDIST=str(dist), PIN_BIN=str(pin), PATH=f"{bindir}:" + os.environ["PATH"])
     return env, log
@@ -50,7 +50,7 @@ def test_a_refused_module_fails_and_is_not_compiled_by_gcc(tmp_path):
     env, log = rig(tmp_path, refuse=True)
     run = compile_line(env, "m64", "ours")
     assert run.returncode != 0 and "refused" in run.stderr, run.stderr
-    assert "bin/gcc" not in log.read_text(), "gcc compiled the refused module"
+    assert "bin/gcc-15" not in log.read_text(), "gcc compiled the refused module"
 
 
 def test_gcc_at_m32_takes_fast_excess_precision(tmp_path):
@@ -58,3 +58,12 @@ def test_gcc_at_m32_takes_fast_excess_precision(tmp_path):
     env, log = rig(tmp_path)
     assert compile_line(env, "m32", "gcc").returncode == 0
     assert "-fexcess-precision=fast" in log.read_text().split()
+
+
+def test_the_gcc_bar_is_gcc_15_not_the_distro_gcc(tmp_path):
+    """`gcc` is the distro's 13.4 here: it left hot helpers out of line and read 2.6x the cycles of ours at m32 Os (arrays.bas)."""
+    env, log = rig(tmp_path)
+    (tmp_path / "bin/gcc").write_text(f'#!/bin/sh\necho "$0 distro" >> {log}\n')
+    (tmp_path / "bin/gcc").chmod(0o755)
+    assert compile_line(env, "m64", "gcc").returncode == 0
+    assert "bin/gcc-15" in log.read_text() and "distro" not in log.read_text()
