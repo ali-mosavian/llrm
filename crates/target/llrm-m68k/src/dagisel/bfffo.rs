@@ -158,6 +158,6 @@ pub fn select(
     }
     let value = Dag::operand(adapter, node, 0);
     let vt = adapter.value_type(SDValue { node, res: 0 });
-    adapter.morph_node_to(node, FIRST, &[vt], &[value]);
+    super::local::morph(adapter, node, FIRST, &[vt], &[value]);
     Some(Outcome::Selected)
 }

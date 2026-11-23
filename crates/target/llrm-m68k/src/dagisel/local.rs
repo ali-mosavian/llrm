@@ -4,7 +4,10 @@
 //! `pea` push of [`super::pea`], which only [`crate::callpush`] makes, and the
 //! `cmpa.l` compares of [`super::cmpa`].
 
+use llrm_codegen::backend::selectiondag::dagisel_adapter::DagisAdapter;
+use llrm_dagisel::dag::{Dag, SDValue};
 use llrm_dagisel::instr::InstrDesc;
+use llrm_dagisel::matcher::Vt;
 
 use super::asm::{AsmOperand, asm};
 use super::enc::{Piece, encoding};
@@ -127,4 +130,21 @@ mod tests {
     fn instrinfo_desc(name: &str) -> &'static InstrDesc {
         super::super::generated::instrinfo::desc(super::super::opcodes::code_of(name).unwrap()).unwrap()
     }
+}
+
+/// `MorphNodeTo` of `node`, and `ReplaceUses` when an equal node existed: a node whose machine form is already in the
+/// DAG is replaced by it (what the pin's matcher does after `MorphNodeTo`). A selector that leaves `node` where it is
+/// leaves its users reading an unselected node ("operand AnyExtend before its definition").
+pub fn morph(
+    adapter: &mut DagisAdapter<'_>,
+    node: u32,
+    opcode: u16,
+    vts: &[Vt],
+    operands: &[SDValue],
+) -> u32 {
+    let (morphed, _) = adapter.morph_node_to(node, opcode, vts, operands);
+    if morphed != node {
+        adapter.replace_node(node, morphed);
+    }
+    morphed
 }

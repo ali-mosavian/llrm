@@ -34,9 +34,6 @@ pub fn immediate_bit_numbers(dag: &mut SelectionDAG) {
         let operands: Vec<_> = (0..adapter.num_operands(node)).map(|index| adapter.operand(node, index)).collect();
         let vts: Vec<_> =
             (0..adapter.num_values(node)).map(|res| adapter.value_type(SDValue { node, res: res as u8 })).collect();
-        let (morphed, _) = adapter.morph_node_to(node, BTST32di, &vts, &operands);
-        if morphed != node {
-            adapter.replace_node(node, morphed);
-        }
+        super::local::morph(&mut adapter, node, BTST32di, &vts, &operands);
     }
 }
