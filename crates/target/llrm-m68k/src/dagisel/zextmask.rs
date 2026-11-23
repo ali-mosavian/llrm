@@ -59,6 +59,6 @@ pub fn select(
     let vt = adapter.value_type(SDValue { node, res: 0 });
     let wide = adapter.machine_node(COPY, &[vt], &[value]);
     let immediate = adapter.target_constant(mask as i64, vt);
-    adapter.morph_node_to(node, and, &[vt], &[SDValue { node: wide, res: 0 }, immediate]);
+    super::local::morph(adapter, node, and, &[vt], &[SDValue { node: wide, res: 0 }, immediate]);
     Some(Outcome::Selected)
 }

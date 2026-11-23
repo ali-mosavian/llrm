@@ -346,10 +346,7 @@ fn narrow_node(
     }
     let vts: Vec<_> =
         (0..adapter.num_values(node)).map(|res| adapter.value_type(SDValue { node, res: res as u8 })).collect();
-    let (morphed, _) = adapter.morph_node_to(node, FIRST + target as u16, &vts, &operands);
-    if morphed != node {
-        adapter.replace_node(node, morphed);
-    }
+    super::local::morph(adapter, node, FIRST + target as u16, &vts, &operands);
 }
 
 /// `ADDQ32di` for `SUBQ32di` and back.
