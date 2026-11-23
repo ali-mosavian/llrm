@@ -512,6 +512,12 @@ pub struct SelectionDAG {
     /// The IR instruction each `IROrder` was made for, in order: what a
     /// debug record's `before` names.
     pub inst_order: Vec<(llrm_mir::module::InstId, u32)>,
+    /// What the middle end proves of the dividend of each divide node
+    /// (`BuilderTarget::dividend_ranges`), by node.
+    pub dividend_ranges: llrm_support::hash::HashMap<u32, super::builder::DividendRange>,
+    /// The range of the divide whose libcall is being made: what the target's
+    /// `make_lib_call` reads of it.
+    pub libcall_dividend: Option<super::builder::DividendRange>,
 
     /// The (low, high) halves type legalization expanded each integer value
     /// into (`ExpandedIntegers`): where a debug record's value went.
@@ -654,6 +660,8 @@ impl SelectionDAG {
             live_in_phys: Default::default(),
             lines: Vec::new(),
             inst_order: Vec::new(),
+            dividend_ranges: Default::default(),
+            libcall_dividend: None,
             expanded_integers: Default::default(),
             forwarded: Default::default(),
             replacements: Vec::new(),
