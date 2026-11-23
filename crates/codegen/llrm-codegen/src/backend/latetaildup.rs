@@ -264,6 +264,44 @@ pub fn duplicated_with(
         }
         place += 1;
     }
+    unfactored(body, size, computed_at_size, epilogue)
+}
+
+/// A computed goto's tail copied into a block makes that block one, small
+/// enough to be copied in turn, but a block before it in the order has been
+/// passed: where merged tails nest (a tail inside a tail inside the dispatch),
+/// the pass leaves a shared copy at each level. The blocks that end in a
+/// computed goto are visited again until none changes.
+fn unfactored(
+    mut body: LirBody,
+    size: bool,
+    computed_at_size: bool,
+    epilogue: usize,
+) -> LirBody {
+    let mut graph = Preds::of(&body);
+    // Each round removes a block or copies into one: bounded by the blocks.
+    for _ in 0..body.blocks.len() {
+        let mut changed = false;
+        let mut place = 1;
+        while place < body.blocks.len() {
+            let at = body.blocks[place].at;
+            if computed_goto(&body, &body.blocks[place])
+                && copied(&body, &body.blocks[place], size, computed_at_size, epilogue).is_some()
+                && let Some(made) = tail_duplicate(&graph, &body, place, size, computed_at_size, epilogue)
+            {
+                body = made;
+                graph = Preds::of(&body);
+                changed = true;
+                if body.blocks.get(place).is_none_or(|block| block.at != at) {
+                    continue;
+                }
+            }
+            place += 1;
+        }
+        if !changed {
+            break;
+        }
+    }
     body
 }
 
