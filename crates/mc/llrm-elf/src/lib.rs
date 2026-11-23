@@ -159,6 +159,7 @@ fn spelling<M: Machine>(section: &Section) -> Result<(&'static str, u32, u64), U
             (constant_section(section).map_or(".rodata", |one| one.0), SHT_PROGBITS, SHF_ALLOC | SHF_MERGE)
         }
         Role::ROData => (".rodata", SHT_PROGBITS, SHF_ALLOC),
+        Role::Data if section.name == ".data.rel.ro" => (".data.rel.ro", SHT_PROGBITS, SHF_ALLOC | SHF_WRITE),
         Role::Data => (".data", SHT_PROGBITS, SHF_ALLOC | SHF_WRITE),
         Role::Bss => (".bss", SHT_NOBITS, SHF_ALLOC | SHF_WRITE),
         Role::Stack => return Err(unsupported(format!("{}: an OMF stack segment has no ELF section", section.name))),
