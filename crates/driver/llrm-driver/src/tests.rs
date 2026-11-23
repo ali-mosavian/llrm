@@ -458,9 +458,12 @@ fn a_variable_copy_or_fill_at_m32_os_is_rep_outside_loops_and_a_call_otherwise()
         let os = listing("m32", "-Os", &ir("m32", "i32", &looped("i32", &op), "optsize"));
         assert_eq!((reps(&os), calls(&os)), (0, 1), "{kind} in a loop: the call\n{os}");
     }
-    // not tuned for size: a fill is the call (a copy is MEM-1's `rep movsd`)
-    let fast = listing("m32", "-O2", &ir("m32", "i32", &fill("i32"), ""));
-    assert_eq!((reps(&fast), calls(&fast)), (0, 1), "a fill at -O2 is the call\n{fast}");
+    // not tuned for size: a fill and a copy are the call, as the pin has them (a variable copy was
+    // an inline `rep movsd` at -O2/-O3 until MEM-1 was retired: localarr 85.8M cycles, clang 74.9M)
+    for (kind, op) in [("copy", copy("i32")), ("fill", fill("i32"))] {
+        let fast = listing("m32", "-O2", &ir("m32", "i32", &op, ""));
+        assert_eq!((reps(&fast), calls(&fast)), (0, 1), "a {kind} at -O2 is the call\n{fast}");
+    }
     let m64 = listing("m64", "-Os", &ir("m64", "i64", &copy("i64"), "optsize"));
     assert_eq!((reps(&m64), calls(&m64)), (0, 1), "m64 keeps the call (QB localarr +15.6% clk with rep)\n{m64}");
 }
