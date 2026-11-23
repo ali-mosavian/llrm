@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/assignment_tracking.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/assignment_tracking.rs); edit the header, not this file.
-<!-- src: crates/codegen/llrm-codegen/src/backend/assignment_tracking.rs sha256:d8fc3d7d919c3ceb131a6d15574a98bc15a7f571d8a79a8f1d909bd011afa385 -->
+<!-- src: crates/codegen/llrm-codegen/src/backend/assignment_tracking.rs sha256:e733f23ccf75fa693693a0872e364c89dca78f91facc506fdae3dd18a975c2b5 -->
 
 # assignment_tracking
 
@@ -15,6 +15,9 @@ that start just before an instruction. `build_overlap_map` finds which
 fragments contain which and which stores write them; `Lowering` is the
 dataflow: a state per block (`BlockInfo`), transfer functions for stores,
 escaping calls and records, and `run`, the fixpoint over the blocks.
+
+## Runs
+In the driver, once per module before code generation, when the module carries `#dbg_assign` records (`tracked`, `module_rewritten`).
 
 ## Example
 A variable `x` kept in `%a` from its first use, and `y` in its stack slot
