@@ -134,6 +134,10 @@ pub struct Addr {
     pub base: Register,
     /// NONE except for an address whose selector differs from the default.
     pub segment: Register,
+    /// An External symbol the code reaches from the instruction pointer
+    /// (`lea r, [rip + sym]`, a copy relocation under -fPIE), not through the
+    /// table the linker fills. It names the same place, so equality ignores it.
+    pub linked_direct: bool,
 }
 
 /// A frame cell is the same place whichever slot it is tagged with: the tag
@@ -182,7 +186,7 @@ impl Addr {
         space: Space,
         disp: i64,
     ) -> Self {
-        Addr { space, disp, index: 0, base: Register::None, segment: Register::None }
+        Addr { space, disp, index: 0, base: Register::None, segment: Register::None, linked_direct: false }
     }
 
     /// Whether the address names bytes without a run-time index.
