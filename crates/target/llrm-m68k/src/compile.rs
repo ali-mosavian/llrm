@@ -1206,10 +1206,15 @@ fn items_once(
     }
     crate::regalloc::place_blocks(&mut function, &edge_odds(module, name)?, wants_size, options.loop_top_by_jumps);
     if options.short {
-        let returns_value = module.global(id).function().is_none_or(|one| {
-            matches!(module.context.types.get(one.ty), llrm_mir::types::Type::Function { returns, .. }
-                if !module.context.types.is_void(*returns))
-        });
+        let returns_value = module
+            .global(id)
+            .function()
+            .is_none_or(
+                |one| matches!(
+                    module.context.types.get(one.ty),
+                    llrm_mir::types::Type::Function { returns, .. } if !module.context.types.is_void(*returns)
+                ),
+            );
         crate::doloop::doloops(&mut function, &assignment, cpu, returns_value);
     }
     drop(sp);
@@ -1254,6 +1259,28 @@ fn items_once(
                 _ => None,
             },
             _ => None,
+        };
+        // DEVIATE M68K-FAR-TAIL: the pin's `TAILJMPq` is always `bra`, whose
+        // PC16 reaches 32 KiB. Where the model has absolute data
+        // (`-mcmodel=medium|large`) a tail call to another function goes
+        // through `%a0`, the pin's `TAILJMPj` form.
+        let line = match line {
+            Line::Inst(inst)
+                if options.code_model.absolute_data()
+                    && inst.opcode == "BRA16"
+                    && matches!(
+                        &inst.operands[..],
+                        [mc::Operand::Symbol(target, 0)] if target != name
+                    ) =>
+            {
+                let target = inst.operands[0].clone();
+                out.push(Item::Inst(mc::Inst {
+                    opcode: "LEA32b",
+                    operands: vec![mc::Operand::Reg(crate::reg::A0), target],
+                }));
+                Line::Inst(mc::Inst { opcode: "JMP32j", operands: vec![mc::Operand::Reg(crate::reg::A0)] })
+            }
+            other => other,
         };
         out.push(match line {
             Line::Label(at) => Item::Label(format!(".LBB{number}_{at}")),
