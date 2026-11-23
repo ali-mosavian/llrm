@@ -10,6 +10,9 @@
 //! to the pass. [`crate::globaldce`] then deletes what no live code names,
 //! which is what a linker's `--gc-sections` does for a whole program.
 //!
+//! # Runs
+//! As a program pass, before GlobalDCE, where a driver compiles a whole program (the 6502 driver adds it with `main` preserved).
+//!
 //! # Example
 //! With `main` preserved, `@scale` and `@table` become internal and the next
 //! GlobalDCE deletes them if nothing reaches them:

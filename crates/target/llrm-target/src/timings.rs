@@ -34,8 +34,8 @@ pub struct CpuTable {
     /// tail duplication (`TailDupPlacementThreshold`), where the target states
     /// a smaller bound than the pin's (2, 4 at -O3); `None`: the pin's.
     pub tail_dup_placement_threshold: Option<i64>,
-    /// DEVIATE TAILDUP-HOT (owner x86-m32, exit: profile-fed frequencies; stated cost
-    /// x_jpeg_fixed/x_jpeg_single -O2 +32 B at 0 clk): the most
+    /// DEVIATE TAILDUP-HOT (owner x86-m32, exit: profile-fed frequencies;
+    /// stated cost x_jpeg_fixed/x_jpeg_single -O2 +32 B at 0 clk): the most
     /// instructions a block may hold above the pin's bound and still be copied
     /// when the clocks of the jump the copy saves, over the block's executions,
     /// outweigh the bytes of the copy at the speed rate (gcc's `copy_bb_p`,
@@ -103,26 +103,37 @@ pub struct CpuTable {
     /// leaves the frame register free at `-Os` too, as at speed. Off: any
     /// inline code keeps it until `masm` has compared the two forms (m16).
     pub register_inline_frees_frame_at_size: bool,
-    /// `BranchFolder::TailMergeBlocks` as the pin runs it: no hot-cycle guard and no three-block minimum
-    /// (T14 and D1 of jumps-tailmerge-check.md lifted). Off: the guards stand.
+    /// `BranchFolder::TailMergeBlocks` as the pin runs it: no hot-cycle guard
+    /// and no three-block minimum (T14 and D1 of jumps-tailmerge-check.md
+    /// lifted). Off: the guards stand.
     pub tail_merge_pin_faithful: bool,
-    /// Runs of equal literal stores outside loops share a register where bytes are strict (DEVIATE ISS1,
-    /// owner x86-m32, exit 2026-11-30); -Os always. Off: the pin's `MOV32mi`s.
+    /// DEVIATE TM-PAIR (owner w12, exit 2026-12-13): at -Os the merge ahead of
+    /// placement shares a common tail of two instructions, as
+    /// `MachineBlockPlacement`'s does, where the pin's pass of its own takes
+    /// three (`TailMergeSize`). Off: the pin's three.
+    pub tail_merge_pairs_at_size: bool,
+    /// Runs of equal literal stores outside loops share a register where bytes
+    /// are strict (DEVIATE ISS1, owner x86-m32, exit 2026-11-30); -Os
+    /// always. Off: the pin's `MOV32mi`s.
     pub share_literal_stores: bool,
-    /// The same at -O1 to -O3, where the bytes outweigh the clock of loading the register. Off where
-    /// clocks decide the cell: the `xor` and the register stores cost more than the immediates.
+    /// The same at -O1 to -O3, where the bytes outweigh the clock of loading
+    /// the register. Off where clocks decide the cell: the `xor` and the
+    /// register stores cost more than the immediates.
     pub share_literal_stores_at_speed: bool,
-    /// A `movzx` of a register into itself is `and r, mask` where the flags are dead and bytes
-    /// are priced at speed: gcc's `X86_TUNE_ZERO_EXTEND_WITH_AND`, set for the 486 and Pentium
-    /// (DEVIATE ZEXT-AND, owner x86-m32-b, exit 2026-11-24). Off: the pin's `movzx`.
+    /// A `movzx` of a register into itself is `and r, mask` where the flags are
+    /// dead and bytes are priced at speed: gcc's
+    /// `X86_TUNE_ZERO_EXTEND_WITH_AND`, set for the 486 and Pentium
+    /// (DEVIATE ZEXT-AND, owner x86-m32-b, exit 2026-11-24). Off: the pin's
+    /// `movzx`.
     pub zero_extend_with_and: bool,
-    /// Constant-pool bytes are a strict axis of the target's ranking: a fold that makes a new pool cell is off
-    /// (DEVIATE FF2, `floatfold.rs`).
+    /// Constant-pool bytes are a strict axis of the target's ranking: a fold
+    /// that makes a new pool cell is off (DEVIATE FF2, `floatfold.rs`).
     pub pool_data_strict: bool,
     /// At `-Os` a register set to 1 is `xor r,r; inc r` (three bytes, the pin's
     /// `MOV32r1`: `OptForSize, Not64BitMode`, [X86InstrCompiler.td#L335]).
     ///
-    /// [X86InstrCompiler.td#L335]: https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86InstrCompiler.td#L335
+    /// [X86InstrCompiler.td#L335]:
+    /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86InstrCompiler.td#L335
     pub size_one_is_xor_inc: bool,
     /// A select of two constants on a CPU with no `cmov` is a branch, not
     /// `setcc` and arithmetic on its flag (DEVIATE SELB, owner x86-m32,
@@ -281,7 +292,9 @@ impl Timings {
                     ("scalars", "mispredict_penalty_size") => table.mispredict_penalty_size = Some(number()?),
                     ("scalars", "commute_loop_carried") => table.commute_loop_carried = number()? != 0,
                     ("scalars", "widen_word_immediate") => table.widen_word_immediate = number()? != 0,
-                    ("scalars", "three_address_to_known_register") => table.three_address_to_known_register = number()? != 0,
+                    ("scalars", "three_address_to_known_register") => {
+                        table.three_address_to_known_register = number()? != 0
+                    }
                     ("scalars", "share_congruent_phis") => table.share_congruent_phis = number()? != 0,
                     ("scalars", "post_ra_tail_duplicate") => table.post_ra_tail_duplicate = number()? != 0,
                     ("scalars", "skip_computed_goto_copies_at_size") => {
@@ -291,9 +304,12 @@ impl Timings {
                         table.register_inline_frees_frame_at_size = number()? != 0
                     }
                     ("scalars", "tail_merge_pin_faithful") => table.tail_merge_pin_faithful = number()? != 0,
+                    ("scalars", "tail_merge_pairs_at_size") => table.tail_merge_pairs_at_size = number()? != 0,
                     ("scalars", "unordered_branch_odds") => table.unordered_branch_odds = number()? != 0,
                     ("scalars", "share_literal_stores") => table.share_literal_stores = number()? != 0,
-                    ("scalars", "share_literal_stores_at_speed") => table.share_literal_stores_at_speed = number()? != 0,
+                    ("scalars", "share_literal_stores_at_speed") => {
+                        table.share_literal_stores_at_speed = number()? != 0
+                    }
                     ("scalars", "zero_extend_with_and") => table.zero_extend_with_and = number()? != 0,
                     ("scalars", "pool_data_strict") => table.pool_data_strict = number()? != 0,
                     ("scalars", "size_one_is_xor_inc") => table.size_one_is_xor_inc = number()? != 0,

@@ -13,8 +13,12 @@ define internal void @msg(ptr %t) {\nentry:\n  br label %loop\nloop:\n\
   call void @write(i32 1, ptr %t, i32 %i)\n  ret void\n}\n";
 
 fn ten_sites() -> String {
-    let globals: String = (0..10).map(|i| format!("@s{i} = private constant [4 x i8] c\"a{i}\\0D\\00\"\n")).collect();
-    let calls: String = (0..10).map(|i| format!("  call void @msg(ptr @s{i})\n")).collect();
+    // the strings are read from memory: with constants an inline folds the loop away and is faster, which
+    // the -Os trial keeps (the loop priced once for ten calls hid that, `trial::price_of_functions`)
+    let globals = "@s = external global [10 x ptr]\n";
+    let calls: String = (0..10)
+        .map(|i| format!("  %g{i} = getelementptr ptr, ptr @s, i32 {i}\n  %p{i} = load ptr, ptr %g{i}\n  call void @msg(ptr %p{i})\n"))
+        .collect();
     format!("{DATALAYOUT}{globals}{MSG}define void @main() optsize nounwind {{\n{calls}  ret void\n}}\n")
 }
 

@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/loopvectorizenarrow.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/loopvectorizenarrow.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/loopvectorizenarrow.rs sha256:996befff793e6167c8feac6e9bda849b1b3b9b0bdede6b768060306e8e9a4de7 -->
+<!-- src: crates/opt/llrm-transforms/src/loopvectorizenarrow.rs sha256:fe507152278ab9b04f6787cfa7e622e5567700b4ce3b5dac222886fd256d5b71 -->
 
 # loopvectorizenarrow
 
@@ -20,6 +20,9 @@ result fits 16 or 32 bits become `sext (op (trunc counter), constants)`
 depend only on the low bits of their operands, and the result's upper bits
 are zero. The `trunc` of the counter is what the vectorizer already widens
 to a narrow `vec.ind`.
+
+## Runs
+Inside `loopvectorize`, on the integer chains of a loop's induction before the plan is costed.
 
 ## Example
 `(i & 15) + 1` with `i: i64` feeding a 16-bit multiply becomes

@@ -15,6 +15,9 @@
 //! (k_strupper, 47 B / 412 clocks). Exit: the target's own cost for the join in
 //! SimplifyCFG's `FoldBranchToCommonDest`, once it can tell a branch from a value.
 //!
+//! # Runs
+//! In the 6502 driver, per function, priced with and without the split (`rangesplit::unmerged`).
+//!
 //! # Example
 //! ```text
 //!   %s = add i8 %c, -97                 %g = icmp uge i8 %c, 97

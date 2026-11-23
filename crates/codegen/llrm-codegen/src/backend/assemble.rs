@@ -566,6 +566,7 @@ pub fn assembled_by(
                             cpu.size,
                             Some(&calls),
                             cpu.tail_merge_pin_faithful,
+                            cpu.tail_merge_pairs_at_size,
                         )
                         .map_err(|error| error.to_string())?;
                         masm::Procedure { body, ..procedure }

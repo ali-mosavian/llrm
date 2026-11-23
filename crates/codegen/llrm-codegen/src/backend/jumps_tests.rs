@@ -757,14 +757,27 @@ fn test_a_tail_of_one_is_not_shared() {
 /// `BranchFolder` as a pass of its own, ahead of placement, asks for 3
 /// (`TailMergeSize`) at every level, and 2 only for a tail that is a whole
 /// block (`ProfitableToMerge`). At `-Os` a tail of one instruction and a jump
-/// shared by the ends of two arms was merged (minimum 2): QB `exec_loop` m32 -Os
-/// merged the handlers' tails into shared blocks, each ending in a jump to the
-/// dispatch, +21.0M executed jumps and 56 dispatch copies where the pin has 122.
+/// shared by the ends of two arms was merged (minimum 2): QB `exec_loop` m32
+/// -Os merged the handlers' tails into shared blocks, each ending in a jump to
+/// the dispatch, +21.0M executed jumps and 56 dispatch copies where the pin has
+/// 122.
 #[test]
 fn test_a_tail_of_one_is_not_shared_before_placement_at_os_either() {
     let source = arms_sharing_a_tail(1);
 
-    assert!(tailmerge::merged_in(&source, true, None, false, false).unwrap().is_none());
+    assert!(tailmerge::merged_in(&source, true, None, false, false, false).unwrap().is_none());
+}
+
+/// `tail_merge_pairs_at_size` (m64, DEVIATE TM-PAIR): the same arms are merged
+/// at `-Os` ahead of placement. The pin's three-instruction minimum left QB
+/// `vm/exec.c` m64 -Os 13,963 B against 12,655 B before, 462 B under the best
+/// compiler to 846 B over it.
+#[test]
+fn test_a_tail_of_one_is_shared_before_placement_at_os_where_the_target_takes_pairs() {
+    let source = arms_sharing_a_tail(1);
+
+    assert!(tailmerge::merged_in(&source, true, None, false, false, true).unwrap().is_some());
+    assert!(tailmerge::merged_in(&source, false, None, false, false, true).unwrap().is_none(), "only at -Os");
 }
 
 /// A tail of one move and two zero-code anchors was shared: `x_cordic` -O3
@@ -1570,8 +1583,9 @@ fn test_a_target_threshold_keeps_a_join_the_pin_copies() {
 
 /// DEVIATE TAILDUP-HOT. x_cordic -O3 ran a jump per step over the next step's
 /// six-instruction head (31734 clk against gcc's 26743): the pin copies up to
-/// four instructions, gcc eight. A target's hot bound copies a longer join where
-/// the jump saved, at the join's frequency, outweighs the bytes of the copy.
+/// four instructions, gcc eight. A target's hot bound copies a longer join
+/// where the jump saved, at the join's frequency, outweighs the bytes of the
+/// copy.
 #[test]
 fn test_a_hot_join_above_the_pin_bound_is_copied_where_the_jump_pays() {
     use super::placement::HotTailDup;
@@ -1587,13 +1601,15 @@ fn test_a_hot_join_above_the_pin_bound_is_copied_where_the_jump_pays() {
 }
 
 /// A loop's latch is copied above the pin's bound only where the jump it saves
-/// is worth more than the back edge the copy takes (`HotTailDup::back_edge_clocks`,
-/// #9145): x_jpeg_fixed -O2 ran 137354 clocks longer when `inc; jne` latches went
-/// into their predecessors at a back edge as dear as the jump.
+/// is worth more than the back edge the copy takes
+/// (`HotTailDup::back_edge_clocks`, #9145): x_jpeg_fixed -O2 ran 137354 clocks
+/// longer when `inc; jne` latches went into their predecessors at a back edge
+/// as dear as the jump.
 #[test]
 fn test_a_loop_latch_is_copied_only_where_the_jump_outweighs_the_back_edge() {
     use super::placement::HotTailDup;
-    let hot = |back_edge_clocks: f64| Some(HotTailDup { size: 8, jump_clocks: 3.0, back_edge_clocks, clocks_per_byte: 0.01 });
+    let hot =
+        |back_edge_clocks: f64| Some(HotTailDup { size: 8, jump_clocks: 3.0, back_edge_clocks, clocks_per_byte: 0.01 });
     let looped = |latch_back: bool, back_edge_clocks: f64| {
         let to_header = if latch_back { 2 } else { 50 };
         let mut made = body(
@@ -1606,7 +1622,14 @@ fn test_a_loop_latch_is_copied_only_where_the_jump_outweighs_the_back_edge() {
                 block(20, vec![_move(20, imm(2)), _jump(21, 30)], vec![30]).into(),
                 block(
                     30,
-                    vec![_move(30, imm(3)), _move(31, imm(4)), _move(32, imm(5)), _move(33, imm(6)), _compare(34), _branch(35, "jne", to_header)],
+                    vec![
+                        _move(30, imm(3)),
+                        _move(31, imm(4)),
+                        _move(32, imm(5)),
+                        _move(33, imm(6)),
+                        _compare(34),
+                        _branch(35, "jne", to_header),
+                    ],
                     vec![to_header, 40],
                 )
                 .into(),
@@ -1619,9 +1642,18 @@ fn test_a_loop_latch_is_copied_only_where_the_jump_outweighs_the_back_edge() {
         made.odds.taken.insert((2, 20), fixed(0.5));
         _placed(&made, false, false, None, hot(back_edge_clocks), 0).unwrap()
     };
-    assert!(looped(true, 3.0).blocks.iter().any(|one| one.at == 30), "a back edge as dear as the jump: the latch is kept");
-    assert!(looped(true, 0.0).blocks.iter().all(|one| one.at != 30), "a free back edge: the jump pays, the latch is copied");
-    assert!(looped(false, 3.0).blocks.iter().all(|one| one.at != 30), "premise: the same block, no back edge, is copied");
+    assert!(
+        looped(true, 3.0).blocks.iter().any(|one| one.at == 30),
+        "a back edge as dear as the jump: the latch is kept"
+    );
+    assert!(
+        looped(true, 0.0).blocks.iter().all(|one| one.at != 30),
+        "a free back edge: the jump pays, the latch is copied"
+    );
+    assert!(
+        looped(false, 3.0).blocks.iter().all(|one| one.at != 30),
+        "premise: the same block, no back edge, is copied"
+    );
 }
 
 /// Only a block that goes to the join and nowhere else takes a copy: one that
@@ -1676,8 +1708,9 @@ fn test_a_copied_test_keeps_its_loops_odds() {
 /// Size places as speed does, but for a loop's top (`findBestLoopTop`).
 #[test]
 fn test_for_size_a_diamond_is_placed_as_for_speed() {
-    let order =
-        |body: LirBody| _placed(&body, true, false, None, None, 0).unwrap().blocks.iter().map(|one| one.at).collect::<Vec<_>>();
+    let order = |body: LirBody| {
+        _placed(&body, true, false, None, None, 0).unwrap().blocks.iter().map(|one| one.at).collect::<Vec<_>>()
+    };
     assert_eq!(order(weighted_diamond(0.7)), vec![1, 10, 20, 30]);
     assert_eq!(order(weighted_diamond(0.9)), vec![1, 10, 30, 20]);
 }
@@ -2516,7 +2549,12 @@ fn test_a_jump_where_the_other_way_falls_does_not_hide_the_common_tail() {
     let copy = |at| _inserted(_insn(at, Operation::Move, "mov", vec![cx()], vec![si()], None));
     let lines = _printed(vec![
         block(1, vec![_compare(1), _branch(2, "je", 9)], vec![9, 4]).into(),
-        block(4, vec![_inserted(_insn(4, Operation::Move, "mov", vec![dx()], vec![imm(1)], None)), copy(5), _jump(6, 20)], vec![20]).into(),
+        block(
+            4,
+            vec![_inserted(_insn(4, Operation::Move, "mov", vec![dx()], vec![imm(1)], None)), copy(5), _jump(6, 20)],
+            vec![20],
+        )
+        .into(),
         block(9, vec![copy(9)], vec![20]).into(),
         block(20, vec![_return(20)], vec![]).into(),
     ]);
@@ -2902,7 +2940,10 @@ fn test_a_latch_copied_into_two_arms_goes_above_the_header() {
     };
     let at = |order: &[i64], block: i64| order.iter().position(|&one| one == block).unwrap();
     let pin = order(None);
-    assert!(at(&pin, 5) < at(&pin, 3), "premise: the pin has an arm, with the latch copied in, above the header: {pin:?}");
+    assert!(
+        at(&pin, 5) < at(&pin, 3),
+        "premise: the pin has an arm, with the latch copied in, above the header: {pin:?}"
+    );
     let priced = order(Some(TopClocks { jump_clocks: 3.0, saved_clocks: 2.0 }));
     assert!(at(&priced, 5) < at(&priced, 3), "an arm with the latch is the loop top: {priced:?}");
 }
