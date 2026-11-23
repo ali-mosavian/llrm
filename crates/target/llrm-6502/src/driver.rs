@@ -772,7 +772,7 @@ fn tail(
                 source = Some(paged);
             }
         }
-        if let Some((_, counted)) = counted.as_ref().filter(|(names, _)| paged_chosen && names.contains(name)) {
+        if let Some((_, counted)) = counted.as_ref().filter(|(names, _)| names.contains(name)) {
             let mut other = select_function(counted, name, request.cpu)?;
             other.zero_page = request.platform.zero_page;
             other.tuning = request.level.tuning();
