@@ -564,3 +564,34 @@ fn test_an_order_through_a_copy_into_a_live_register_is_not_taken() {
     assert_eq!(stored(&[0, 16, 64, 80]), vec![2.0], "the edge that takes a");
     assert_eq!(stored(&[0, 16, 48, 64, 80]), vec![1.0], "the edge through the copy keeps m");
 }
+
+/// pfpu.c fx_pow at O1: the allocator spilled a value that lives across an x87
+/// call, but is no input of it, after the call's stack inputs. The inputs leave
+/// the stack holding nothing else, so the spill found it gone ("floating stack
+/// input is unavailable"). It is made ahead of the inputs.
+#[test]
+fn test_a_spill_of_a_value_the_inputs_do_not_read_is_made_ahead_of_them() {
+    use crate::model::ir::{Held, Loc};
+    use crate::model::lir::LirBlock;
+    let held = |value: u32| Loc::Held(Held { value, width: 10, offset: 0 });
+    let input = |at: i64, value: u32| {
+        let what = Semantics { sources: vec![held(value)], ..Semantics::new(Operation::FloatStore) };
+        Arc::new(Insn::new(at, None, Some(what), vec![], vec![value]))
+    };
+    let spill = {
+        let what = Semantics {
+            dests: vec![Loc::Mem(crate::model::ir::Mem::new(Some(crate::model::ir::Addr::new(crate::model::ir::Space::Frame, -16)), 10))],
+            sources: vec![held(7)],
+            ..Semantics::new(Operation::FloatStore)
+        };
+        let mut one = Insn::new(3, None, Some(what), vec![], vec![7]);
+        one.spill_store = true;
+        Arc::new(one)
+    };
+    let call = Arc::new(Insn::new(4, None, Some(Semantics::new(Operation::Call)), vec![], vec![]));
+    let block = LirBlock::new(0, vec![input(1, 5), input(2, 6), spill, call]);
+    let body = LirBody::new("f", 0, vec![block.into()], Default::default(), Default::default());
+    let made = super::spills_before_stack_inputs(&body).expect("the spill moves");
+    let order: Vec<i64> = made.insns().iter().map(|one| one.at).collect();
+    assert_eq!(order, [3, 1, 2, 4], "the spill precedes the inputs");
+}
