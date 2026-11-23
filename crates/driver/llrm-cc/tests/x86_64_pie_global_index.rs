@@ -3,13 +3,15 @@
 //! backend formed `lea r,[rip+sym]` at every use in the loop: histo -O2 was
 //! 88 B larger (2136 B object against 2048 B). The size no longer measures it
 //! (the loops are vectorized now, 3032 B), so the test reads the loops: no
-//! symbol address is made inside one. Needs `LLRM_LLC`.
+//! symbol address is made inside one. This is a PROXY for that symptom: it fails
+//! on `-O0`, where the symbol is formed in the loop, but reverting the LSR
+//! refusal alone leaves it green. Needs `LLRM_LLC`.
 
 use std::path::Path;
 use std::process::Command;
 
 #[test]
-fn a_global_beside_an_index_costs_a_register_at_x86_64_pie() {
+fn no_symbol_address_is_made_inside_a_loop_at_x86_64_pie() {
     let llc = std::env::var_os("LLRM_LLC").expect("LLRM_LLC is not set: this test needs it and does not skip");
     let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("pie64-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
