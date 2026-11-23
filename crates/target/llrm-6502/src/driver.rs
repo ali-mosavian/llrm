@@ -845,11 +845,20 @@ fn tail(
     let files = file.map_or_else(String::new, |name| format!(".dbg file, \"{name}\", 0, 0\n"));
     // `-fno-outline` is the kill switch, for a test of what the backend wrote
     let outlined = request.level != Level::O0 && !request.passes.iter().any(|flag| flag == "-fno-outline");
-    // A place in a loop is given up for its clocks at -O1 only: at -O2 and -O3
-    // that takes div_constants_long and div_constants_ulong out of the bytes
-    // that beat the other compilers', and bytes come first (row
-    // 6502-OUTLINE-CLOCKS). At -Os the pass is the pin's, bytes alone.
-    let rate = (request.level == Level::O1).then(|| request.level.tuning().clocks_per_byte);
+    // A place in a loop is given up for its clocks at -O1 and -Os: at -O2 and
+    // -O3 that takes div_constants_long and div_constants_ulong out of the
+    // bytes that beat the other compilers', and bytes come first (row
+    // 6502-OUTLINE-CLOCKS). At -Os the loop is a loop the function's callers
+    // make too (`outline::weights`).
+    //
+    // DEVIATE 6502-OUTLINE-OS-RATE (owner llrm-target-6502, review
+    // 2027-01-31): the pin's `MachineOutliner` prices bytes alone, and the pass
+    // was that at -Os. frameless -Os ran 54,218 clocks against llvm-mos's
+    // 46,669: `add4`'s `d * 4` was two calls of a 4-instruction shift in a
+    // function a loop calls. The rate is the one every size-reducing choice of
+    // the target is made at (`alloc::Tuning`).
+    let rate = matches!(request.level, Level::O1 | Level::Os | Level::Oz)
+        .then(|| request.level.tuning().clocks_per_byte);
     // at -O1 to -O3 a place is given up by the share of the module's clocks its
     // calls add against the share of its bytes they save (`[share.speed]
     // outline`)
