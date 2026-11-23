@@ -143,3 +143,20 @@ def test_a_cycles_binary_of_this_checkouts_sources_is_accepted(tmp_path):
 
     _fake_cycles(tmp_path / "cycles", m68k_clk.sources_stamp(m68k_clk.ROOT))
     m68k_clk.verify_cycles(tmp_path / "cycles", m68k_clk.ROOT, tmp_path)
+
+
+def test_main_names_only_what_it_imports():
+    """`main` used `external_flags` at the link step without importing it (only `gcc_command` did): every run died with a NameError after the first compile, and no clocks table was printed."""
+    import builtins
+    import symtable
+
+    import m68k_clk
+
+    source = open(m68k_clk.__file__).read()
+    main = next(t for t in symtable.symtable(source, m68k_clk.__file__, "exec").get_children() if t.get_name() == "main")
+    unbound = [
+        s.get_name()
+        for s in main.get_symbols()
+        if s.is_global() and not hasattr(m68k_clk, s.get_name()) and not hasattr(builtins, s.get_name())
+    ]
+    assert unbound == []
