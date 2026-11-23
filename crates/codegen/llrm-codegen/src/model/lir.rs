@@ -179,6 +179,10 @@ pub struct Insn {
     pub spill_reload: bool,
     pub spill_store: bool,
     pub frame_adjust: bool,
+    /// A `push` that only moves the stack pointer (a call's alignment pad): the
+    /// register it names is no read, as an `undef` use is none to the pin's
+    /// MachineVerifier.
+    pub pad: bool,
     pub rematerialized: bool,
     /// Its memory access must happen exactly as written.
     pub volatile: bool,
@@ -577,6 +581,7 @@ impl Insn {
             spill_reload,
             spill_store,
             frame_adjust,
+            pad,
             rematerialized,
             volatile,
             invariant,
@@ -617,6 +622,7 @@ impl Insn {
             spill_reload: spill_reload.clone(),
             spill_store: spill_store.clone(),
             frame_adjust: frame_adjust.clone(),
+            pad: pad.clone(),
             rematerialized: rematerialized.clone(),
             volatile: volatile.clone(),
             invariant: invariant.clone(),
@@ -818,6 +824,7 @@ impl Insn {
             spill_reload: false,
             spill_store: false,
             frame_adjust: false,
+            pad: false,
             rematerialized: false,
             volatile: false,
             invariant: false,
