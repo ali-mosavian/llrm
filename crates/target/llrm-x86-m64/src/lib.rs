@@ -419,8 +419,9 @@ impl llrm_target::Target for M64 {
                             // DEVIATE LATE-MEMCPYOPT-SIZE (owner x86-m32-b, exit 2026-12-12): see
                             // Tuning. QB m64 Os -119 B (synth -63, dialog -56), no file worse.
                             late_memcpyopt_at_size: true,
-                            // DEVIATE SINK-COMMON-SIZE (owner w12, exit 2026-12-05): the m32 entry; see
-                            // `Tuning::sink_common_at_size`. QB synth.c m64 Os -23,386 B (`voice` 31,808 ->
+                            // DEVIATE SINK-COMMON-SIZE (owner w12, exit 2026-12-05; pin SimplifyCFG.cpp
+                            // sinkCommonCodeFromPredecessors in the late slot only, gcc cfgcleanup.c
+                            // try_crossjump_bb): the m32 entry; see `Tuning::sink_common_at_size`. QB synth.c m64 Os -23,386 B (`voice` 31,808 ->
                             // 8,620; gcc 27,346). Phi cost 1: unpriced, 13 of 14 QB programs retire 1.4-8.9% more
                             // instructions (row M64-SINK-COMMON-SIZE).
                             sink_common_at_size: true,
