@@ -213,9 +213,11 @@ fn place(
     // Symbols: the labels, then the undefined names the fixups use.
     let mut symbols: Vec<Symbol> = Vec::new();
     let mut index_of: HashMap<String, usize> = HashMap::default();
-    let functions: Vec<&(&str, usize)> = labels.iter().filter(|(label, _)| !label.starts_with('.')).collect();
+    let is_local =
+        |label: &str| label.starts_with('.') || label.starts_with(llrm_codegen::backend::blockaddress::PREFIX);
+    let functions: Vec<&(&str, usize)> = labels.iter().filter(|(label, _)| !is_local(label)).collect();
     for (label, offset) in &labels {
-        let local = label.starts_with('.');
+        let local = is_local(label);
         let size = if local {
             0
         } else {

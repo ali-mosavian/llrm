@@ -200,3 +200,49 @@ def test_a_big_zero_array_stored_by_a_reference_and_held_in_bss_by_ours_is_a_con
     assert row[10] == "CONVENTION" and "object-format convention" in row[11], row
     small = {"z/c/Os": cell(50, 100, data=0, bss=100), "z/ow/Os": cell(60, 100, data=100)}
     assert by_row(small)[("z", "c", "Os")][10] == "OK"
+
+
+LIMIT = {"error": "stopped at the 300000000-instruction limit (LLRM_ICOUNT_LIMIT raises it)"}
+
+
+def test_a_reference_stopped_at_the_instruction_limit_is_printed_as_a_bound_and_never_judged():
+    """The Os C table read a reference cell stopped at 3e8 instructions as no data: the bar looked complete. It is a bound: shown, not a bar."""
+    measured = {"p/c/Os": cell(300, 1000)} | refs("p", "Os", 400, 2000) | {"p/bcc/Os": LIMIT}
+    row = by_row(measured)[("p", "c", "Os")]
+    assert row[10] == "OK" and ">= 3e8" in row[11] and "bcc" in row[11], row
+
+
+def test_a_cell_of_ours_stopped_at_the_limit_is_a_bound_never_ok_or_worse():
+    row = by_row({"p/c/Os": LIMIT} | refs("p", "Os", 400, 2000))[("p", "c", "Os")]
+    assert row[10] not in ("OK", "WORSE") and ">= 3e8" in row[11], row
+
+
+def test_a_reference_that_miscompiled_is_named_in_the_note_as_no_bar_not_read_as_a_win():
+    """c-Os: six reference cells printed wrong values and one failed to compile; they were only a count in refs_missing."""
+    wrong = {"error": "prints ['64'], want ['38421']"}
+    row = by_row({"p/c/Os": cell(300, 1000)} | refs("p", "Os", 400, 2000) | {"p/tc/Os": wrong})[("p", "c", "Os")]
+    assert "wrong output, not a bar: tc (prints ['64'], want ['38421'])" in row[11], row
+
+
+def test_a_bounds_twin_whose_references_all_print_wrong_values_has_no_bar_and_a_dated_cause():
+    """stft_fixed~bounds: bcc, tc and tcpp print another value than the host oracle. They are listed as wrong output, with the cause's date, owner and exit; the cell has no bar."""
+    wrong = {"error": "prints ['219192480'], want ['374810179']"}
+    measured = {"stft_fixed/nib/Os": cell(300, 1000), "stft_fixed~bounds/c/Os": cell(310, 1100)} | {f"stft_fixed~bounds/{name}/Os": wrong for name in ("bcc", "tc", "tcpp")}
+    row = by_row(measured)[("stft_fixed", "nib", "Os")]
+    assert row[10] == "NO_BAR", row
+    assert "wrong output, not a bar: bcc (prints ['219192480'], want ['374810179'])" in row[11] and "owner w12, exit 2026-12-13" in row[11], row
+
+
+def test_the_header_names_the_levels_the_table_holds_not_a_fixed_list(tmp_path):
+    """The merged O1/O2/Os table said `--opt O1 O2 O3 Os`: a reader would take O3 for covered."""
+    text = table.render(matmul("O1") | matmul("Os"), tmp_path, "abc123", datetime.datetime(2026, 11, 10, tzinfo=datetime.UTC))
+    harness = text.splitlines()[2]
+    assert "--opt O1 Os " in harness and "O3" not in harness and "O2" not in harness, harness
+
+
+def test_a_program_marked_references_false_is_no_bar_by_construction_not_a_missing_bar():
+    """sfm16_float_add (bench.toml: `references = false`: the soft-float library is ours, no reference compiler builds it) read NO_BAR like a cell whose
+    references failed to measure: 27 of the table's NO_BAR rows were this. A program with no reference by design is listed, never counted."""
+    only = {"sfm16_float_add/c/Os": cell(700, 9000)}
+    assert by_row(only)[("sfm16_float_add", "c", "Os")][10] == "NO_BAR_BY_CONSTRUCTION"
+    assert by_row({"sieve/c/Os": cell(100, 900)})[("sieve", "c", "Os")][10] == "NO_BAR", "a program that should have references and has none stays NO_BAR"

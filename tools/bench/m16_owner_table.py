@@ -10,8 +10,10 @@ import collections
 import datetime
 import hashlib
 import json
+import re
 import subprocess
 import sys
+import tomllib
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
@@ -22,6 +24,12 @@ BAS_REFS = ("bc", "pds71", "vbdos")
 OURS = ("c", "nib", "bas", "bq16")
 # The CPU llrm measures at m16: no -march, the default (the 486, the table the judge counts); -march=i386 prices the 386 table. The gate passes no flag.
 OURS_ISA = "i486"
+
+
+# A reference that prints a value other than the host oracle's is no bar for that cell. Where the cause is open it is recorded here with its date, owner and exit.
+WRONG_OUTPUT_CAUSES = {
+    "stft_fixed~bounds": "2026-11-23: the Borland-family ~bounds build prints another value (bcc already on the full corpus); cause open, owner w12, exit 2026-12-13",
+}
 
 
 def counts(row: dict | None, program: str = "", name: str = "") -> dict | None:
@@ -35,10 +43,26 @@ def counts(row: dict | None, program: str = "", name: str = "") -> dict | None:
     return {"code": row["code_bytes"], "total": total, "clocks": row["clocks"], "data": row.get("data_bytes", 0), "static": static}
 
 
+def limit_bound(row: dict | None) -> str:
+    """">= 3e8" for a cell the counter stopped at its instruction limit (LLRM_ICOUNT_LIMIT): the program has not finished, so its clocks are at least that many and its
+    bytes are unknown. A bound, never a measurement: it is printed, and is no bar and no verdict; "" for any other cell."""
+    found = re.search(r"stopped at the (\d+)-instruction limit", (row or {}).get("error", ""))
+    if not found:
+        return ""
+    count = found.group(1)
+    return f">= {count[0]}e{len(count) - 1}" if set(count[1:]) <= {"0"} else f">= {count}"
+
+
 def has_twin_source(program: str) -> bool:
     """A Nib program with a C twin on disk (`bench/NAME/twin/SEMANTIC.c`): its bar is that twin, whose object holds the same I/O functions
     (BENCH_IO_FUNCTIONS) and bounds checks as the Nib program's. The plain source has neither."""
     return any((bench.BENCH / program / "twin" / f"{semantic}.c").exists() for semantic in bench.TWINS)
+
+
+def no_references(program: str) -> bool:
+    """A program whose bench.toml says `references = false` (a source or library no reference compiler builds): no bar by design."""
+    manifest = bench.BENCH / program / "bench.toml"
+    return manifest.exists() and tomllib.loads(manifest.read_text()).get("references") is False
 
 
 def findings(level: str, ours: dict, refs: dict) -> list[str]:
@@ -97,6 +121,8 @@ def rows(table: dict) -> tuple[list[tuple], collections.Counter]:
         plain = {name: r for name, r in plain.items() if r}
         if not ours:
             verdict, why = ("REFUSED" if "error" in (value or {}) else "UNMEASURED"), (value or {}).get("error", "")[:60]
+            if limit_bound(value):
+                verdict, why = "UNMEASURED", f"{limit_bound(value)} instructions: stopped at the limit"
             row = (program, language, level, "", "", "", "", "", "", "", verdict, why)
         elif bench.is_twin_name(program):
             row = (program, language, level, ours["code"], ours["data"], ours["static"], ours["clocks"], "", "", "", "TWIN", "reference only: the bar of its program's Nib row")
@@ -104,7 +130,8 @@ def rows(table: dict) -> tuple[list[tuple], collections.Counter]:
             # The twin was not measured: the plain source's bar lacks the Nib semantics and the I/O, so it is no bar (2026-11-13: six Nib cells read WORSE so).
             row = (program, language, level, ours["code"], ours["data"], ours["static"], ours["clocks"], "", "", "", "NO_TWIN", f"twin of {program} not measured")
         elif not have:
-            row = (program, language, level, ours["code"], ours["data"], ours["static"], ours["clocks"], "", "", "", "NO_BAR", "")
+            verdict = "NO_BAR_BY_CONSTRUCTION" if no_references(program) else "NO_BAR"
+            row = (program, language, level, ours["code"], ours["data"], ours["static"], ours["clocks"], "", "", "", verdict, "")
         elif convention(ours, have):
             row = (program, language, level, ours["code"], ours["data"], ours["static"], ours["clocks"], min(r["code"] for r in have.values()), min(r["clocks"] for r in have.values()), len(names) - len(have), "CONVENTION",
                    "a reference stores the zeros ours holds in bss: an object-format convention, neither a win nor a loss")
@@ -113,6 +140,15 @@ def rows(table: dict) -> tuple[list[tuple], collections.Counter]:
             verdict = "OK" if not found else ("WORSE_LB" if len(names) - len(have) else "WORSE")
             note = ";".join([*found, *filter(None, [bytes_over(level, ours, have)])]) + (f" [bar {bar}]" if bar != program else "")
             row = (program, language, level, ours["code"], ours["data"], ours["static"], ours["clocks"], min(r["code"] for r in have.values()), min(r["clocks"] for r in have.values()), len(names) - len(have), verdict, note)
+        bounds = [f"{name} {limit_bound(table.get(f'{bar}/{name}/{at}'))}" for name in names if limit_bound(table.get(f"{bar}/{name}/{at}"))]
+        errors = {name: table[f"{bar}/{name}/{at}"]["error"].splitlines()[0] for name in names if "error" in table.get(f"{bar}/{name}/{at}", {}) and not limit_bound(table[f"{bar}/{name}/{at}"])}
+        wrong = [f"{name} ({error})" for name, error in errors.items() if error.startswith("prints ")]
+        broken = [f"{name} ({error[:40]})" for name, error in errors.items() if not error.startswith("prints ")]
+        if (bounds or broken or wrong) and ours:
+            notes = [row[11], "bound: " + ", ".join(bounds) + " instructions (stopped at the limit; no bar)" if bounds else "",
+                     "wrong output, not a bar: " + ", ".join(wrong) + (f" [{WRONG_OUTPUT_CAUSES[bar]}]" if wrong and bar in WRONG_OUTPUT_CAUSES else "") if wrong else "",
+                     "no bar from: " + ", ".join(broken) if broken else ""]
+            row = (*row[:11], "; ".join(filter(None, notes)))
         tally[(level, row[10])] += 1
         plain_code = min((r["code"] for r in plain.values()), default="")
         net = net_code(ours, language, program, level)
@@ -149,11 +185,11 @@ def render(table: dict, dist: Path, harness: str, now: datetime.datetime) -> str
     header = [
         f"# x86-m16 owner table {now:%Y-%m-%dT%H:%MZ} (date -u)",
         f"# dist {dist}; md5: {md5_lines(dist)}",
-        f"# harness commit {harness}; bench.py --opt O1 O2 O3 Os --references --no-judge; no -march: the default CPU ({OURS_ISA})",
+        f"# harness commit {harness}; bench.py --opt {' '.join(sorted({key.rsplit('/', 1)[1] for key in table if key.rsplit('/', 2)[1] in OURS}))} --references --no-judge; no -march: the default CPU ({OURS_ISA})",
         "# net_code: a Nib cell with file I/O less the std.io skeleton's fixed bytes (io_skeleton/fixed.toml, not this build's measure); net_vs_plain_code: net_code less plain_ext_code (strict at O1/Os, priced at O2)",
         "# bytes: code (CODE), data (initialised), static (data+bss); judged (ruling 2026-11-14): Os on total bytes (code+data; BASIC code+static) and clocks; O1/O2/O3 on clocks only, bytes reported in findings;"
         " best external per language: C = ow/bcc/tc/tcpp, Nib = the C compilers on the C twin with the Nib semantics (NAME~init, NAME~bounds; the plain source's best in plain_ext_*), BASIC = bc/pds71/vbdos (O2 key)",
-        "# verdicts: OK, WORSE, CONVENTION (a reference stores the zeros ours holds in bss: shown, not counted a win or a loss), WORSE_LB (a reference lacks a cell: lower bound), NO_BAR (no reference), NO_TWIN (a Nib program whose twin is not measured: unproven, never OK), TWIN (a reference twin, not judged), UNMEASURED/REFUSED (counted, never OK)",
+        "# verdicts: OK, WORSE, CONVENTION (a reference stores the zeros ours holds in bss: shown, not counted a win or a loss), WORSE_LB (a reference lacks a cell: lower bound), NO_BAR (no reference), NO_BAR_BY_CONSTRUCTION (bench.toml `references = false`: listed for regression tracking, never counted in the bar), NO_TWIN (a Nib program whose twin is not measured: unproven, never OK), TWIN (a reference twin, not judged), UNMEASURED/REFUSED (counted, never OK)",
         "# reference cells measured/asked: " + " ".join(f"{name}={got}/{asked}" for name, (got, asked) in reference_coverage(table).items()) + "; a cell without a bar reads NO_BAR or WORSE_LB",
         "# counts: " + ", ".join(f"{level}:{verdict}={n}" for (level, verdict), n in sorted(tally.items())),
     ]

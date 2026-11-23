@@ -40,12 +40,19 @@
 //! every way into a block agrees on (`entered_with`; GCC asks ranger); the path
 //! may not copy more than `max-jump-thread-duplication-stmts` (15)
 //! instructions; a function with `optsize` or `minsize` is left alone.
+//!
+//! # Example
+//! ```text
+//!   q: x > 0 known; p: join of q and r; bb: br (x > 0), A, B
+//!   =>  q jumps through the copies p', bb' straight to A; r still goes through p and bb
+//! ```
 
 use llrm_analysis::edges::{self, phis, single_predecessor, starts_with_landing_pad};
 use llrm_analysis::occurrence::{arms, from_arms};
 use llrm_analysis::ssaupdaterbulk::SsaUpdaterBulk;
 use llrm_mir::constantrange::{ConstantRange, PreferredRangeType};
 use llrm_mir::context::{ConstantKind, Context};
+use llrm_mir::dense::IdSet;
 use llrm_mir::domtree::DomTree;
 use llrm_mir::edit::{Position, ValueMap};
 use llrm_mir::loopinfo::LoopInfo;
@@ -140,10 +147,21 @@ impl FunctionPass for BackwardThreading {
             return PreservedAnalyses::all();
         }
         let mut changed = false;
+        // GCC visits each block of the function once (`pass_thread_jumps`):
+        // with the long paths (`chain` > 1) a copy a thread made is no
+        // block of a later path, or a loop's guard is peeled once a
+        // trip until the cap (QuickrBasic `B_GGET` -O2: 16 copies of
+        // the pixel loop's header, +576 B). The paths of one block keep
+        // the old rule until judged.
+        let originals: Option<IdSet<BlockId>> =
+            (chain > 1).then(|| unit.function.layout().iter().copied().collect());
         for _ in 0..self.max_threads {
             let dt = DomTree::of(unit.function);
             let loops = LoopInfo::analyze(unit.function, || DomTree::of(unit.function));
-            let Some(path) = find(unit.context, unit.function, &dt, &loops, relations, chain) else { break };
+            let Some(path) = find(unit.context, unit.function, &dt, &loops, relations, chain, originals.as_ref())
+            else {
+                break;
+            };
             thread(unit.context, unit.function, &path);
             changed = true;
         }
@@ -621,8 +639,13 @@ fn find(
     loops: &LoopInfo<BlockId>,
     relations: bool,
     chain_limit: usize,
+    originals: Option<&IdSet<BlockId>>,
 ) -> Option<Path> {
+    let known = |block: &BlockId| originals.is_none_or(|originals| originals.contains(block));
     for &bb in function.layout() {
+        if !known(&bb) {
+            continue;
+        }
         let Some(branch) = branch_of(function, bb) else { continue };
         // The compare's inputs must read the same wherever the facts hold: a
         // value defined in `bb` itself (a header phi) is the next trip's when
@@ -635,6 +658,9 @@ fn find(
                 && at != bb
         };
         for chain in chains_into(function, bb, &inputs_stable, chain_limit) {
+            if !chain.iter().all(known) {
+                continue;
+            }
             let first = chain[0];
             let last = *chain.last().expect("a block");
             // What every path into the chain knows leaves nothing to thread.
@@ -650,6 +676,7 @@ fn find(
             }
             for &q in &function.predecessors(first) {
                 if q == bb
+                    || !known(&q)
                     || chain.contains(&q)
                     || function.edge_predecessors(first).iter().filter(|&&b| b == q).count() != 1
                 {
@@ -671,6 +698,7 @@ fn find(
         }
         if relations
             && let Some(path) = join_decided(context, function, dt, loops, bb, &branch, &inputs_stable, chain_limit)
+            && known(&path.q)
         {
             return Some(path);
         }

@@ -266,7 +266,15 @@ impl Coalescer<'_> {
                 self.list(which)[at] = None;
                 continue;
             }
+            let shown =
+                logging().then(|| pick_of(self.env)(self.lis.instr(copy)).map(|(dst, src)| (dst.value, src.value)));
             let result = join_copy(self.lis, self.env, &mut self.state, &mut current_erased, copy);
+            if let Some(Some((dst, src))) = shown {
+                eprintln!(
+                    "COAL\t{}\tv{dst} <- v{src}\t{result:?}",
+                    if matches!(which, List::Work) { "work" } else { "local" }
+                );
+            }
             if result == JoinResult::Joined {
                 progress = true;
                 self.joined += 1;
@@ -360,11 +368,21 @@ impl Coalescer<'_> {
 
 /// `joinAllIntervals`: tries every copy of the function, `depth[b]` being the
 /// loop depth of block `b`.
+/// `LLRM_COALESCE_LOG`, read once when a run starts: a join reads this atomic,
+/// never the environment (its first read snapshots the whole environment, a
+/// cost the allocation test of a refused join counts).
+static LOGGING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+pub(super) fn logging() -> bool {
+    LOGGING.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 pub fn run(
     lis: &mut LiveIntervals,
     env: &dyn CoalescerEnv,
     depth: &[u32],
 ) -> Stats {
+    LOGGING.store(llrm_support::env_flag!("LLRM_COALESCE_LOG"), std::sync::atomic::Ordering::Relaxed);
     let mut order: Vec<MbbPriority> = (0..lis.cfg.len())
         .map(|block| MbbPriority {
             block,

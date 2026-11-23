@@ -116,18 +116,26 @@ fn callee_clocks(
     if inst.opcode.starts_with("CALL") && (direct || through) { crate::routine::mulsi3_floor(cpu) } else { 0 }
 }
 
-/// The registers `lea __mulsi3, An` loads.
-fn mulsi3_registers(items: &[Item]) -> Vec<llrm_lir::registers::RegId> {
+/// The registers `lea symbol, An` loads (the call-target hoist).
+fn loaded_registers(
+    items: &[Item],
+    symbol: &str,
+) -> Vec<llrm_lir::registers::RegId> {
     items
         .iter()
         .filter_map(|item| match item {
             Item::Inst(inst) if inst.opcode == "LEA32b" => match inst.operands.as_slice() {
-                [mc::Operand::Reg(reg), mc::Operand::Symbol(name, 0)] if name == "__mulsi3" => Some(*reg),
+                [mc::Operand::Reg(reg), mc::Operand::Symbol(name, 0)] if name == symbol => Some(*reg),
                 _ => None,
             },
             _ => None,
         })
         .collect()
+}
+
+/// The registers `lea __mulsi3, An` loads.
+fn mulsi3_registers(items: &[Item]) -> Vec<llrm_lir::registers::RegId> {
+    loaded_registers(items, "__mulsi3")
 }
 
 /// The items of the loop headed at `header` whose back edges are at `latches`:
@@ -167,19 +175,18 @@ fn loop_members(
     }
 }
 
-/// Bytes, and clocks of `items` on `cpu` weighted by how often each runs: an
-/// instruction counts the share of runs that reach it (a two-way branch splits
-/// evenly) times ten per loop it sits in ([`loop_members`]).
-fn price_of(
-    items: &[Item],
-    cpu: Cpu,
-    cold_clocks: bool,
-) -> Option<(usize, u32)> {
-    let labels: HashMap<&str, usize> = items
+fn labels_of(items: &[Item]) -> HashMap<&str, usize> {
+    items
         .iter()
         .enumerate()
         .filter_map(|(at, item)| if let Item::Label(name) = item { Some((name.as_str(), at)) } else { None })
-        .collect();
+        .collect()
+}
+
+/// For each item of `items`, the share of runs that reach it (thousandths, a
+/// two-way branch splits evenly) and the loops it sits in, three at most.
+fn run_weights(items: &[Item]) -> Vec<(u64, usize)> {
+    let labels = labels_of(items);
     // header -> its back edges: several to one label are one loop
     let mut loops: HashMap<usize, Vec<usize>> = HashMap::new();
     let mut ends_of: Vec<Option<Ending>> = Vec::with_capacity(items.len());
@@ -224,21 +231,36 @@ fn price_of(
             _ => share[at + 1] += share[at],
         }
     }
-    let sizes = relaxed_sizes(items, &labels)?;
     let members: Vec<Vec<bool>> =
         loops.iter().map(|(&header, latches)| loop_members(&ends_of, header, latches)).collect();
+    (0..items.len())
+        .map(|at| (share[at], members.iter().filter(|member| member[at]).count().min(3)))
+        .collect()
+}
+
+/// Bytes, and clocks of `items` on `cpu` weighted by how often each runs: an
+/// instruction counts the share of runs that reach it (a two-way branch splits
+/// evenly) times ten per loop it sits in ([`loop_members`]).
+fn price_of(
+    items: &[Item],
+    cpu: Cpu,
+    cold_clocks: bool,
+) -> Option<(usize, u32)> {
+    let labels = labels_of(items);
+    let weights = run_weights(items);
+    let sizes = relaxed_sizes(items, &labels)?;
     let (mut bytes, mut clocks) = (0usize, 0u64);
     let hoisted = mulsi3_registers(items);
     for (at, item) in items.iter().enumerate() {
         let Item::Inst(inst) = item else { continue };
         let size = sizes[at];
         let cost = crate::instprice::clocks_of(cpu, inst, size as u32).ok()? + callee_clocks(inst, cpu, &hoisted);
-        let depth = members.iter().filter(|member| member[at]).count().min(3);
+        let (run, depth) = weights[at];
         bytes += size;
         if depth == 0 && !cold_clocks {
             continue;
         }
-        clocks += u64::from(cost) * share[at] * 10u64.pow(depth as u32);
+        clocks += u64::from(cost) * run * 10u64.pow(depth as u32);
     }
     // thousandths of a run, rounded to the nearest clock
     Some((bytes, u32::try_from((clocks + 500) / 1000).unwrap_or(u32::MAX)))
@@ -332,15 +354,33 @@ fn price_of_functions(
 ) -> Option<(usize, u32)> {
     let priced: Vec<(usize, u32)> =
         functions.iter().map(|(_, items)| price_of(items, cpu, true)).collect::<Option<_>>()?;
-    let calls = |from: &[Item], to: &str| -> u64 {
-        from.iter()
-            .filter(|item| {
+    // A call is by name or through the register `lea to, An` loaded (the
+    // call-target hoist), and runs as often as its site does: a call in a loop
+    // is `put64` run once per pass (`long_shift_by_bits`: 28 calls through a
+    // register in loops, the callee priced as run once).
+    let site_runs: Vec<Vec<(u64, usize)>> = functions.iter().map(|(_, items)| run_weights(items)).collect();
+    let calls = |from: usize, to: &str| -> u64 {
+        let items = &functions[from].1;
+        let hoisted = loaded_registers(items, to);
+        items
+            .iter()
+            .enumerate()
+            .filter(|(_, item)| {
                 matches!(
                     item,
-                    Item::Inst(inst) if (inst.opcode.starts_with("CALL") || inst.opcode.starts_with("BSR")) && inst.operands.iter().any(|operand| matches!(operand, mc::Operand::Symbol(name, 0) if name == to))
+                    Item::Inst(inst) if (inst.opcode.starts_with("CALL") || inst.opcode.starts_with("BSR"))
+                        && inst.operands.iter().any(|operand| match operand {
+                            mc::Operand::Symbol(name, 0) => name == to,
+                            mc::Operand::Reg(reg) => inst.opcode == "CALLj" && hoisted.contains(reg),
+                            _ => false,
+                        })
                 )
             })
-            .count() as u64
+            .map(|(at, _)| {
+                let (run, depth) = site_runs[from][at];
+                (run * 10u64.pow(depth as u32) / 1000).max(1)
+            })
+            .sum()
     };
     let mut weight = vec![1u64; functions.len()];
     // a call chain is as long as the functions here; a cycle stops at the cap
@@ -350,9 +390,10 @@ fn price_of_functions(
             .map(|(name, _)| {
                 let runs: u64 = functions
                     .iter()
+                    .enumerate()
                     .zip(&weight)
-                    .filter(|((from, _), _)| from != name)
-                    .map(|((_, items), w)| w * calls(items, name))
+                    .filter(|((_, (from, _)), _)| from != name)
+                    .map(|((at, _), w)| w * calls(at, name))
                     .sum();
                 runs.clamp(1, 1000)
             })
@@ -584,5 +625,57 @@ mod ending_tests {
             operands: vec![mc::Operand::Reg(llrm_lir::registers::RegId::from(crate::reg::D0)), mc::Operand::Symbol(".L1".into(), 0)],
         };
         assert!(matches!(ending(&dbf, &labels), Some(Ending::Branch(0))));
+    }
+}
+
+#[cfg(test)]
+mod call_weight_tests {
+    use super::price_of_functions;
+    use crate::compile::Item;
+    use crate::dagisel::hooks::Cpu;
+    use crate::mc;
+    use llrm_lir::registers::RegId;
+
+    fn inst(
+        opcode: &'static str,
+        operands: Vec<mc::Operand>,
+    ) -> Item {
+        Item::Inst(mc::Inst { opcode, operands })
+    }
+
+    /// `long_shift_by_bits` -Os 68000: 28 calls of `put64` went through the register the call-target hoist
+    /// loaded (`lea put64, %a4; jsr (%a4)`), which the trial did not count as calls, so `put64` was priced
+    /// as run once: the kept-call build looked cheaper than the inline (48,758 clk against 51,452) while
+    /// it ran 4,156 clk slower. A callee is priced once for each call, hoisted or not.
+    #[test]
+    fn a_callee_reached_through_a_hoisted_register_is_priced_once_per_call() {
+        let a4 = RegId::from(crate::reg::A4);
+        let body = || vec![inst("CALLb", vec![mc::Operand::Symbol("report".into(), 0)]), inst("RTS", vec![])];
+        let mut main = vec![inst("LEA32b", vec![mc::Operand::Reg(a4), mc::Operand::Symbol("put64".into(), 0)])];
+        main.extend((0..4).map(|_| inst("CALLj", vec![mc::Operand::Reg(a4)])));
+        main.push(inst("RTS", vec![]));
+        let price = |functions: &[(String, Vec<Item>)]| price_of_functions(functions, Cpu::M68000).expect("priced");
+        let (_, main_clocks) = price(&[("main".into(), main.clone())]);
+        let (_, put_clocks) = price(&[("put64".into(), body())]);
+        let (_, both) = price(&[("main".into(), main), ("put64".into(), body())]);
+        assert_eq!(both, main_clocks + 4 * put_clocks, "put64 is priced once, not once per call");
+    }
+
+    /// The same call sat in a loop: the callee ran once per pass, ten to the loop depth, and was priced
+    /// as run once for the one call instruction (`put64` in `long_shift_by_bits`' loops).
+    #[test]
+    fn a_call_in_a_loop_prices_its_callee_once_per_pass() {
+        let body = || vec![inst("CALLb", vec![mc::Operand::Symbol("report".into(), 0)]), inst("RTS", vec![])];
+        let main = vec![
+            Item::Label(".L1".into()),
+            inst("CALLb", vec![mc::Operand::Symbol("put64".into(), 0)]),
+            inst("BRA8", vec![mc::Operand::Symbol(".L1".into(), 0)]),
+            inst("RTS", vec![]),
+        ];
+        let price = |functions: &[(String, Vec<Item>)]| price_of_functions(functions, Cpu::M68000).expect("priced");
+        let (_, main_clocks) = price(&[("main".into(), main.clone())]);
+        let (_, put_clocks) = price(&[("put64".into(), body())]);
+        let (_, both) = price(&[("main".into(), main), ("put64".into(), body())]);
+        assert_eq!(both, main_clocks + 10 * put_clocks, "put64 is priced for one run, not one per pass");
     }
 }

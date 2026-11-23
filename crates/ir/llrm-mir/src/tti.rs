@@ -1465,6 +1465,15 @@ pub trait Tti {
         false
     }
 
+    /// Whether a recursive call whose result joins a phi, one associative
+    /// operation and the `ret` is turned into an accumulator loop
+    /// (TCE-ACC-PHI, `tailcallelim`). The pin does not; GCC's
+    /// `pass_tail_recursion` does, so a target with GCC in its bar keeps it and
+    /// one measured against the pin alone (wasm) does not.
+    fn eliminates_accumulator_through_join(&self) -> bool {
+        true
+    }
+
     /// Whether `indirectbr` is expanded to a `switch` over block numbers
     /// before selection (`TargetSubtargetInfo::enableIndirectBrExpand`): the
     /// target has no jump through a register to a block's address.

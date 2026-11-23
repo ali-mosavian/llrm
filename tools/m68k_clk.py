@@ -4,6 +4,7 @@
 m68k_clk.py [--cc LLRM_CC] [--cpus 68000,68020] [--levels O1,O2,Os] [--jobs N] FILE.c...
 
 Each program is linked with the support objects of `m68k_exec_sweep`, run under qemu-m68k and priced by the `cycles` example (CYCLES_CPUS).
+The support objects (compiler-rt archive) are built by the compiler under test and linked into BOTH the ours and the gcc executables: cells that call the library (soft float, multiply, divide) compare user code only, and library codegen differences against gcc are invisible.
 An empty clocks cell is unmeasured: no row or uncovered code (`?`); never a number.
 Environment: GCC_M68K (the cross toolchain root), LLRM_CC, CYCLES (the built `cycles` example; default under CARGO_TARGET_DIR).
 """
@@ -125,7 +126,7 @@ def gcc_command(gcc, gcc_root, cpu, level, path, obj, pcrel, flags=()):
     import external_flags
 
     return [gcc, f"-B{gcc_root}/usr/lib/gcc-cross/m68k-linux-gnu/15/", f"-B{gcc_root}/usr/m68k-linux-gnu/bin/",
-            "-nostdlib", "-w", "-msoft-float", *(["-mpcrel"] if pcrel else []), f"-mcpu={cpu}", f"-{level}",
+            "-nostdlib", "-w", "-msoft-float", *external_flags.flags("none", (), 15), *(["-mpcrel"] if pcrel else []), f"-mcpu={cpu}", f"-{level}",
             *external_flags.GCC_DIALECT, *external_flags.gcc_source_defines(Path(path).read_text() if Path(path).is_file() else ""), *external_flags.gcc_program_flags(flags), *(["-isystem", os.environ["M68K_GCC_HEADERS"]] if os.environ.get("M68K_GCC_HEADERS") else []), "-isystem", str(ROOT / "runtime/shared/posix"), "-c", str(path), "-o", str(obj)]
 
 

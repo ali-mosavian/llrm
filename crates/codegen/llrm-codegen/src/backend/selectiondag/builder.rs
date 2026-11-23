@@ -1491,6 +1491,9 @@ impl Builder<'_> {
                 let copy = self.dag.get_copy_to_reg(entry_node, reg, value);
                 self.dag.set_root(copy);
             }
+            if self.arrives_in_virtual_register(arg, value) {
+                continue;
+            }
             if outside.contains(&arg) {
                 let reg = self.info.create_reg(arg);
                 self.copy_value_to_register(Operand::Value(arg), reg, ISD::AnyExtend)?;
@@ -1684,6 +1687,9 @@ impl Builder<'_> {
                 let entry = self.dag.entry_node();
                 let copy = self.dag.get_copy_to_reg(entry, reg, value);
                 self.dag.set_root(copy);
+            }
+            if self.arrives_in_virtual_register(arg, value) {
+                continue;
             }
             if outside.contains(&arg) {
                 let reg = self.info.create_reg(arg);
@@ -3777,6 +3783,27 @@ impl Builder<'_> {
         }
         let copy = self.dag.get_copy_from_reg(entry, reg, reg_vt);
         Ok(if reg_vt == vt { copy } else { self.dag.get_node(ISD::Truncate, vt, &[copy]) })
+    }
+
+    /// `LowerArguments`: an argument that is a `CopyFromReg` of a virtual
+    /// register (an `AssertZext` around it aside) is that register to the other
+    /// blocks, "skipping an unnecessary vreg" and the second copy into it.
+    /// Whether it was.
+    fn arrives_in_virtual_register(
+        &mut self,
+        arg: ValueId,
+        value: SDValue,
+    ) -> bool {
+        let mut res = value;
+        if self.dag.opcode(res) == ISD::AssertZext {
+            res = self.dag.operand(res, 0);
+        }
+        if self.dag.opcode(res) != ISD::CopyFromReg {
+            return false;
+        }
+        let super::dag::NodeData::Register(reg) = self.dag.node(self.dag.operand(res, 1)).data else { return false };
+        self.info.value_regs.insert(arg, reg);
+        true
     }
 
     /// `CopyValueToVirtualRegister`.

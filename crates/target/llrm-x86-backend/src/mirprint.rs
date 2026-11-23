@@ -228,6 +228,12 @@ fn cell(
             let a = addr.expect("an address");
             Ok(format!("{base}, {}, {}, {}, $noreg", index.0, index.1, a.disp + mem.offset))
         }
+        // A function's or a datum's address outside the module: named by its
+        // index, for reading; no symbol is declared for it.
+        Some(Space::External) => {
+            let a = addr.expect("an address");
+            Ok(format!("{base}, {}, {}, @ext{} + {}, $noreg", index.0, index.1, a.index, a.disp + mem.offset))
+        }
         Some(other) => Err(format!("an address in {other:?}")),
     }
 }
@@ -249,6 +255,9 @@ fn symbolic(
     imm: &Imm,
     symbols: &mut BTreeSet<i64>,
 ) -> Result<String, String> {
+    if let Some(addr) = imm.address.as_ref().filter(|a| a.space == Space::External) {
+        return Ok(format!("@ext{} + {}", addr.index, addr.disp + imm.value));
+    }
     let Some(addr) = imm.address.as_ref().filter(|a| a.space == Space::Segment) else {
         return Err("an immediate address outside the data segment".to_owned());
     };
@@ -416,6 +425,9 @@ fn instruction(
                 )
                 .unwrap();
             }
+            (defines, uses) if llrm_support::env_flag!("LLRM_MIR_PRINT_LENIENT") => {
+                writeln!(out, "    ; anchor: defines {defines:?} uses {uses:?}").unwrap()
+            }
             _ => return Err("an anchor of other than one value".to_owned()),
         },
         ("", None, []) if what.op == llrm_lir::Operation::Return => {
@@ -511,6 +523,42 @@ fn instruction(
             };
             writeln!(out, "    {}{}{form} {}, {right}, {eflags}", op.to_uppercase(), bits(m.width)?, cell(m, symbols)?)
                 .unwrap()
+        }
+        // The carry half of a wide add of a cell (`add [c], 1` then `adc [c+4], 0`).
+        (op @ ("adc" | "sbb"), Some(Loc::Mem(m)), [Loc::Mem(read), rhs]) if read == m => {
+            let (form, right) = match rhs {
+                Loc::Held(b) => ("mr", vreg(b)?),
+                Loc::Imm(i) => (imm("mi", m.width), immediate(i, symbols)?),
+                _ => return Err(format!("{op} to a cell from that source")),
+            };
+            writeln!(
+                out,
+                "    {}{}{form} {}, {right}, implicit-def dead $eflags, implicit $eflags",
+                op.to_uppercase(),
+                bits(m.width)?,
+                cell(m, symbols)?
+            )
+            .unwrap()
+        }
+        // A call through a cell (`call [table + 4 * index]`).
+        ("call", None, [Loc::Mem(target)]) if what.indirect => {
+            let used: String =
+                one.requires.iter().map(|(held, r)| format!(", implicit ${}", copy_register(*r, held.width))).collect();
+            let made: String = one
+                .delivers
+                .iter()
+                .map(|(held, r)| format!(", implicit-def ${}", copy_register(*r, held.width)))
+                .collect();
+            let (form, saved) = if sp == "rsp" { ("CALL64m", "csr_64") } else { ("CALL32m", "csr_32") };
+            writeln!(
+                out,
+                "    {form} {}, {saved}, implicit ${sp}, implicit $ssp, implicit-def ${sp}, implicit-def $ssp{used}{made}",
+                cell(target, symbols)?
+            )
+            .unwrap();
+            for (held, register) in &one.delivers {
+                writeln!(out, "    {} = COPY ${}", vreg(held)?, copy_register(*register, held.width)).unwrap();
+            }
         }
         // A call through a register.
         ("call", None, [Loc::Held(target)]) if what.indirect => {
@@ -718,11 +766,20 @@ fn instruction(
             let code = condition(&format!("j{}", &set[3..])).unwrap_or(0);
             writeln!(out, "    SETCCm {}, {code}, implicit $eflags", cell(m, symbols)?).unwrap()
         }
-        ("cmp", None, [Loc::Mem(m), Loc::Imm(i)]) => {
-            writeln!(out, "    CMP{}{} {}, {}, implicit-def $eflags", bits(m.width)?, imm("mi", m.width), cell(m, symbols)?, immediate(i, symbols)?).unwrap()
+        (op @ ("cmp" | "test"), None, [Loc::Mem(m), Loc::Imm(i)]) => {
+            writeln!(
+                out,
+                "    {}{}{} {}, {}, implicit-def $eflags",
+                op.to_uppercase(),
+                bits(m.width)?,
+                imm("mi", m.width),
+                cell(m, symbols)?,
+                immediate(i, symbols)?
+            )
+            .unwrap()
         }
-        ("cmp", None, [Loc::Mem(m), Loc::Held(a)]) => {
-            writeln!(out, "    CMP{}mr {}, {}, implicit-def $eflags", bits(a.width)?, cell(m, symbols)?, vreg(a)?).unwrap()
+        (op @ ("cmp" | "test"), None, [Loc::Mem(m), Loc::Held(a)]) => {
+            writeln!(out, "    {}{}mr {}, {}, implicit-def $eflags", op.to_uppercase(), bits(a.width)?, cell(m, symbols)?, vreg(a)?).unwrap()
         }
         ("cmp", None, [Loc::Held(a), Loc::Mem(m)]) => {
             writeln!(out, "    CMP{}rm {}, {}, implicit-def $eflags", bits(a.width)?, vreg(a)?, cell(m, symbols)?).unwrap()
@@ -855,6 +912,26 @@ fn instruction(
             vreg(a)?
         )
         .unwrap(),
+        // `LLRM_MIR_PRINT_LENIENT=1`: a view for reading copies and phis, not
+        // MIR the pin can read: an operation printed here is a comment.
+        _ if llrm_support::env_flag!("LLRM_MIR_PRINT_LENIENT") => {
+            let names = |locs: &[Loc]| -> String {
+                locs.iter()
+                    .map(|loc| match loc {
+                        Loc::Held(held) => vreg(held).unwrap_or_else(|_| "?".to_owned()),
+                        Loc::Mem(m) => {
+                            let part = |held: &Option<Held>| {
+                                held.as_ref().map_or("-".to_owned(), |h| vreg(h).unwrap_or_else(|_| "?".to_owned()))
+                            };
+                            format!("[base {} index {} disp {}]", part(&m.base), part(&m.index), m.addr.map_or(0, |a| a.disp) + m.offset)
+                        }
+                        other => format!("{other:?}").chars().take(24).collect(),
+                    })
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            };
+            writeln!(out, "    ; {name}: {} <- {}", names(&what.dests), names(&what.sources)).unwrap()
+        }
         _ => return Err(format!("`{name}` ({:?}) with {} destinations and {} sources: {:?} <- {:?}", what.op, what.dests.len(), what.sources.len(), what.dests, what.sources)),
     }
     Ok(())
@@ -1482,6 +1559,27 @@ mod tests {
         assert!(text.contains("%2 = SETCCr 13, implicit $eflags"), "{text}");
     }
 
+    /// `test byte [cell], imm` (a flag bit of a table entry, QB `repl_relink`)
+    /// was refused, so `LLRM_MIR_PRINT=repl_relink` printed nothing, and so
+    /// was a call through or a load from an address outside the module
+    /// (`@ext`).
+    #[test]
+    fn test_a_test_of_a_cell_and_an_external_address_print() {
+        use llrm_lir::{Addr, Mem, Space};
+        let cell = Loc::Mem(Mem::new(Some(Addr::new(Space::External, 3)), 1));
+        let test = insn(
+            "test",
+            Operation::Compare,
+            vec![],
+            vec![cell.clone(), Loc::Imm(Imm { value: 4, width: 1, address: None })],
+        );
+        let ret = insn("", Operation::Return, vec![], vec![]);
+        let blocks = vec![Block::from(LirBlock::new(0, vec![test, ret]))];
+        let body = LirBody::new("t", 0, blocks, IndexMap::default(), IndexMap::default());
+        let text = mir(&body, &IndexMap::default()).expect("prints");
+        assert!(text.contains("TEST8mi $noreg, 1, $noreg, @ext0 + 3, $noreg, 4, implicit-def $eflags"), "{text}");
+    }
+
     /// `cmp [cell], reg` was refused ("`cmp` ... 2 sources"), so
     /// `_bench_jpeg_fixed` at m32 -Os never reached the pin's greedy and the
     /// TA-10 spill could not be compared with it.
@@ -1730,6 +1828,35 @@ mod tests {
             "{text}"
         );
         assert!(text.contains("%4 = COPY $rsi\n    %5 = COPY $rdi\n    %6 = COPY $rcx"), "{text}");
+    }
+
+    /// `adc [cell], imm` (the high half of QB's 64-bit instruction counter, `EXEC_COUNT`) was refused ("`adc` (Binary) with 1 destinations and 2
+    /// sources"), so `exec_loop` at m32 never reached `LLRM_MIR_PRINT`: the pin's MIR of it could not be compared with ours.
+    #[test]
+    fn test_an_add_with_carry_to_a_cell_prints_as_adc32mi() {
+        use llrm_lir::Mem;
+        let cell = Mem { width: 4, ..Mem::new(None, 0) };
+        let adc = insn("adc", Operation::Binary, vec![Loc::Mem(cell.clone())], vec![Loc::Mem(cell), Loc::Imm(Imm { value: 0, width: 4, address: None })]);
+        let ret = insn("", Operation::Return, vec![], vec![]);
+        let blocks = vec![Block::from(LirBlock::new(0, vec![adc, ret]))];
+        let body = LirBody::new("adc", 0, blocks, IndexMap::default(), IndexMap::default());
+        let text = mir(&body, &IndexMap::default()).expect("prints");
+        assert!(text.contains("ADC32mi") && text.contains("implicit-def dead $eflags, implicit $eflags"), "{text}");
+    }
+
+    /// `call [table + 4 * index]` (QB's opcode handler call) was refused ("`call` (Call) with 0 destinations and 1 sources"), so `exec_loop` at
+    /// m32 printed nothing.
+    #[test]
+    fn test_a_call_through_a_cell_prints_as_call32m() {
+        use llrm_lir::{Addr, Mem, Space};
+        let table = Mem { width: 4, scale: 4, index: Some(Held { value: 2, width: 4, offset: 0 }), ..Mem::new(Some(Addr::new(Space::Segment, 1)), 0) };
+        let what = Semantics { name: Some("call".into()), dests: vec![], sources: vec![Loc::Mem(table)], indirect: true, ..Semantics::new(Operation::Call) };
+        let call = Arc::new(Insn::new(0, None, Some(what), vec![], vec![2]));
+        let ret = insn("", Operation::Return, vec![], vec![]);
+        let blocks = vec![Block::from(LirBlock::new(0, vec![call, ret]))];
+        let body = LirBody::new("callm", 0, blocks, IndexMap::default(), IndexMap::default());
+        let text = mir(&body, &IndexMap::default()).expect("prints");
+        assert!(text.contains("CALL32m $noreg, 4, %2, @seg0 + 1, $noreg, csr_32"), "{text}");
     }
 
     /// `shld` (a double-register shift, the carry of a multi-word shift) was
