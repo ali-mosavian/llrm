@@ -173,7 +173,7 @@ pub struct BuilderTarget {
     /// the DAG's known bits; a target opt-in (z80), none elsewhere. Exit:
     /// the ranges ride on the IR as metadata the builder reads and the DAG
     /// asserts.
-    pub dividend_ranges: std::sync::Arc<HashMap<InstId, DividendRange>>,
+    pub dividend_ranges: std::sync::Arc<IdMap<InstId, DividendRange>>,
     /// A dense switch may be a jump table: the target prices one (the MIR pass
     /// reads the same cost).
     pub jump_tables: bool,
@@ -377,7 +377,7 @@ impl BuilderTarget {
     /// ([`BuilderTarget::dividend_ranges`]).
     pub fn with_dividend_ranges(
         mut self,
-        ranges: HashMap<InstId, DividendRange>,
+        ranges: IdMap<InstId, DividendRange>,
     ) -> BuilderTarget {
         self.dividend_ranges = std::sync::Arc::new(ranges);
         self

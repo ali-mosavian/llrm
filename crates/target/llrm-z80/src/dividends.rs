@@ -12,9 +12,9 @@
 use llrm_codegen::backend::selectiondag::builder::DividendRange;
 use llrm_codegen::backend::valuefacts::ValueFacts;
 use llrm_mir::datalayout::DataLayout;
-use llrm_mir::module::{Function, Module, Operand};
+use llrm_mir::dense::IdMap;
+use llrm_mir::module::{Function, InstId, Module, Operand};
 use llrm_mir::opcode::{BinaryOp, Opcode};
-use llrm_support::hash::HashMap;
 
 /// The range of the dividend of every 32-bit divide or remainder of
 /// `function` that the middle end proves narrower than the type.
@@ -22,9 +22,9 @@ pub fn dividend_ranges(
     module: &Module,
     function: &Function,
     layout: &DataLayout,
-) -> HashMap<llrm_mir::module::InstId, DividendRange> {
+) -> IdMap<InstId, DividendRange> {
     let facts = ValueFacts::new(module, layout, function);
-    let mut ranges = HashMap::default();
+    let mut ranges = IdMap::new();
     for &block in function.layout() {
         for at in function.iter_block(block) {
             let instruction = function.instruction(at);
