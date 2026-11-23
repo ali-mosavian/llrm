@@ -322,6 +322,7 @@ pub fn compiled(
                 options.isel,
                 &*options.arch,
                 &options.libcalls,
+                options.object_format == "elf",
             )
         })?;
         // What a frontend asks the linker for though nothing names it.
@@ -433,6 +434,7 @@ pub fn assembled_module(
             options.isel,
             &*options.arch,
             &options.libcalls,
+            options.object_format == "elf",
         )
     })?;
     let mut assembled = assembled;
