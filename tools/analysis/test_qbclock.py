@@ -51,3 +51,10 @@ def test_a_refused_module_fails_and_is_not_compiled_by_gcc(tmp_path):
     run = compile_line(env, "m64", "ours")
     assert run.returncode != 0 and "refused" in run.stderr, run.stderr
     assert "bin/gcc" not in log.read_text(), "gcc compiled the refused module"
+
+
+def test_gcc_at_m32_takes_fast_excess_precision(tmp_path):
+    """pfpu.c's constexpr doubles do not compile for gcc -m32 under x87 excess precision (the gcc column built nothing)."""
+    env, log = rig(tmp_path)
+    assert compile_line(env, "m32", "gcc").returncode == 0
+    assert "-fexcess-precision=fast" in log.read_text().split()

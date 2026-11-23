@@ -47,7 +47,9 @@ def cc(argv, env=os.environ):
         return subprocess.call(["gcc", f"-{arch}", "-no-pie", *argv, "-latomic"])
     if variant == "gcc":
         args = ["-std=c2x" if one == "-std=c23" else one for one in argv]
-        return subprocess.call(["gcc", *args, *bar_flags(arch, gcc_major()), "-D__cdecl="])
+        # gcc -m32 -std=c2x rejects pfpu.c's `constexpr` doubles under x87 excess precision: the same flag the old column used.
+        fast = ["-fexcess-precision=fast"] if arch == "m32" else []
+        return subprocess.call(["gcc", *args, *bar_flags(arch, gcc_major()), *fast, "-D__cdecl="])
     if variant == "clang":
         return subprocess.call([os.path.join(pin, "clang"), *argv, *bar_flags(arch)])
     drop, kept = False, []
