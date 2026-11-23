@@ -4,6 +4,7 @@
 
 mod any_extend_shared;
 mod far_tail_call;
+mod index_far_displacement;
 mod stack_coloring;
 mod stacksave_vla_loop;
 #[path = "../support/mod.rs"]
