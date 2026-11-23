@@ -2,7 +2,7 @@
 
 # Backend phases
 
-From the `//!` headers of `crates/codegen/llrm-codegen/src/backend`: 162 documented, 1 undocumented.
+From the `//!` headers of `crates/codegen/llrm-codegen/src/backend`: 163 documented, 0 undocumented.
 
 | Name | Summary | Runs | Page |
 |---|---|---|---|
@@ -16,7 +16,7 @@ From the `//!` headers of `crates/codegen/llrm-codegen/src/backend`: 162 documen
 | arrival | Finds how long a parameter stays in the register its convention passed it in, from the machine code. | `debuginfo.rs`, for 32-bit `-g` output: the parameter's location list is | [arrival](arrival.md) |
 | asm | The result of code layout: a body's bytes, where each instruction landed and the relocations that must follow, as the object writer needs them. | `layout.rs`, `objbuild.rs`. | [asm](asm.md) |
 | assemble | Takes a MIR module to masm, as `llc` takes a module to an object: each defined function selected and put through the machine phases, each defined variable's data, and the symbols both name. | Once per module. Per-function candidates are described above; the gating | [assemble](assemble.md) |
-| assignment_tracking | `AssignmentTrackingAnalysis`: where each variable of a function lives, from its `#dbg_assign` records and the stores they name, as a table of locations the code generator emits. |  | [assignment_tracking](assignment_tracking.md) |
+| assignment_tracking | `AssignmentTrackingAnalysis`: where each variable of a function lives, from its `#dbg_assign` records and the stores they name, as a table of locations the code generator emits. | In the driver, once per module before code generation, when the module carries `#dbg_assign` records (`tracked`, `module_rewritten`). | [assignment_tracking](assignment_tracking.md) |
 | bitcounts | Expands `llvm.ctpop`, `llvm.ctlz` and `llvm.cttz` into shifts, masks and adds in MIR before instruction selection, for the targets whose description lists them under `expand`. | Once per module in `driver::optimized`, before the odd widths are promoted, | [bitcounts](bitcounts.md) |
 | blockaddress | The address of a block (`blockaddress`) as a symbol: one per address-taken block, named by its function and its MIR block, so code and data in any module order can name it before the function that holds it is lowered. | Named by `builder`, `globals`. | [blockaddress](blockaddress.md) |
 | bodyfacts | Facts about the definitions of a body's values that the passes around the allocator ask: which values are literals, addresses or copies, which loads of a cell hold until their last use, and what may write a cell. | `spiller`, `ssaspill`, `constrain`, `floatassign`, `peep`, `greedy::remat`. | [bodyfacts](bodyfacts.md) |
@@ -92,7 +92,7 @@ From the `//!` headers of `crates/codegen/llrm-codegen/src/backend`: 162 documen
 | leaffold | A constant a leaf block makes for a join, made in the block that jumps to it. | Phase 1 of the machine phases, after `SharedConstants`, before `SsaSpill`. | [leaffold](leaffold.md) |
 | leaopt | Two address computations that differ only in a displacement are one: LLVM's `X86OptimizeLEAs` ([X86OptimizeLEAs.cpp](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86OptimizeLEAs.cpp)). | A machine phase after `machinesink` and before `phielim` | [leaopt](leaopt.md) |
 | legalize | Promotes the integers of an odd width (i2..i63 but 8, 16 and 32) to the next machine width, in MIR before instruction selection. | Once per module in `driver::optimized`, after `minmax_expanded` and before | [legalize](legalize.md) |
-| libcall_choice | Which operations a size-built module calls a runtime routine for, and which it expands inline, by the bytes of the whole linked program. |  | [libcall_choice](libcall_choice.md) |
+| libcall_choice | Which operations a size-built module calls a runtime routine for, and which it expands inline, by the bytes of the whole linked program. | Called by a target's libcall table (`llrm-m68k` `libcalls.rs`) at `-Os`, once per module. | [libcall_choice](libcall_choice.md) |
 | libmcalls | Turns the rounding intrinsics x87 has no instruction for into calls of the C library: `llvm.floor.f64` is a call of `floor`. | Once per module in `driver::optimized`, after the pipeline: the optimizer | [libmcalls](libmcalls.md) |
 | licm_core | The target-neutral half of early `MachineLICM`: which loops have a preheader, which values a loop reads from outside, which copies a loop phi takes, and the walk that moves what the target's policy calls hoistable to the end of the preheader. | Named by `machinelicm`. | [licm_core](licm_core.md) |
 | lifetimes | Where a block local's bytes are live, from its lifetime markers, so that locals never live together can share a frame slot. | `isel` takes the intervals in its own instruction numbering; `slots` then | [lifetimes](lifetimes.md) |
@@ -153,7 +153,7 @@ From the `//!` headers of `crates/codegen/llrm-codegen/src/backend`: 162 documen
 | slotcopies | Keeps one frame cell where a value is copied from a cell into a spill cell. | A sub-pass of [`crate::backend::peephole`](peephole.md), after `postrasink`. | [slotcopies](slotcopies.md) |
 | slots | Lets two values share one frame slot when they are never live together, so a frame holds the most that is live at once, not the sum of all spills. | - `crate::backend::spiller`, which shares spill slots by the live range of | [slots](slots.md) |
 | spillplacement | Decides, for each value being split, which edge bundles hold it in a register and which on the stack. | Not a pass: `crate::backend::splitkit` queries it for each value it | [spillplacement](spillplacement.md) |
-| splitparams | undocumented | | [source](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/splitparams.rs) |
+| splitparams | Splits the live range of an argument register where the calls begin, so the frame and the kept registers can wait for them. | On SSA, before the phis go, after every pass that moves values. Only where | [splitparams](splitparams.md) |
 | stackcoloring | StackColoring ([source](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/CodeGen/StackColoring.cpp#L1)), shared by every target: the static allocas whose lifetimes never overlap share one frame object. | - [`crate::backend::selectiondag::dag_function`](selectiondag.md), which groups the allocas | [stackcoloring](stackcoloring.md) |
 | stackusage | How much stack a program may use, as gcc's `-fstack-usage` and `-Wstack-usage` report it. | `elide_checks` is the `stack checks` step of assembly, once per module. | [stackusage](stackusage.md) |
 | statustest | An x87 compare read from the status word: `fnstsw ax; test ah, mask; jcc` for `fnstsw ax; sahf; jcc`. | After allocation, before the peephole optimizer, on a target whose profile | [statustest](statustest.md) |

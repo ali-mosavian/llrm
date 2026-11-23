@@ -16,6 +16,9 @@
 //! are zero. The `trunc` of the counter is what the vectorizer already widens
 //! to a narrow `vec.ind`.
 //!
+//! # Runs
+//! Inside `loopvectorize`, on the integer chains of a loop's induction before the plan is costed.
+//!
 //! # Example
 //! `(i & 15) + 1` with `i: i64` feeding a 16-bit multiply becomes
 //! `sext ((trunc i to i16) & 15) + 1)`: one `<8 x i16>` chain, not a

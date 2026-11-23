@@ -44,6 +44,8 @@ share_congruent_phis 1
 post_ra_tail_duplicate 1
 # Tail-merge guards T14 and D1 lifted: see CpuTable::tail_merge_pin_faithful.
 tail_merge_pin_faithful 1
+# DEVIATE TM-PAIR (owner w12, exit 2026-12-13): see CpuTable::tail_merge_pairs_at_size.
+tail_merge_pairs_at_size 1
 [clocks]
 alu_rr              =
 cmov                =

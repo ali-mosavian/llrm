@@ -11,6 +11,9 @@
 //!
 //! DEVIATE 1: no lane-crossing check (MIR has no vectors).
 //!
+//! # Runs
+//! In InstCombine's select visit (`combine_visit_select`) and in `combine_select_equivalence`.
+//!
 //! # Example
 //! ```text
 //! %b = select i1 %c, i8 %q, i8 2          %b = select i1 true, i8 %q, i8 2
