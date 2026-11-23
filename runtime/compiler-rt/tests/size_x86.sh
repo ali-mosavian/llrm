@@ -6,6 +6,8 @@ set -e
 cd "$(dirname "$0")/.."
 OPT=${1:-Os}; D=${LLRM_CC_DIR:-$HOME/targets/gs-out/rbase}; CRT=${COMPILER_RT:-$HOME/scratch/llvm-src-m16/compiler-rt/lib/builtins}
 S=${LIBGCC_SRC:-$HOME/scratch/sf-libgcc-src/libgcc}; T=$(mktemp -d); trap 'rm -r $T' EXIT
+# the shared bar flags (tools/external_flags.py), the host gcc's major picks the gcc-15 only ones
+GCC_FLAGS=$(python3 "$(dirname "$0")/../../../tools/external_flags.py" --target x86 --reloc=-fno-pic --reloc=-fno-pie --gcc-major "$(gcc -dumpversion | cut -d. -f1)")
 cc1() { LLRM_CC_TARGET=x86_32-linux $D/llrm-cc -march=i486 -$OPT -c "$@" 2>$T/err || { echo "  compile failed: $(head -c 100 $T/err)"; return 1; }; }
 ours() { LLRM_CC_TARGET=x86_32-linux $D/llrm-cc -march=i486 -$OPT -DSF_INTABI=1 -include stdint.h -include config/x86_m32/config.h -c "$@" 2>$T/err || { echo "  compile failed: $(head -c 100 $T/err)"; return 1; }; }
 t() { obj_bytes "$1"; }
@@ -15,8 +17,8 @@ echo "ours exports: $(nm -g --defined-only $(ls $T/*.o | grep -v /c_) | awk 'NF=
 tot=0; for n in addsf3 subsf3 mulsf3 divsf3 negsf2 fixsfsi fixunssfsi floatsisf floatunsisf comparesf2; do
   if cc1 -I$CRT $CRT/$n.c -o $T/c_$n.o; then s=$(t $T/c_$n.o); echo "compiler-rt $n $s"; fi; done
 for n in addsf3 subsf3 mulsf3 divsf3 negsf2 eqsf2 gesf2 lesf2 unordsf2 fixsfsi fixunssfsi floatsisf floatunsisf; do
-  gcc -m32 -march=i486 -$OPT -fno-pic -fno-stack-protector -fcf-protection=none -fno-asynchronous-unwind-tables -I$S/soft-fp -I$S/config/i386 -I$S -I$S/../include -c $S/soft-fp/$n.c -o $T/g_$n.o 2>/dev/null && echo "libgcc-softfp $n $(t $T/g_$n.o)"; done
+  gcc -m32 -march=i486 -$OPT $GCC_FLAGS -I$S/soft-fp -I$S/config/i386 -I$S -I$S/../include -c $S/soft-fp/$n.c -o $T/g_$n.o 2>/dev/null && echo "libgcc-softfp $n $(t $T/g_$n.o)"; done
 for n in adddf3 subdf3 muldf3 divdf3 negdf2 fixdfsi fixunsdfsi floatsidf floatunsidf; do
   if cc1 -I$CRT $CRT/$n.c -o $T/c_$n.o; then echo "compiler-rt $n $(t $T/c_$n.o)"; fi; done
 for n in adddf3 subdf3 muldf3 divdf3 negdf2 eqdf2 gedf2 ledf2 unorddf2 fixdfsi fixunsdfsi floatsidf floatunsidf; do
-  gcc -m32 -march=i486 -$OPT -fno-pic -fno-stack-protector -fcf-protection=none -fno-asynchronous-unwind-tables -I$S/soft-fp -I$S/config/i386 -I$S -I$S/../include -c $S/soft-fp/$n.c -o $T/g_$n.o 2>/dev/null && echo "libgcc-softfp $n $(t $T/g_$n.o)"; done
+  gcc -m32 -march=i486 -$OPT $GCC_FLAGS -I$S/soft-fp -I$S/config/i386 -I$S -I$S/../include -c $S/soft-fp/$n.c -o $T/g_$n.o 2>/dev/null && echo "libgcc-softfp $n $(t $T/g_$n.o)"; done

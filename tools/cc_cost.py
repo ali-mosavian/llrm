@@ -31,6 +31,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import elfsize  # noqa: E402
+import external_flags  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent
 HOME = Path.home()
@@ -65,8 +66,8 @@ def instructions(argv: list[str], env: dict[str, str]) -> int:
 
 def pin_ir_command(src: Path, level: str, march: str, includes: list[str]) -> list[str]:
     """The pin's front end as llrm-cc runs it. `-march` is required: without it clang targets pentium4 +sse2."""
-    return [str(PIN), "-ffp-contract=off", "-target", "i486-unknown-linux-gnu", "-fno-pic", "-fno-stack-protector",
-            "-fno-asynchronous-unwind-tables", f"-march={march}", level, "-fno-builtin", *includes, "-S", "-emit-llvm",
+    return [str(PIN), "-ffp-contract=off", "-target", "i486-unknown-linux-gnu", *external_flags.flags("x86", reloc=("-fno-pic", "-fno-pie")),
+            f"-march={march}", level, "-fno-builtin", *includes, "-S", "-emit-llvm",
             "-Xclang", "-disable-llvm-passes", "-Xclang", "-disable-O0-optnone"]
 
 

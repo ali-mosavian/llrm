@@ -409,6 +409,7 @@ mod tests {
             index: 1,
             base: iced_x86::Register::None,
             segment: iced_x86::Register::None,
+            linked_direct: false,
         };
         assert_eq!(operand(&decoded, &group_only), None);
     }
@@ -428,11 +429,25 @@ mod tests {
             let decoded = insn(&[0x26, 0x8B, 0x87, 0x34, 0x12]);
             let resolver = move |field_offset: i64, literal: i64| {
                 assert_eq!((field_offset, literal), (3, 0x1234));
-                Addr { space, disp: 0x40, index, base: iced_x86::Register::None, segment: iced_x86::Register::None }
+                Addr {
+                    space,
+                    disp: 0x40,
+                    index,
+                    base: iced_x86::Register::None,
+                    segment: iced_x86::Register::None,
+                    linked_direct: false,
+                }
             };
             assert_eq!(
                 operand(&decoded, &resolver),
-                Some(Addr { space, disp: 0x40, index, base: iced_x86::Register::BX, segment: iced_x86::Register::ES })
+                Some(Addr {
+                    space,
+                    disp: 0x40,
+                    index,
+                    base: iced_x86::Register::BX,
+                    segment: iced_x86::Register::ES,
+                    linked_direct: false,
+                })
             );
         }
     }

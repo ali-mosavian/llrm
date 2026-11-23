@@ -5811,6 +5811,77 @@ fn an_extern_global_read_at_m64_pie_is_loaded_through_the_got() {
     assert!(listing.lines().any(|line| line.trim().starts_with("mov eax, dword ptr [")), "{listing}");
 }
 
+/// `direct-access-external-data` (clang `-fdirect-access-external-data`):
+/// `TargetMachine::shouldAssumeDSOLocal` takes a non-TLS external variable as
+/// local, so a PIE reads it with one `mov eax, [rip + g]` (copy relocation).
+/// Ours ignored the flag and loaded the GOT entry on every trip of the loop.
+#[test]
+fn an_extern_global_read_in_a_loop_at_m64_pie_is_direct_under_the_flag() {
+    let listing_of = |flag: &str| {
+        let text = format!(
+            "target datalayout = \"@m64-datalayout@\"\n\
+             target triple = \"x86_64-unknown-linux-gnu\"\n\
+             @g = external global i32\n\
+             define i32 @f(i32 %n) {{\nentry:\n  br label %l\nl:\n  %i = phi i32 [ 0, %entry ], [ %j, %l ]\n  \
+             %a = phi i32 [ 0, %entry ], [ %s, %l ]\n  %v = load volatile i32, ptr @g\n  %s = add i32 %a, %v\n  \
+             %j = add i32 %i, 1\n  %c = icmp slt i32 %j, %n\n  br i1 %c, label %l, label %x\nx:\n  ret i32 %s\n}}\n\
+             !llvm.module.flags = !{{!0, !1{flag}}}\n!0 = !{{i32 8, !\"PIC Level\", i32 2}}\n\
+             !1 = !{{i32 2, !\"PIE Level\", i32 2}}\n{extra}",
+            flag = if flag.is_empty() { "" } else { ", !2" },
+            extra = if flag.is_empty() { String::new() } else { format!("!2 = !{{i32 1, !\"{flag}\", i32 1}}\n") },
+        );
+        let (built, _) = compiled(&flags(&["-m64", "-O2", "--isel=dag"]), &text, "f").unwrap();
+        llrm_codegen::backend::masm::text(&built).unwrap()
+    };
+    let pin = listing_of("");
+    assert!(!pin.contains("ptr g"), "premise: without the flag the read goes through the GOT\n{pin}");
+    let direct = listing_of("direct-access-external-data");
+    assert!(direct.contains("ptr g"), "the flag makes the read `mov eax, [rip + g]`\n{direct}");
+}
+
+/// The address of an external variable under `direct-access-external-data` is
+/// `lea r, [rip + sym]`. The listing read `mov rax, offset sym` either way and
+/// the encoder made every external immediate a GOT load, so the flag saved
+/// the loads but `&stdout` still cost one; first made direct, it encoded
+/// `mov rax, [rip + sym]`, the variable's contents (QB `gd_set_mode` copied
+/// a palette from its first eight bytes and crashed).
+#[test]
+fn the_address_of_an_extern_global_at_m64_pie_is_a_lea_under_the_flag() {
+    let relocation = |flag: &str| {
+        let text = format!(
+            "target datalayout = \"@m64-datalayout@\"\ntarget triple = \"x86_64-unknown-linux-gnu\"\n\
+             @e = external global ptr\ndefine ptr @addr() {{\n  ret ptr @e\n}}\n\
+             !llvm.module.flags = !{{!0, !1{flag}}}\n!0 = !{{i32 8, !\"PIC Level\", i32 2}}\n\
+             !1 = !{{i32 2, !\"PIE Level\", i32 2}}\n{extra}",
+            flag = if flag.is_empty() { "" } else { ", !2" },
+            extra = if flag.is_empty() { String::new() } else { format!("!2 = !{{i32 1, !\"{flag}\", i32 1}}\n") },
+        );
+        let (built, _) = compiled(&flags(&["-m64", "-O2", "--isel=dag"]), &text, "f").unwrap();
+        let object = llrm_codegen::backend::objbuild::built(
+            &built,
+            "f.ll",
+            llrm_codegen::backend::objbuild::CodeLayout::OneSegment,
+            llrm_target::Target::objects(&llrm_x86_m64::M64),
+        )
+        .unwrap()
+        .object;
+        let text = object.sections.iter().find(|one| one.role == llrm_object::Role::Text).expect("a text section");
+        let to_e: Vec<_> = text
+            .relocs
+            .iter()
+            .filter(|one| matches!(one.target, llrm_object::Target::Symbol(at) if object.symbols[at].name == "e"))
+            .collect();
+        assert_eq!(to_e.len(), 1, "premise: one relocation, to `e`");
+        // `REX.W op modrm disp32`: the opcode sits two bytes before the field.
+        (to_e[0].kind, text.image[to_e[0].at - 2])
+    };
+    let got = llrm_x86::mc::fixup::got_pc_rel(4).kind;
+    assert_eq!(relocation(""), (got, 0x8b), "premise: without the flag `mov rax, [rip + e@GOTPCREL]`");
+    let (kind, opcode) = relocation("direct-access-external-data");
+    assert_ne!(kind, got, "no GOT entry");
+    assert_eq!(opcode, 0x8d, "`lea rax, [rip + e]`, not `mov rax, [rip + e]` (the contents)");
+}
+
 /// A symbol's address pushed as a stack argument at m64 (static code: `push
 /// offset g`, an absolute sign-extended imm32) had no field for its relocation
 /// in the object encoder: QB `draw.c` and `help.c` -Os were refused ("push

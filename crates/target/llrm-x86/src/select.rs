@@ -2824,7 +2824,8 @@ pub fn emit_in(
                 load_symbol_zero_extended(into.register, at)
             }
             (Loc::Reg(into), Loc::Imm(imm))
-                if at.bits == 64 && imm.address.is_some_and(|addr| addr.space == Space::External) =>
+                if at.bits == 64
+                    && imm.address.is_some_and(|addr| addr.space == Space::External && !addr.linked_direct) =>
             {
                 got_symbol(into.register, at)
             }
@@ -3339,7 +3340,7 @@ mod sweep_support {
         base: R,
         segment: R,
     ) -> Addr {
-        Addr { space, disp, index, base: base.iced(), segment: segment.iced() }
+        Addr { space, disp, index, base: base.iced(), segment: segment.iced(), linked_direct: false }
     }
 
     pub fn h(

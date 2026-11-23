@@ -2332,6 +2332,13 @@ pub trait Tti {
         false
     }
 
+    /// DEVIATE LASTCALL-NOGROWTH: the `LastCallToStatic` bonus also applies
+    /// where the call's block ends in `unreachable` (the pin: threshold 0, no
+    /// bonus). Off: the pin's.
+    fn inline_last_call_when_growth_barred(&self) -> bool {
+        false
+    }
+
     /// `Tuning::inline_o1_weighs_entry`.
     fn inline_o1_weighs_entry(&self) -> bool {
         false
