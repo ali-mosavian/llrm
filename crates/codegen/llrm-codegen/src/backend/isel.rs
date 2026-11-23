@@ -7318,7 +7318,9 @@ impl Selector<'_, '_, '_> {
             .map(|(full, _)| self.regs().root(full))
             .collect();
         let effects = llrm_mir::memory::of(&self.module.context, &self.callees, function, inst);
+        let inline = matches!(callee, Callee::Inline(..));
         out.push(Arc::new(Insn {
+            inline,
             call: Some(self.listed(effects, disturbs)),
             clobbers: changed.clone().unwrap_or_else(|| call_clobbers(&contract, self.segments, &self.cpu.general)),
             clobbers_high: match &placed {

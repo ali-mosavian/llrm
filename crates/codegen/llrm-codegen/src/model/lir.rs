@@ -182,6 +182,9 @@ pub struct Insn {
     pub rematerialized: bool,
     /// Its memory access must happen exactly as written.
     pub volatile: bool,
+    /// Bytes written out as given (inline assembly, an inline intrinsic) that
+    /// stand in a call's place: they may read any flag a call does not.
+    pub inline: bool,
     /// A load of memory that never changes (a constant global:
     /// `isDereferenceableInvariantLoad`).
     pub invariant: bool,
@@ -579,6 +582,7 @@ impl Insn {
             frame_adjust,
             rematerialized,
             volatile,
+            inline,
             invariant,
             memory,
             reads_complete,
@@ -619,6 +623,7 @@ impl Insn {
             frame_adjust: frame_adjust.clone(),
             rematerialized: rematerialized.clone(),
             volatile: volatile.clone(),
+            inline: inline.clone(),
             invariant: invariant.clone(),
             memory: memory.clone(),
             reads_complete: reads_complete.clone(),
@@ -820,6 +825,7 @@ impl Insn {
             frame_adjust: false,
             rematerialized: false,
             volatile: false,
+            inline: false,
             invariant: false,
             memory: None,
             reads_complete: false,

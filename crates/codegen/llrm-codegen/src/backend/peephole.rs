@@ -2943,8 +2943,12 @@ pub fn _flag_effect(
     if one.what.as_ref().is_some_and(|what| what.op == Operation::Return) {
         return (Lanes::new(), every);
     }
-    if one.what.as_ref().is_some_and(|what| what.op == Operation::Call) {
-        return (_exit_flags(), Lanes::new());
+    // A call leaves no flag as it found it and reads none: a callee takes no
+    // flag from its caller (the pin's `CALL` has no `EFLAGS` use and clobbers
+    // it). Reading them all kept a flag live from a handler that began with
+    // a call back round a dispatch loop into its `movzx`.
+    if one.what.as_ref().is_some_and(|what| what.op == Operation::Call) && !one.inline {
+        return (Lanes::new(), every);
     }
     // Bytes this cannot encode -- a relocated operand, an x87 form --
     // still name their instruction, and only a few instructions read

@@ -246,7 +246,9 @@ fn worked_out(
         writes.include(_flag_lanes(0xFFFF_FFFF));
         return Some(Effect { reads: Lanes::new(), writes, moved: Vec::new() });
     }
-    let (reads, mut writes) = _register_effects(regs, bits, one, false, true).or_else(|| _declared(regs, one))?;
+    let (reads, mut writes) = _register_effects(regs, bits, one, false, true)
+        .or_else(|| _declared(regs, one))
+        .or_else(|| _opaque_call(regs, one))?;
     // The x87 compare is a pseudo here, expanded after the stackifier into
     // `fcom; fnstsw ax; sahf`; the pin's MIR has the flags write (`SAHF`) from
     // instruction selection on.
@@ -326,6 +328,22 @@ pub fn _backwards(
     block.insns.iter().rev().fold(live, |live, one| {
         with_effect(regs, bits, one, |effect| effect.map_or_else(|| *universe, |effect| effect.live_before(&live)))
     })
+}
+
+/// A call to a named function whose registers no declaration gives (its
+/// relocated bytes no instruction here decodes): any register may carry an
+/// argument, but no arithmetic flag does, and the callee leaves none as it
+/// found it. Inline bytes, which may read a flag, are not this. Reading
+/// every lane kept a flag live from each handler that opened with such a call
+/// back round a dispatch loop, and refused `xor` before its `movzx`.
+fn _opaque_call(
+    regs: Regs,
+    one: &Insn,
+) -> Option<(Lanes, Lanes)> {
+    one.what.as_ref().filter(|what| what.op == Operation::Call && !what.indirect)?;
+    (!one.inline).then_some(())?;
+    let arithmetic = crate::backend::peephole::_ARITHMETIC_LANES.clone();
+    Some((_universe(regs).minus(&arithmetic), arithmetic))
 }
 
 /// What a call says it reads and writes, for an instruction no decoder covers.

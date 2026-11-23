@@ -6812,6 +6812,61 @@ fn test_a_price_is_asked_only_for_a_rule_the_target_has() {
     assert!(zeroed_loads(rules(), &body, &cpu).is_err(), "a rule that needs the clock still names its absence");
 }
 
+/// exec_loop -O3 (m32): a dispatch `movzx eax,[ecx]; jmp *table(,eax,4)` kept its
+/// three clock `movzx` because one handler opened with a call, which the flag
+/// model read as reading every flag. The flag stayed live round the loop into
+/// the dispatch, and `xor` was refused on every one of 149 copies.
+fn dispatch_loop_names(inline: bool) -> Vec<String> {
+    let cpu = crate::backend::cpu::profile("486").unwrap().clone();
+    let cell = Loc::Mem(mem(frame(8), 1, RegId::ECX, 0, 4));
+    let load = Arc::new(insn(
+        0,
+        Some((0, 0)),
+        Some(sem(Operation::Extend, "movzx", vec![rl(RegId::EAX, 4)], vec![cell])),
+        vec![],
+        vec![],
+    ));
+    let dispatch = Arc::new(insn(
+        1,
+        Some((1, 1)),
+        Some(Semantics { indirect: true, table: vec![2, 4], ..sem(Operation::Jump, "jmp", vec![], vec![]) }),
+        vec![],
+        vec![],
+    ));
+    let store = Arc::new(Insn { inline, ..insn(2, Some((2, 2)), Some(sem(Operation::Call, "call", vec![], vec![])), vec![], vec![]) });
+    let back = Arc::new(insn(3, Some((3, 3)), Some(semt(Operation::Jump, "jmp", vec![], vec![], Some(0))), vec![], vec![]));
+    // The epilogue's `add esp` writes every flag, so none is live out of the loop.
+    let epilogue = sem(Operation::Binary, "add", vec![rl(RegId::ESP, 4)], vec![rl(RegId::ESP, 4), rl(RegId::EDX, 4)]);
+    let exit = vec![
+        Arc::new(insn(4, Some((4, 4)), Some(epilogue), vec![], vec![])),
+        Arc::new(insn(5, Some((5, 5)), Some(sem(Operation::Return, "ret", vec![], vec![])), vec![], vec![])),
+    ];
+    let mut input = body(
+        "dispatch",
+        0,
+        vec![
+            block(0, vec![load, dispatch], vec![2, 4]).into(),
+            block(2, vec![store, back], vec![0]).into(),
+            block(4, exit, vec![]).into(),
+        ],
+    );
+    input.bits = 32;
+    let made = zeroed_loads(rules(), &input, &cpu).unwrap();
+    names_of(&made)[..2].to_vec()
+}
+
+#[test]
+fn test_a_call_opening_a_handler_does_not_keep_the_dispatch_zero_extension() {
+    assert_eq!(dispatch_loop_names(false), ["xor", "mov"]);
+}
+
+/// Inline bytes are a call too, and may read a flag (`adc`, `setc`): the load
+/// stays a `movzx` before them.
+#[test]
+fn test_inline_bytes_opening_a_handler_keep_the_dispatch_movzx() {
+    assert_eq!(dispatch_loop_names(true), ["movzx", "jmp"]);
+}
+
 /// x_funcptr -O1: `movzx eax, ax` (3 clk on the i486) is `and eax, 0xffff`
 /// (1 clk) where no later instruction reads a flag it would clobber, as
 /// gcc's `X86_TUNE_ZERO_EXTEND_WITH_AND` has it; a branch that reads the
