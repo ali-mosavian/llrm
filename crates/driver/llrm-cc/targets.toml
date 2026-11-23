@@ -9,6 +9,7 @@
 # `llc_mcmodel` (default false) says the backend takes `-mcmodel=` and clang does not (the pin's clang refuses it for m68k): the flag goes to the backend alone.
 # `llc_reloc` (default false) says the backend takes `-relocation-model=`: the driver gives it what clang's `-f[no-]pic` chose.
 # `unroll_at_o1` (default false) makes `-funroll-loops` the default at -O1 (DEVIATE UNROLL-O1: clang marks every loop unroll-disable there, so the pin's -O1 never unrolls).
+# `direct_extern_at_pie` (default false) makes `-fdirect-access-external-data` the default under `-fPIE`, never `-fPIC` (DEVIATE DIRECT-EXTERN-PIE: the pin's clang reads an external variable through the GOT; gcc uses a copy relocation).
 # `thread_jumps_at_o1` (default false) makes `-fthread-jumps` the default at -O1 for the backend (DEVIATE JUMPTHREAD-O1: the pin's -O1 pipeline has no JumpThreadingPass).
 # `speed_rate_at_o1` (default false) makes `-fllrm-speed-rate` the default at -O1 for the backend (DEVIATE SPEED-O1: the byte price at speed counts at -O1 as at -O2; user ruling 2026-11-14, O1-O3 by clocks).
 # `pre_at_o1` (default false) makes `-ftree-pre` the default at -O1 for the backend (DEVIATE PRE-O1: GVN makes a partial redundancy full at -O1 as at -O2; user ruling 2026-11-14, O1-O3 by clocks).
@@ -27,6 +28,7 @@ link = ["cc", "{objects}", "{flags}", "-o", "{output}"]
 llc_reloc = true
 unroll_at_o1 = true
 thread_jumps_at_o1 = true
+direct_extern_at_pie = true
 
 # `run` (optional) is the command that runs an executable of the target, the executable last; the checks use it.
 

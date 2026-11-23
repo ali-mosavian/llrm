@@ -101,6 +101,7 @@ pub fn module_tables(
     defined_dso_local: bool,
 ) -> crate::backend::constpool::Symbols {
     MODULE_TABLES_BUILT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let direct_external_data = module.direct_access_external_data();
     (
         std::rc::Rc::new(
             module.globals.iter().map(|global| global.name.as_deref().unwrap_or("").to_string()).collect(),
@@ -126,6 +127,15 @@ pub fn module_tables(
                         || (defined_dso_local
                             && crate::backend::globals::space(module, llrm_mir::GlobalId(at as u32))
                                 == crate::model::ir::Space::Segment)
+                        // `shouldAssumeDSOLocal`: a declared variable is local
+                        // when the module says its data is accessed directly
+                        // (a copy relocation under -fPIE).
+                        || (direct_external_data
+                            && global.linkage != llrm_mir::module::Linkage::ExternWeak
+                            && matches!(
+                                &global.kind,
+                                llrm_mir::module::GlobalKind::Variable(variable) if variable.initializer.is_none()
+                            ))
                 })
                 .collect()
         }),

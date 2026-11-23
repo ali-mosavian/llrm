@@ -1365,7 +1365,7 @@ pub fn _encoded(
             llrm_x86::mc::fixup::abs_signed_4()
         } else if model == CodeModel::Flat64 {
             let from = code.len() - at;
-            if matches!(one, Loc::Imm(_)) && addr.space == Space::External {
+            if matches!(one, Loc::Imm(_)) && addr.space == Space::External && !addr.linked_direct {
                 llrm_x86::mc::fixup::got_pc_rel(from)
             } else {
                 Fix::pc_rel(4, from)

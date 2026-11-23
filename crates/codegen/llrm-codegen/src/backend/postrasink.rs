@@ -787,6 +787,7 @@ mod tests {
                 index: -(k + 1),
                 base: (RegId::None).iced(),
                 segment: (RegId::None).iced(),
+                linked_direct: false,
             };
             crate::model::ir::Mem { through: RegId::BP, ..crate::model::ir::Mem::new(Some(addr), 2) }
         };
@@ -872,6 +873,7 @@ mod tests {
             index: -1,
             base: iced_x86::Register::None,
             segment: iced_x86::Register::None,
+            linked_direct: false,
         };
         let cell = crate::model::ir::Mem { through: RegId::BP, ..crate::model::ir::Mem::new(Some(addr), 2) };
         let store = |at, source| {
