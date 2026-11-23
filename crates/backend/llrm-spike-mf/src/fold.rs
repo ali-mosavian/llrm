@@ -195,6 +195,15 @@ fn position<C>(
     function.blocks.iter().position(|block| block.id == id).expect("a block that exists")
 }
 
+/// `MachineBasicBlock::hasAddressTaken`: a table or a `goto *` reaches the
+/// block by its symbol, so no fold may delete or merge it.
+fn address_taken<C>(
+    function: &MFunction<C>,
+    id: u32,
+) -> bool {
+    function.address_symbols.iter().any(|(block, _)| *block == id)
+}
+
 /// `MachineBasicBlock::canFallThrough`: control can run off the end into the
 /// next block, or a branch names the next block ("it can obviously reach, even
 /// though the branch should get folded to fall through implicitly").
@@ -204,7 +213,8 @@ fn can_fall_through<C>(
 ) -> bool {
     let Some(next) = function.blocks.get(at + 1) else { return false };
     !function.blocks[at].insts.last().is_some_and(|last| last.barrier)
-        || analyze(function, at).is_some_and(|branches| branches.taken == Some(next.id) || branches.other == Some(next.id))
+        || analyze(function, at)
+            .is_some_and(|branches| branches.taken == Some(next.id) || branches.other == Some(next.id))
 }
 
 /// The blocks that name `id` in a terminator, and the block before it when
@@ -313,11 +323,20 @@ impl<C, J: Jump> Folder<'_, C, J> {
                 return Step::Done(false);
             }
             let Some(next) = fall_through else { return Step::Done(false) };
+            let named = preds
+                .iter()
+                .any(|&pred| terminators(&self.function.blocks[pred].insts).iter().any(|inst| names(inst, id)));
+            if !named && address_taken(self.function, id) {
+                return Step::Done(false);
+            }
             for pred in preds {
                 replace_uses(self.function, pred, id, next);
             }
-            // nothing names it now, and what fell into it falls into `next`
-            self.function.blocks.remove(at);
+            // nothing names it now, and what fell into it falls into `next`;
+            // an address-taken block stays, as `hasAddressTaken` keeps it
+            if !address_taken(self.function, id) {
+                self.function.blocks.remove(at);
+            }
             return Step::Done(true);
         }
 
@@ -338,6 +357,7 @@ impl<C, J: Jump> Folder<'_, C, J> {
                 && predecessors(self.function, id).len() == 1
                 && prior_successors(self.function, prev) == 1
                 && is_successor(self.function, prev, id)
+                && !address_taken(self.function, id)
             {
                 let block = self.function.blocks.remove(at);
                 self.function.blocks[prev].insts.extend(block.insts);
@@ -519,7 +539,7 @@ impl<C, J: Jump> Folder<'_, C, J> {
             }
             // dead: nothing branches to it and nothing falls into it
             if let Some(now) = self.function.blocks.iter().position(|block| block.id == id) {
-                if now > 0 && predecessors(self.function, id).is_empty() {
+                if now > 0 && predecessors(self.function, id).is_empty() && !address_taken(self.function, id) {
                     self.function.blocks.remove(now);
                     changed = true;
                 }

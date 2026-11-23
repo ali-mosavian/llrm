@@ -522,6 +522,14 @@ pub fn finish_with(
             Operand::Block(id) => function.blocks.iter().position(|block| block.id == *id),
             _ => None,
         })
+        // a block whose address is taken is named by its symbol, so it has a
+        // label
+        .chain(
+            function
+                .address_symbols
+                .iter()
+                .filter_map(|(id, _)| function.blocks.iter().position(|block| block.id == *id)),
+        )
         .collect();
     let inputs = FrameInputs::of(&insts, function, assignment, slots, short);
     let frame_indices = &inputs.frame_indices;
