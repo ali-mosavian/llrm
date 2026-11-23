@@ -638,6 +638,103 @@ pub fn ordered_accesses_plain(
     Ok(())
 }
 
+/// DEVIATE M68K-ATOMIC-INLINE-FRONTEND (owner w9, review 2027-01-31): clang's
+/// M68k target info sets no `MaxAtomicInlineWidth`, so an `_Atomic` access
+/// reaches the module as the generic `__atomic_load(size, src, dst, order)` /
+/// `__atomic_store(size, dst, src, order)` call; CGAtomic inlines it where the
+/// size fits the target's lock-free width. Each such call of at most `native`
+/// bits becomes the plain volatile access through a temporary, as
+/// [`ordered_accesses_plain`] does for the atomic instruction (a target whose
+/// selector has one pattern for `atomic_load_N` and `atomic_store_N`:
+/// M68kInstrAtomics.td).
+pub fn generic_accesses_plain(
+    module: &mut Module,
+    native: u32,
+) -> Result<(), String> {
+    let Some(layout) = module.datalayout.as_deref().and_then(|text| crate::datalayout::DataLayout::parse(text).ok()) else {
+        return Ok(());
+    };
+    let mut found: Vec<(usize, InstId, bool, u32)> = Vec::new();
+    for (at, global) in module.globals.iter().enumerate() {
+        let GlobalKind::Function(function) = &global.kind else { continue };
+        for (_, inst) in function.walk() {
+            let Some(callee) = crate::memory::callee(&module.context, function, inst) else { continue };
+            let load = match module.globals[callee.0 as usize].name.as_deref() {
+                Some("__atomic_load") => true,
+                Some("__atomic_store") => false,
+                _ => continue,
+            };
+            let operands = &function.instruction(inst).operands;
+            let Some(&Operand::Constant(size)) = operands.first() else { continue };
+            let crate::context::ConstantKind::Int(bytes) = module.context.get(size).kind else { continue };
+            let bits = u32::try_from(bytes).unwrap_or(u32::MAX).saturating_mul(8);
+            if operands.len() != 5 || !matches!(bits, 8 | 16 | 32) || bits > native {
+                continue;
+            }
+            // the access the selector would make of any `iN` load: the address must be as aligned as the layout's
+            // ABI alignment of `iN` (an odd address is an address error on a 68000), and a pointer whose alignment
+            // is not known keeps the call
+            let needed = layout.align(&module.context.types, module.context.types.int(bits));
+            let pointer = |at: usize| operands[at];
+            if known_alignment(module, function, pointer(1), &layout) < needed
+                || known_alignment(module, function, pointer(2), &layout) < needed
+            {
+                continue;
+            }
+            found.push((at, inst, load, bits));
+        }
+    }
+    for (at, inst, load, bits) in found {
+        let ty = module.context.types.int(bits);
+        let GlobalKind::Function(function) = &mut module.globals[at].kind else { continue };
+        let operands = function.instruction(inst).operands.clone();
+        let void = function.instruction(inst).ty;
+        let (from, to) = if load { (operands[1], operands[2]) } else { (operands[2], operands[1]) };
+        let read = Opcode::Load { align: None, volatile: load };
+        let value = function.create_instruction(read, ty, vec![from], Flags::default(), None);
+        function.insert(value, crate::edit::Position::Before(inst)).map_err(|why| why.to_string())?;
+        let Some(result) = function.instruction(value).result else { continue };
+        let write = Opcode::Store { align: None, volatile: !load };
+        let stored = function.create_instruction(write, void, vec![Operand::Value(result), to], Flags::default(), None);
+        function.insert(stored, crate::edit::Position::Before(inst)).map_err(|why| why.to_string())?;
+        function.erase(inst).map_err(|why| why.to_string())?;
+    }
+    Ok(())
+}
+
+/// The alignment `generic_accesses_plain` can prove of `pointer`: a global variable's, or a local's; 0 for any other
+/// pointer (a parameter, a pointer loaded or stepped).
+fn known_alignment(
+    module: &Module,
+    function: &crate::module::Function,
+    pointer: Operand,
+    layout: &crate::datalayout::DataLayout,
+) -> u64 {
+    let types = &module.context.types;
+    match pointer {
+        Operand::Constant(id) => match &module.context.get(id).kind {
+            crate::context::ConstantKind::Global(global) => match &module.globals[global.0 as usize].kind {
+                GlobalKind::Variable(variable) => variable.align.unwrap_or_else(|| layout.align(types, variable.ty)),
+                _ => 0,
+            },
+            _ => 0,
+        },
+        Operand::Value(value) => function
+            .walk()
+            .find_map(|(_, inst)| {
+                let instruction = function.instruction(inst);
+                match instruction.opcode {
+                    Opcode::Alloca { allocated, align, .. } if instruction.result == Some(value) => {
+                        Some(align.unwrap_or_else(|| layout.align(types, allocated)))
+                    }
+                    _ => None,
+                }
+            })
+            .unwrap_or(0),
+        _ => 0,
+    }
+}
+
 /// `LowerAtomicPass`, which a target without atomics runs before selection
 /// (wasm without the `atomics` feature): an atomic load or store is a plain
 /// one, a fence is nothing. A read-modify-write and a compare-exchange are

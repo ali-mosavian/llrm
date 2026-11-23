@@ -496,6 +496,8 @@ fn lowered_once(
     let applied = Applied { options, dump: dump.map(Into::into), ..Applied::default() };
     // The pipeline sees an atomic access as a call it cannot move; then the target's own form: the pin selects a
     // plain `move` for an atomic load or store of at most 32 bits (M68kInstrAtomics.td).
+    // DEVIATE M68K-ATOMIC-INLINE-FRONTEND (owner w9, review 2027-01-31): see `atomic::generic_accesses_plain`.
+    program.modules.iter_mut().try_for_each(|module| llrm_mir::atomic::generic_accesses_plain(module, 32))?;
     program.modules.iter_mut().try_for_each(llrm_mir::atomic::hidden)?;
     llrm_transforms::pipeline::applied(&mut program, &applied)?;
     // DEVIATE M68K-ATOMIC-SYNC: a 68020 expands a read-modify-write to a `cas` loop (`shouldExpandAtomicRMWInIR`,
