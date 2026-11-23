@@ -1000,6 +1000,29 @@ pub fn mul_by_constant_stays_in_line(
     !(width == 32 && sized && !(k + zeros >= 8 && (k + zeros) % 8 <= 1 && zeros % 8 == 0))
 }
 
+/// The steps of `x * c` where `mul_by_constant_stays_in_line`: the shifts and
+/// the adds (or subtracts) `decompose_mul` emits, `((x << k) +- x) << z`;
+/// `None` where it is a call.
+pub fn in_line_multiply_steps(
+    width: u32,
+    c: i128,
+) -> Option<(u32, u32)> {
+    if !mul_by_constant_stays_in_line(width, c, false) {
+        return None;
+    }
+    let magnitude = c.unsigned_abs();
+    if magnitude <= 1 {
+        return Some((0, 0));
+    }
+    let zeros = magnitude.trailing_zeros();
+    let odd = magnitude >> zeros;
+    if odd == 1 {
+        return Some((zeros, 0));
+    }
+    let bits = if (odd - 1).is_power_of_two() { odd - 1 } else { odd + 1 };
+    Some((bits.trailing_zeros() + zeros, 1))
+}
+
 /// `x * c` for `c = (2^k +- 1) * 2^z` as the pin's two runs of shift steps,
 /// `(x << k+z) +- (x << z)`, or as one run and a shift of the sum,
 /// `((x << k) +- x) << z`, whichever takes fewer steps; negated for a negative

@@ -142,9 +142,9 @@ impl Tti for Mos6502 {
 
     /// DEVIATE COMMON-INSTS-O1 (owner wasm-3, exit 2026-12-12, row
     /// COMMON-INSTS-O1): the -O2 function pipeline's hoisting and sinking
-    /// SimplifyCFG (L832) also runs at -O1, as before the pin's plain one (L621)
-    /// was mirrored; the flip is not measured here (computed_goto -O1 +369 B,
-    /// word_compare_branches +265 B on 6502 without it).
+    /// SimplifyCFG (L832) also runs at -O1, as before the pin's plain one
+    /// (L621) was mirrored; the flip is not measured here (computed_goto
+    /// -O1 +369 B, word_compare_branches +265 B on 6502 without it).
     fn common_insts_at_o1(&self) -> bool {
         true
     }
@@ -371,6 +371,7 @@ impl Tti for Mos6502 {
             let work = 3 * u64::from(c.add_rec_cost)
                 + 7 * u64::from(c.num_base_adds)
                 + 40 * u64::from(c.num_iv_muls)
+                + u64::from(c.written_work)
                 + 4 * u64::from(c.imm_cost);
             (work, c.num_regs, c.scale_cost, c.setup_cost)
         };
@@ -390,7 +391,8 @@ impl Tti for Mos6502 {
         true
     }
 
-    /// llvm-mos: `n8` makes a 16-bit counter illegal, and LFTR still tests the exit on it.
+    /// llvm-mos: `n8` makes a 16-bit counter illegal, and LFTR still tests the
+    /// exit on it.
     fn allow_illegal_integer_iv(&self) -> bool {
         true
     }
@@ -428,6 +430,21 @@ impl Tti for Mos6502 {
         bits: u32,
     ) -> u32 {
         u32::from(!crate::dagisel::combine::mul_by_constant_stays_in_line(bits, i128::from(step), false))
+    }
+
+    /// `i * 7` the loop writes is a shift-and-add chain a counter stepped by 7
+    /// removes: its instructions (a 16-bit shift is `asl; rol`, an add seven),
+    /// where the baseline read 0 and LSR kept the multiply (copy_runs -O1: the
+    /// 48-trip init loop, `i * 7 + 1` and `i * 5 + 2`, 170 clk a trip against
+    /// llvm-mos's ~100, which strength-reduces both).
+    fn lsr_written_step_work(
+        &self,
+        step: i64,
+        bits: u32,
+    ) -> u32 {
+        let parts = bits.div_ceil(8);
+        crate::dagisel::combine::in_line_multiply_steps(bits, i128::from(step))
+            .map_or(0, |(shifts, adds)| shifts * parts + adds * (3 * parts + 1))
     }
 
     /// DEVIATE LSR-OUTER (hook of x87's #9182): `i * 54` feeding an inner loop
@@ -614,11 +631,11 @@ impl Tti for Mos6502 {
         }
     }
 
-    // llvm-mos's `isLegalAddressingMode`, which reads the widths of the base and
-    // the scaled register: a byte register is the `x` or `y` of an absolute
-    // indexed (`lda g,x`) or indirect indexed (`lda (zp),y`) address, so a
-    // 16-bit base and a byte index fold. Widths not known (0) answer as the
-    // untyped hook does.
+    // llvm-mos's `isLegalAddressingMode`, which reads the widths of the base
+    // and the scaled register: a byte register is the `x` or `y` of an
+    // absolute indexed (`lda g,x`) or indirect indexed (`lda (zp),y`)
+    // address, so a 16-bit base and a byte index fold. Widths not known (0)
+    // answer as the untyped hook does.
     fn is_legal_addressing_mode_typed(
         &self,
         _addr_space: u32,
