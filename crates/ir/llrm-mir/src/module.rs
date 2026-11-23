@@ -1941,6 +1941,15 @@ impl Module {
             && !flags.iter().any(|id| self.flag_named(id, "PIE Level"))
     }
 
+    /// The "direct-access-external-data" module flag (clang
+    /// `-fdirect-access-external-data`): `Module::getDirectAccessExternalData`.
+    pub fn direct_access_external_data(&self) -> bool {
+        let Some((_, flags)) = self.named_metadata.iter().find(|(name, _)| name == "llvm.module.flags") else {
+            return false;
+        };
+        flags.iter().any(|id| self.flag_named(id, "direct-access-external-data"))
+    }
+
     fn flag_named(
         &self,
         id: &MetadataId,
