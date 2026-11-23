@@ -237,6 +237,9 @@ pub struct InlineParams {
     /// DEVIATE LASTCALL-COLD: the `LastCallToStatic` bonus stays at a cold
     /// call site of a caller optimized for size. Off: the pin's.
     pub last_call_in_cold_site: bool,
+    /// DEVIATE LASTCALL-NOGROWTH: the bonus also applies where size growth
+    /// is barred (the call's block ends in `unreachable`). Off: the pin's.
+    pub last_call_when_growth_barred: bool,
     /// Which target's answers `getInstructionCost` and its kin give (D2).
     pub tti: Tti,
 }
@@ -272,6 +275,7 @@ impl InlineParams {
             last_call_to_static: true,
             cold_site_ignores_sinks: false,
             last_call_in_cold_site: false,
+            last_call_when_growth_barred: false,
             tti: Tti::Generic,
         }
     }
@@ -2052,6 +2056,18 @@ impl<'a> Analyzer<'a> {
         let allow_growth = self.allow_size_growth();
         if !allow_growth {
             self.threshold = 0;
+            // DEVIATE LASTCALL-NOGROWTH (gcc `-finline-functions-called-once`,
+            // `Tti::inline_last_call_when_growth_barred`): the pin returns here with
+            // no last-call bonus, so a static function called once before a
+            // noreturn call stays a call; gcc inlines it wherever the call is.
+            if self.params.last_call_when_growth_barred
+                && self.params.last_call_to_static
+                && self.site.caller_size == CallerSize::OptSize
+                && self.site.sole_call_to_local
+            {
+                self.add_cost(-LAST_CALL_TO_STATIC_BONUS);
+                self.static_bonus_applied = LAST_CALL_TO_STATIC_BONUS;
+            }
         } else {
             let mut single_bb_percent = 50;
             let mut vector_percent = VECTOR_BONUS_PERCENT;
