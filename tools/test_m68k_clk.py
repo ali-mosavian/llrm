@@ -102,6 +102,16 @@ def test_gcc_is_hosted_like_ours():
     assert "-ffreestanding" not in command, command
 
 
+def test_gcc_takes_the_shared_external_flags():
+    """The clock column's gcc was built with distro defaults (no -fomit-frame-pointer, stack protector and unwind tables on): every clock bar of the m68k census was against a gcc that is not the bar."""
+    import external_flags
+    import m68k_clk
+
+    command = m68k_clk.gcc_command("gcc", "/", "68000", "Os", "p.c", "p.o", False)
+    for flag in external_flags.flags("none", (), 15):
+        assert flag in command, (flag, command)
+
+
 def _fake_cycles(path, stamp):
     path.write_text(f"#!/bin/sh\necho {stamp}\n")
     path.chmod(0o755)
