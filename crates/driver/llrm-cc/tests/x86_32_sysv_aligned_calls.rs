@@ -37,7 +37,8 @@ fn depths_of(
     function: &str,
 ) -> (Vec<i64>, String) {
     let llc = std::env::var_os("LLRM_LLC").expect("LLRM_LLC is not set: this test needs it and does not skip");
-    let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("sysv-aligned-{target}-{function}-{level}-{}", std::process::id()));
+    let dir = Path::new(env!("CARGO_TARGET_TMPDIR"))
+        .join(format!("sysv-aligned-{target}-{function}-{level}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     let asm = dir.join("a.s");
@@ -91,5 +92,25 @@ fn calls_that_push_alike_pad_neither_the_frame_nor_the_calls() {
         let start = listing.lines().position(|line| line.trim() == "pair proc near").unwrap();
         let body: Vec<&str> = listing.lines().skip(start).take_while(|line| line.trim() != "pair endp").collect();
         assert!(!body.iter().any(|line| line.trim().starts_with("sub esp")), "{level}:\n{}", body.join("\n"));
+    }
+}
+
+/// A four-byte local was not counted where the frame's phase is chosen, so the
+/// phase was four bytes off: the prologue took `sub esp, 16` and the call
+/// another `sub esp, 8` (28 bytes of stack for a 4-byte local and a 4-byte
+/// argument; QuickrBasic m32 -Os +3.04%, `m32_slot_release`). The frame is 8
+/// bytes and no call pads.
+#[test]
+fn a_local_is_counted_where_the_frame_leaves_the_stack_for_the_calls() {
+    for level in ["-O1", "-O2", "-Os"] {
+        let (depths, listing) = depths_of("x86_32-linux", level, "local_alone");
+        assert_eq!(depths.len(), 1, "{level}:\n{listing}");
+        assert!(depths.iter().all(|depth| depth % 16 == 0), "{level}: depths {depths:?}\n{listing}");
+        let start = listing.lines().position(|line| line.trim() == "local_alone proc near").unwrap();
+        let body: Vec<&str> =
+            listing.lines().skip(start).take_while(|line| line.trim() != "local_alone endp").collect();
+        let subs: Vec<&&str> = body.iter().filter(|line| line.trim().starts_with("sub esp")).collect();
+        assert_eq!(subs.len(), 1, "{level}: one adjustment, the prologue's:\n{}", body.join("\n"));
+        assert!(subs[0].trim() == "sub esp, 8", "{level}: an 8-byte frame:\n{}", body.join("\n"));
     }
 }
