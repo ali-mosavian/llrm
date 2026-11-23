@@ -139,16 +139,31 @@ pub fn operand_class(
     index: usize,
 ) -> Option<Class> {
     let desc = local::desc(local::code_of(name)?)?;
-    Class::of_pin(desc.operands.get(index)?.reg_class).map(|class| extension_result(name, class))
+    extension_source(name, desc.operands.get(index)?.reg_class)
 }
 
-/// DEVIATE from the pin, whose `MOVZXd32d16` and `MOVSXd32d16` define and read
-/// an `XR32` and so may be given an address register: `ExpandMOVSZX_RR` then
-/// does `move.w` into a cleared register (`movea.w`, which sign-extends) or
-/// `ext.l` on it (not encodable), and its `MOV16dd` encodes a source `%a0` as
-/// `%d0`. The result and the source of an extension are data registers, for the
-/// emitter and for the passes that widen a class (`widen_compare_operands` read
-/// the table's `XR32` as free).
+/// The class operand `reg_class` of `name` asks for. The source of an extension
+/// is the pin's `XR16`, a 16-bit register: a data register's word here
+/// (`Dr16`), as a value of its own is, so the selector reads it where it is,
+/// as the pin does (`constrainRegClass` narrows it), and the extension reads
+/// two bytes of it.
+fn extension_source(
+    name: &str,
+    reg_class: i16,
+) -> Option<Class> {
+    if (name.starts_with("MOVZX") || name.starts_with("MOVSX")) && u16::try_from(reg_class) == Ok(pin::XR16RegClassID) {
+        return Some(Class::Dr16);
+    }
+    Class::of_pin(reg_class).map(|class| extension_result(name, class))
+}
+
+/// DEVIATE from the pin, whose `MOVZXd32d16` and `MOVSXd32d16` define an `XR32`
+/// and so may be given an address register: `ExpandMOVSZX_RR` then does
+/// `move.w` into a cleared register (`movea.w`, which sign-extends) or `ext.l`
+/// on it (not encodable). The result of an extension is a data register, for
+/// the emitter and for the passes that widen a class (`widen_compare_operands`
+/// read the table's `XR32` as free). The source is the pin's `XR16`, read as it
+/// is ([`extension_source`]).
 fn extension_result(
     name: &str,
     class: Class,
@@ -269,9 +284,7 @@ impl Emitter<'_> {
         into: &mut Vec<Inst>,
     ) -> Operand {
         let (Operand::Use(Reg::Virt(v)), Some(wanted)) = (&operand, wanted) else { return operand };
-        let Some(class) = Class::of_pin(wanted.reg_class).map(|class| extension_result(name, class)) else {
-            return operand;
-        };
+        let Some(class) = extension_source(name, wanted.reg_class) else { return operand };
         let have = self.function.classes[*v as usize];
         match have.meet(class) {
             Some(narrowed) => {
