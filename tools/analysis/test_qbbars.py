@@ -1,5 +1,5 @@
 """A module with an empty .text is a measured 0, not a missing bar (qbbars once dropped it: 78 of 79 counted)."""
-import re, subprocess, tempfile, os
+import re, subprocess, tempfile, os, shutil
 src = open(os.path.join(os.path.dirname(__file__), 'qbbars.py')).read()
 ns = {'subprocess': subprocess}
 exec(re.search(r'def sizes\(o,prefixes\):.*?\n(?=def one)', src, re.S).group(0), ns)
@@ -67,3 +67,27 @@ def test_extra_modules_outside_core_are_counted(tmp_path):
     env = dict(os.environ, QB_TREE=str(tree), QB_SCRATCH=str(tmp_path), PIN_BIN=str(pin), QB_EXTRA='src/plat/b.c')
     out = subprocess.run(['python3', os.path.join(os.path.dirname(__file__), 'qbbars.py'), 'm64', 'Os', str(dist)], capture_output=True, text=True, env=env, cwd=tree).stdout
     assert '2/2 files with all three' in out, out
+
+
+def test_every_bar_carries_the_shared_external_flags(tmp_path):
+    """Bars were built with the distro's defaults (frame pointer, endbr64, canary, PIE, i686): the bar is the compiler's own code, so gcc and clang get
+    tools/external_flags.py's set, `-fPIE` at m64, `-fno-pic -fno-pie` and `-march=i486` at m32."""
+    tree, dist, pin, log = tmp_path / 'tree', tmp_path / 'dist', tmp_path / 'pin', tmp_path / 'log'
+    (tree / 'src/core').mkdir(parents=True); dist.mkdir(); pin.mkdir()
+    (tree / 'src/core/a.c').write_text('int a(int x){return x*3+1;}')
+    real = shutil.which('gcc')
+    spy = f'#!/bin/sh\ncase " $* " in *" -c "*) echo "$0 $*" >> {log};; esac\n' + GCC.replace('exec gcc', f'exec {real}')
+    (tmp_path / 'bin').mkdir(); (tmp_path / 'bin/gcc-15').write_text(spy)
+    (dist / 'llrm-cc').write_text(spy); (pin / 'clang').write_text(spy)
+    for p in (dist / 'llrm-cc', pin / 'clang', tmp_path / 'bin/gcc-15'): p.chmod(0o755)
+    want = {'m64': ['-fomit-frame-pointer', '-fno-stack-protector', '-fcf-protection=none', '-fno-stack-clash-protection', '-fPIE'],
+            'm32': ['-fomit-frame-pointer', '-fno-stack-protector', '-fcf-protection=none', '-fno-pic', '-fno-pie', '-march=i486']}
+    for arch, flags in want.items():
+        log.write_text('')
+        env = dict(os.environ, QB_TREE=str(tree), QB_SCRATCH=str(tmp_path), PIN_BIN=str(pin), PATH=f'{tmp_path / "bin"}:' + os.environ['PATH'])
+        subprocess.run(['python3', os.path.join(os.path.dirname(__file__), 'qbbars.py'), arch, 'Os', str(dist)], capture_output=True, text=True, env=env, cwd=tree)
+        lines = log.read_text().splitlines()
+        assert len(lines) == 3, lines
+        for line in lines:
+            for flag in flags:
+                assert flag in line.split(), f'{arch}: {flag} missing in {line}'
