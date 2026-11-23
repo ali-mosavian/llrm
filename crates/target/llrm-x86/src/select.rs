@@ -1594,7 +1594,8 @@ pub fn test_immediate(
     match dest {
         Loc::Reg(one) => {
             // `optimizeToFixedRegisterForm`: `test al, imm8` (`a8`) and
-            // `test eax, imm32` (`a9`) are a byte shorter than the `f6`/`f7` form.
+            // `test eax, imm32` (`a9`) are a byte shorter than the `f6`/`f7`
+            // form.
             let register = match (width, ACCUMULATOR.get(&width) == Some(&one.register)) {
                 (1, true) => Some("AL"),
                 (2, true) => Some("AX"),
@@ -2119,11 +2120,19 @@ pub fn float_stack(
         (what.op == Operation::Compare && dests.is_empty() && sources.len() == 2 && st_index(&sources[0]) == Some(0))
             .then(|| st_index(&sources[1]))
             .flatten();
-    if let (Some(index), Some(name @ ("fcom" | "fcomp" | "fucom" | "fucomp"))) = (compare, name) {
+    if let (
+        Some(index),
+        Some(name @ ("fcom" | "fcomp" | "fucom" | "fucomp" | "fcomi" | "fcomip" | "fucomi" | "fucomip")),
+    ) = (compare, name)
+    {
         let code = match name {
             "fcom" => Code::Fcom_st0_sti,
             "fcomp" => Code::Fcomp_st0_sti,
             "fucom" => Code::Fucom_st0_sti,
+            "fcomi" => Code::Fcomi_st0_sti,
+            "fcomip" => Code::Fcomip_st0_sti,
+            "fucomi" => Code::Fucomi_st0_sti,
+            "fucomip" => Code::Fucomip_st0_sti,
             _ => Code::Fucomp_st0_sti,
         };
         return _assemble(&raised(create_reg_reg(code, RegId::ST0, stack_register(index))), at, true);
@@ -2590,11 +2599,9 @@ fn scalar_sse(
         (Loc::Reg(into), Loc::Imm(order)) if matches!(name, "pshufd" | "pshuflw") && sources.len() == 2 => {
             let code = code_of!(upper, "_XMM_XMMM128_IMM8")?;
             match &sources[0] {
-                Loc::Reg(outof) => _assemble(
-                    &raised(create_reg_reg_i32(code, into.register, outof.register, order.value)),
-                    at,
-                    true,
-                ),
+                Loc::Reg(outof) => {
+                    _assemble(&raised(create_reg_reg_i32(code, into.register, outof.register, order.value)), at, true)
+                }
                 Loc::Mem(cell) => {
                     let (built, relocated) = operand_of(cell, at.bits)?;
                     _assemble(&raised(create_reg_mem_i32(code, into.register, built, order.value)), at, relocated)
@@ -3125,7 +3132,12 @@ pub fn emit_in(
     if op == Operation::Compare && name.starts_with('f') {
         // st(0) is implicit; what is encoded is the memory operand, if any.
         let memory: Vec<&ir::Mem> = sources.iter().filter_map(mem_of).collect();
-        if memory.is_empty() && matches!(name, "fcom" | "fcomp" | "fucom" | "fucomp") {
+        if memory.is_empty()
+            && matches!(
+                name,
+                "fcom" | "fcomp" | "fucom" | "fucomp" | "fcomi" | "fcomip" | "fucomi" | "fucomip"
+            )
+        {
             return float_stack(what, at);
         }
         return if memory.is_empty() { bare(name, at) } else { float_memory(name, memory[0], at) };
