@@ -168,9 +168,12 @@ impl CalleeFacts {
             return false;
         }
         let graph = CallGraph::new(module);
-        module.functions().any(|(id, _, function)| {
-            !function.is_declaration() && graph.callees_of(id).iter().any(|callee| *callee != id && locals.contains(callee))
-        })
+        module
+            .functions()
+            .any(
+                |(id, _, function)| !function.is_declaration()
+                    && graph.callees_of(id).iter().any(|callee| *callee != id && locals.contains(callee)),
+            )
     }
 
     /// [`CalleeFacts::of`], where `binds_local` lets a function that binds
@@ -576,20 +579,32 @@ mod tests {
         assert!(facts.written("leaf").unwrap().high.is_empty(), "saved whole");
     }
 
-    /// m64 `get_string` pushes `rbx` whole and its fact said it lost the upper half of
-    /// `ebx` (saved as the pair `ebx`/`rbx`, taken for a narrower push): its callers kept
-    /// no 64-bit value in a callee-saved register across it (QB chain.c -Os m64:
-    /// `chai_chain` 4 of 6 callee-saved registers, 48 stack ops against the pin's 12).
+    /// m64 `get_string` pushes `rbx` whole and its fact said it lost the upper
+    /// half of `ebx` (saved as the pair `ebx`/`rbx`, taken for a narrower
+    /// push): its callers kept no 64-bit value in a callee-saved register
+    /// across it (QB chain.c -Os m64: `chai_chain` 4 of 6 callee-saved
+    /// registers, 48 stack ops against the pin's 12).
     #[test]
     fn a_register_pushed_wider_than_it_is_named_loses_no_upper_half() {
         use crate::model::lir::{Insn, LirBlock};
 
         let write = Arc::new(Insn {
             clobbers: BTreeSet::from([RegId::DI]),
-            ..Insn::new(1, Some((1, 1)), Some(crate::model::ir::Semantics::new(crate::model::ir::Operation::Return)), vec![], vec![])
+            ..Insn::new(
+                1,
+                Some((1, 1)),
+                Some(crate::model::ir::Semantics::new(crate::model::ir::Operation::Return)),
+                vec![],
+                vec![],
+            )
         });
-        let body =
-            LirBody::new("leaf", 1, vec![LirBlock::new(1, vec![write]).into()], IndexMap::default(), IndexMap::default());
+        let body = LirBody::new(
+            "leaf",
+            1,
+            vec![LirBlock::new(1, vec![write]).into()],
+            IndexMap::default(),
+            IndexMap::default(),
+        );
         let frame = llrm_target::FrameRegisters {
             vector_saved: Vec::new(),
             pointer: RegId::BP,
