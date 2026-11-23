@@ -139,16 +139,31 @@ pub fn operand_class(
     index: usize,
 ) -> Option<Class> {
     let desc = local::desc(local::code_of(name)?)?;
-    Class::of_pin(desc.operands.get(index)?.reg_class).map(|class| extension_result(name, class))
+    extension_source(name, desc.operands.get(index)?.reg_class)
 }
 
-/// DEVIATE from the pin, whose `MOVZXd32d16` and `MOVSXd32d16` define and read
-/// an `XR32` and so may be given an address register: `ExpandMOVSZX_RR` then
-/// does `move.w` into a cleared register (`movea.w`, which sign-extends) or
-/// `ext.l` on it (not encodable), and its `MOV16dd` encodes a source `%a0` as
-/// `%d0`. The result and the source of an extension are data registers, for the
-/// emitter and for the passes that widen a class (`widen_compare_operands` read
-/// the table's `XR32` as free).
+/// The class operand `reg_class` of `name` asks for. The source of an extension
+/// is the pin's `XR16`, a 16-bit register: a data register's word here
+/// (`Dr16`), as a value of its own is, so the selector reads it where it is,
+/// as the pin does (`constrainRegClass` narrows it), and the extension reads
+/// two bytes of it.
+fn extension_source(
+    name: &str,
+    reg_class: i16,
+) -> Option<Class> {
+    if (name.starts_with("MOVZX") || name.starts_with("MOVSX")) && u16::try_from(reg_class) == Ok(pin::XR16RegClassID) {
+        return Some(Class::Dr16);
+    }
+    Class::of_pin(reg_class).map(|class| extension_result(name, class))
+}
+
+/// DEVIATE from the pin, whose `MOVZXd32d16` and `MOVSXd32d16` define an `XR32`
+/// and so may be given an address register: `ExpandMOVSZX_RR` then does
+/// `move.w` into a cleared register (`movea.w`, which sign-extends) or `ext.l`
+/// on it (not encodable). The result of an extension is a data register, for
+/// the emitter and for the passes that widen a class (`widen_compare_operands`
+/// read the table's `XR32` as free). The source is the pin's `XR16`, read as it
+/// is ([`extension_source`]).
 fn extension_result(
     name: &str,
     class: Class,
@@ -191,6 +206,8 @@ struct Emitter<'a> {
     /// ends the block goes through it (`BR_JT` expands to a load from the
     /// table, then `BRIND`).
     table_taken: Option<u32>,
+    /// The blocks the indirect jump that ends the block may go to.
+    indirect: &'a [u32],
 }
 
 impl Emitter<'_> {
@@ -267,9 +284,7 @@ impl Emitter<'_> {
         into: &mut Vec<Inst>,
     ) -> Operand {
         let (Operand::Use(Reg::Virt(v)), Some(wanted)) = (&operand, wanted) else { return operand };
-        let Some(class) = Class::of_pin(wanted.reg_class).map(|class| extension_result(name, class)) else {
-            return operand;
-        };
+        let Some(class) = extension_source(name, wanted.reg_class) else { return operand };
         let have = self.function.classes[*v as usize];
         match have.meet(class) {
             Some(narrowed) => {
@@ -303,6 +318,11 @@ impl Emitter<'_> {
             }
             (ISD::FrameIndex | ISD::TargetFrameIndex, NodeData::FrameIndex(index)) => Operand::Frame(index),
             (ISD::TargetGlobalAddress | ISD::GlobalAddress, NodeData::Global { symbol, offset }) => {
+                // `blockaddress`: the symbol at the block's label
+                if let Some(block) = llrm_codegen::backend::blockaddress::decode(offset) {
+                    let function = llrm_mir::context::GlobalId(symbol);
+                    return Ok(Some(Operand::Symbol(llrm_codegen::backend::blockaddress::symbol(function, block), 0)));
+                }
                 let name = self.dag.global_names.get(symbol as usize).ok_or("a global with no name")?;
                 Operand::Symbol(name.clone(), offset)
             }
@@ -641,11 +661,17 @@ impl Emitter<'_> {
                 }
                 // The jump through a table names every block of it, so the
                 // passes see the successors (`MachineJumpTableInfo`).
+                // and `indirectbr` the blocks it lists (`visitIndirectBr`)
                 if name == "JMP32j" {
-                    let table = self.table_taken.take().ok_or("an indirect jump of no jump table")?;
-                    let blocks = self.tables.get(table as usize).ok_or("a jump table the builder did not make")?;
-                    operands.push(Operand::Symbol(table_symbol(&self.function.name, table), 0));
-                    operands.extend(blocks.iter().map(|&block| Operand::Block(block)));
+                    match self.table_taken.take() {
+                        Some(table) => {
+                            let blocks =
+                                self.tables.get(table as usize).ok_or("a jump table the builder did not make")?;
+                            operands.push(Operand::Symbol(table_symbol(&self.function.name, table), 0));
+                            operands.extend(blocks.iter().map(|&block| Operand::Block(block)));
+                        }
+                        None => operands.extend(self.indirect.iter().map(|&block| Operand::Block(block))),
+                    }
                 }
                 let mut inst = op_inst(name, desc, operands);
                 // a volatile access keeps its place among the others
@@ -725,14 +751,17 @@ pub fn emit_with(
         shape,
         tables: &first.tables,
         table_taken: None,
+        indirect: &[],
     };
     emitter.function.locals.extend(first.locals.iter().copied());
+    emitter.function.address_symbols.clone_from(&first.address_symbols);
     let mut place_numbers: HashMap<llrm_codegen::model::lir::SrcLoc, usize> = HashMap::default();
     for one in blocks {
         emitter.dag = &one.dag;
         emitter.values.clear();
         emitter.flags_from = None;
         emitter.table_taken = None;
+        emitter.indirect = &one.indirect;
         emitter.saved.clear();
         emitter.save = emitter.nodes_to_save(one);
         let mut insts = Vec::new();

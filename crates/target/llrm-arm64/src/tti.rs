@@ -682,6 +682,12 @@ impl Tti for AArch64 {
         "AArch64"
     }
 
+    /// DEVIATE (M32-SINK-COMMON-SIZE, gcc `-fcrossjumping`): at -Os SimplifyCFG
+    /// sinks common code in every slot; the pin does so only in the late one.
+    fn sink_common_at_size(&self) -> bool {
+        true
+    }
+
     /// -Os unrotate: a header no bigger than the branches rotation removes
     /// (w15-unrotate-os-2026-11-03: limit 2 saved 404 B on jpeg_fixed,
     /// jpeg_single, nbody and recchop, none larger).
@@ -724,6 +730,13 @@ impl Tti for AArch64 {
 
     fn rotation_hot_at_size(&self) -> bool {
         true
+    }
+
+    /// Bytes first at -Os: the hot rotation is kept only where the object does
+    /// not grow (the ruling for -Os; x86-m64 the same). It added 4 B a loop:
+    /// QB suggest.c +64 B for -12% modelled work, on a module over gcc's bytes.
+    fn rotation_hot_bytes_per_loop(&self) -> i64 {
+        0
     }
 
     /// The inliner counts a callee's growth in cost units, one per instruction,

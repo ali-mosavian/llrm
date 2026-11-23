@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/tailcallelim.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/tailcallelim.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/tailcallelim.rs sha256:0f253a8db4cf50c691240055aab452ec4407a76fc547bd04a24179df5fd70ff5 -->
+<!-- src: crates/opt/llrm-transforms/src/tailcallelim.rs sha256:8f69e4d61c6e6616ea1f516d9995500a6d463863a1e91cd0402a47848f89d7a2 -->
 
 # tailcallelim
 
@@ -50,6 +50,17 @@ DEVIATE (anything MIR or Rust lacks):
     alignment: no "a load of it dominates" proof.
 28. `isAssociative` is the integer operations only (`combine_shared`'s
     DEVIATE 2), so a float accumulator is not recognized.
+29. TCE-ACC-PHI (owner w9, exit 2026-12-31; the pin has no such case, GCC's
+    `pass_tail_recursion` does, `tree-tailcall.cc` `find_tail_calls`): a
+    `br` to a block of phis, one associative integer operation and the `ret`
+    also gets that operation copied into the predecessor that holds the
+    call, its phis replaced by their arms: the call's result then feeds the
+    operation, an accumulator. `t = c ? a : f(..); s = c ? d : n; return t +
+    s` is a loop; the pin keeps the recursion. Only where the copied
+    operation reads the call's result and has no other use. Per target
+    (`Tti::eliminates_accumulator_through_join`): on where GCC is in the
+    bar (m68k, x86, arm64, 6502, z80); off for wasm, whose bar is the pin
+    alone (`recursive_stack_args` O2 388 B against 165, 2026-11-22).
 
 ## Example
 `sumto(n, x) = n == 0 ? x : sumto(n - 1, x + n)` becomes a loop that

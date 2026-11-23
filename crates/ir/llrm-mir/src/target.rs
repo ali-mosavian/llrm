@@ -146,14 +146,22 @@ pub struct Tuning {
     /// smaller, or grows by a few bytes a function and runs less
     /// (`Tti::unroll_trial_at_size`). `None`: no trial.
     pub unroll_trial_at_size: Option<u32>,
-    /// DEVIATE IPRA-DSO-LOCAL (owner llrm-target-x86-m64, exit 2026-11-24): a
-    /// function that binds locally (external linkage, hidden or protected,
+    /// A function that binds locally (external linkage, hidden or protected,
     /// or default visibility in code that is not shared-library code) takes
     /// part in the callee-written-registers facts, as GCC's `-fipa-ra` uses
     /// every definition no other definition can replace; the pin's
     /// `RegUsageInfoCollector` takes local linkage only
-    /// (`isSafeForNoCSROpt`) and is off by default.
+    /// (`isSafeForNoCSROpt`) and is off by default. No target sets it: m64
+    /// had it until 2026-11-22 (QB core, IPRA on minus off: Os +112 B, O2
+    /// +542 B, no executed-instruction gain; row IPRA-DSO-LOCAL). The
+    /// environment variable `LLRM_IPRA_BINDS_LOCAL` turns it on for a run.
     pub ipra_binds_local: bool,
+    /// DEVIATE IPRA-OS-TRIAL (beyond the pin; owner x87-cordic-2, exit
+    /// 2026-12-05): at -Os a module where a function calls a locally binding
+    /// one is assembled again with `ipra_binds_local` and the smaller object
+    /// kept. QB core m64 Os -426 B, tests/c Os -190 B, none worse. false: the
+    /// pin's.
+    pub ipra_trial_at_size: bool,
     /// DEVIATE UNROLL-OS-TRIAL-STRICT (owner llrm-target-x86-m64, exit
     /// 2026-11-24): the -Os unroll trial is kept only where the object is
     /// smaller, never for a few bytes a function that the code runs less
@@ -872,6 +880,16 @@ pub struct Tuning {
     /// Linux x86-64 stays false: glibc's `memcpy` of 0-32 bytes is 6.4 TSC
     /// ticks a call, `rep movsb` 8.2 (Ryzen 9 9950X3D, fsrm; 2026-11-05).
     pub inline_variable_memcpy: bool,
+    /// DEVIATE MEM-OS-REP (owner x87, exit 2026-12-06): tuned for size, an
+    /// `llvm.memcpy` of a length known only at run time that is no loop's work
+    /// (its block is in no loop) is one `rep movsb`, not a call of `memcpy`.
+    /// gcc's `decide_alg` takes `rep_prefix_1_byte` for any unknown size when
+    /// `optimize_insn_for_size_p`; the pin's `EmitTargetCodeForMemcpy` calls
+    /// `memcpy`. A copy in a loop keeps the call: glibc's `memcpy` is faster
+    /// than the `rep movsb` startup (6.4 against 8.2 ticks for 0-32 bytes).
+    /// m32 only: at m64 QB `localarr` ran 51.0M clk against 44.1M with two
+    /// small copies as `rep movsb` (+15.6%), a worse cell than clang's 40.2M.
+    pub inline_variable_memcpy_at_size: bool,
     /// DEVIATE MEM-OS (owner anyisa, exit 2026-11-14), the neighbour of SD541:
     /// tuned for size, a constant `memcpy`/`memmove` whose load and store
     /// pieces take more bytes than the call of the library routine (`mov
@@ -948,6 +966,7 @@ impl Tuning {
         unroll_trial_nests_only: false,
         unroll_trial_at_size: None,
         ipra_binds_local: false,
+        ipra_trial_at_size: false,
         unroll_trial_bytes_strict: false,
         inline_dying_credit_at_os: true,
         inline_trial_keeps_shrinking_copy: false,
@@ -1090,6 +1109,7 @@ impl Tuning {
         prefixed_16_bit_counters: false,
         partial_libcalls_skip_at_size: false,
         inline_variable_memcpy: false,
+        inline_variable_memcpy_at_size: false,
         size_copy_price: None,
         ipsccp_widen_keeps_sign: false,
         ipsccp_widen_keeps_sign_at_size: false,
@@ -1120,6 +1140,11 @@ pub struct GlobalMerge {
     /// The object format is Mach-O: the merged struct is `internal`, not
     /// `private`.
     pub mach_o: bool,
+    /// `MergeExternalByDefault` (GlobalMerge.cpp: `!MachO` on arm64): defined
+    /// external globals merge too, each name an alias at its member's offset
+    /// (`Alias::offset`). The writer must emit aliases: false where it cannot
+    /// (assembly text), as the target's own flag.
+    pub external: bool,
 }
 
 /// Where the target keeps no program data, as linear addresses: old

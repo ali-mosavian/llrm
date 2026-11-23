@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/trial.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/trial.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/trial.rs sha256:b2091b815d5af98ab0a7e79c854ead5293e528e35e6282e7089cc1091c01b1f4 -->
+<!-- src: crates/opt/llrm-transforms/src/trial.rs sha256:b398a897a1818efa234d578dbc21444ccfcf36175c5c11b14be4d5443aa4e4e6 -->
 
 # trial
 
@@ -31,4 +31,4 @@ driver: compile 1 (loop kept) vs compile 2 (loop unrolled)
 ```
 
 ## Used by
-Named by `inlinecost`, `jumpthreading`, `llc`, `looprotate`, `loopunrollpass`, `lsr_pass`, `price`, `process`, `simpleloopunswitch`, `switchlookup`, `target`, `tti`, `walk`.
+Named by `assemble`, `inlinecost`, `jumpthreading`, `llc`, `looprotate`, `loopunrollpass`, `lsr_pass`, `price`, `process`, `simpleloopunswitch`, `switchlookup`, `target`, `tti`, `walk`.

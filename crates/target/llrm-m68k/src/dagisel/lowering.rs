@@ -1059,6 +1059,39 @@ fn lower_and_to_narrow_sign_test(
     Some(dag.get_node(m68kisd::SETCC, EVT::I8, &[code, flags]))
 }
 
+/// DEVIATE M68K-BTST-MEM (owner w9, exit 2026-12-31): the pin's `MxBITPatM`
+/// patterns select `btst` on a byte in memory, but `LowerAndToBTST` makes a
+/// `BTST` only of an `i32` and `getBitTestCondition` extends a byte first, so
+/// no pattern sees a loaded byte. `(load i8 p) & (1 << k)` against zero is
+/// `btst #k,(p)`: 6 B against `move.b` + `and.b #imm` (8 B) with no register
+/// taken, and no dearer in clocks on any CPU (the tables, see the test). The
+/// load must have no other user (it is folded into the `btst`) and be a plain
+/// one: the pattern takes a non-extending load.
+fn lower_byte_and_to_btst_memory(
+    dag: &mut SelectionDAG,
+    and: SDValue,
+    cc: CondCode,
+) -> Option<SDValue> {
+    if dag.value_type(and) != EVT::I8 {
+        return None;
+    }
+    let (load, mask) = (dag.operand(and, 0), dag.constant(dag.operand(and, 1))?);
+    if !mask.is_power_of_two()
+        || dag.opcode(load) != ISD::Load
+        || !matches!(
+            &dag.node(load).data,
+            NodeData::Mem(info) if info.ext.is_none() && info.ordering.is_none()
+        )
+        || !dag.has_one_use(load.node)
+    {
+        return None;
+    }
+    let bit_no = dag.get_constant_with(u128::from(mask.trailing_zeros()), EVT::I8, true, false);
+    let test = dag.get_node(m68kisd::BTST, EVT::I8, &[load, bit_no]);
+    let code = cc_operand(dag, if cc == CondCode::SetEq { cond::EQ } else { cond::NE });
+    Some(dag.get_node(m68kisd::SETCC, EVT::I8, &[code, test]))
+}
+
 /// `LowerAndToBTST`: `(1 << n) & x` and `(x >> n) & 1` against zero are a bit
 /// test.
 fn lower_and_to_btst(
@@ -1067,6 +1100,9 @@ fn lower_and_to_btst(
     cc: CondCode,
     cpu: Cpu,
 ) -> Option<SDValue> {
+    if let Some(test) = lower_byte_and_to_btst_memory(dag, and, cc) {
+        return Some(test);
+    }
     if dag.value_type(and) != EVT::I32 {
         return None;
     }

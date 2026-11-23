@@ -8,11 +8,13 @@
 set -u
 tgt=${1:?m32 or wasm32}; root=$(cd "$(dirname "$0")/../.." && pwd); rt=$root/runtime/compiler-rt
 cc=${LLRM_CC_DIR:?dir with llrm-cc}/llrm-cc; CRT=${CRT:-$HOME/scratch/llvm-src/compiler-rt/lib/builtins}; S=${LIBGCC:-$HOME/scratch/sf-libgcc-src/libgcc}
+# Every bar compiler takes the shared flag set (tools/external_flags.py): no distro frame pointer, canary, endbr or unwind tables.
+ef() { python3 "$root/tools/external_flags.py" "$@"; }
 T=$(mktemp -d); trap 'rm -rf "${T:?}"' EXIT
 case $tgt in
-  m32) ccw="x86_32-linux"; cl="/usr/bin/clang --target=i486-linux-gnu -fno-pic -fno-asynchronous-unwind-tables"; extra="-march=i486"; cfg="-DSF_INTABI=1 -include stdint.h -include $rt/config/x86_m32/config.h"
+  m32) ccw="x86_32-linux"; cl="/usr/bin/clang --target=i486-linux-gnu"; extra="-march=i486"; bf="$(ef --target x86 --reloc=-fno-pic)"; cfg="-DSF_INTABI=1 -include stdint.h -include $rt/config/x86_m32/config.h"
        bytes() { size -A "$1" | awk '$1~/^\.text/||$1~/^\.rodata/{s+=$2} END{print s+0}'; } ;;
-  wasm32) ccw="wasm32"; cl="${CLANG_WASM:-$HOME/scratch/llvm-build-clang-wasm/bin/clang} --target=wasm32 -ffreestanding"; extra=""; cfg="-include stdint.h -include $rt/config/wasm/config.h"
+  wasm32) ccw="wasm32"; cl="${CLANG_WASM:-$HOME/scratch/llvm-build-clang-wasm/bin/clang} --target=wasm32 -ffreestanding"; extra=""; bf="$(ef --target none)"; cfg="-include stdint.h -include $rt/config/wasm/config.h"
        bytes() { local s=0 h; for h in $(wasm-objdump -h "$1" | awk '$1=="Code"||$1=="Data"' | grep -o 'size=0x[0-9a-f]*' | cut -d= -f2); do s=$((s + h)); done; echo $s; } ;;
   *) echo "target: m32 or wasm32" >&2; exit 2 ;;
 esac
@@ -46,12 +48,12 @@ for O in Os O2; do
       glist=${g64:-$c64}; [ $w = 32 ] && glist=${g32:-$c32}
       c=0; g=0
       for r in ${list//,/ }; do
-        if $cl $extra -$O -w -I$CRT -c $CRT/$r.c -o $T/c.o 2>/dev/null; then c=$((c + $(bytes $T/c.o))); else c=ERR; break; fi
+        if $cl $extra $bf -$O -w -I$CRT -c $CRT/$r.c -o $T/c.o 2>/dev/null; then c=$((c + $(bytes $T/c.o))); else c=ERR; break; fi
       done
       # libgcc has no comparedf2: its compare set is eq, le, ge (ne, lt, gt reuse them) and unord, so cmp takes its own list (glist)
       if [ $tgt = m32 ]; then
         for r in ${glist//,/ }; do
-          if gcc -m32 -march=i486 -$O -falign-functions=1 -falign-jumps=1 -falign-loops=1 -falign-labels=1 -fno-pic -fno-stack-protector -fcf-protection=none -fno-asynchronous-unwind-tables -msoft-float -w -I$S/soft-fp -I$S/config/i386 -I$S -I$S/../include -c $S/soft-fp/$r.c -o $T/g.o 2>/dev/null; then [ $g != ERR ] && g=$((g + $(bytes $T/g.o))); else g=ERR; fi
+          if gcc -m32 -march=i486 -$O -falign-functions=1 -falign-jumps=1 -falign-loops=1 -falign-labels=1 $bf -msoft-float -w -I$S/soft-fp -I$S/config/i386 -I$S -I$S/../include -c $S/soft-fp/$r.c -o $T/g.o 2>/dev/null; then [ $g != ERR ] && g=$((g + $(bytes $T/g.o))); else g=ERR; fi
         done
       else g=-; fi
       # m32 compiler-rt int->float is x87 arithmetic (fild/fmul/fadd), not a soft-float routine: no rank

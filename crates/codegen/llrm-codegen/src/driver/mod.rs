@@ -322,6 +322,7 @@ pub fn compiled(
                 options.isel,
                 &*options.arch,
                 &options.libcalls,
+                options.object_format == "elf",
             )
         })?;
         // What a frontend asks the linker for though nothing names it.
@@ -433,6 +434,7 @@ pub fn assembled_module(
             options.isel,
             &*options.arch,
             &options.libcalls,
+            options.object_format == "elf",
         )
     })?;
     let mut assembled = assembled;
@@ -597,7 +599,8 @@ pub fn optimized(
     // The widest atomic access: a 64-bit one needs `cmpxchg8b` below 64 bits.
     let native = if llrm_target::Target::layout(&*options.arch).mode == 64 { 64 } else { 32 };
     let tso = options.arch.name().starts_with("x86");
-    // `lock xadd`, `lock cmpxchg` and `lock add` come with a 486: not in 16-bit code.
+    // `lock xadd`, `lock cmpxchg` and `lock add` come with a 486: not in 16-bit
+    // code.
     let rmw = tso && llrm_target::Target::layout(&*options.arch).mode >= 32;
     program.modules.iter_mut().try_for_each(|module| llrm_mir::atomic::lowered(module, native, tso, tso, rmw))?;
     timed("mir markers", || program.modules.iter_mut().for_each(llrm_transforms::dead::markers_dropped));
@@ -626,17 +629,23 @@ pub fn optimized(
         let rep_movsb = options.cpu()?.min_size
             || (options.cpu()?.size && options.cpu()?.target().tti().is_some_and(|tti| tti.rep_movs_at_size()));
         let rep_movs_speed_max = options.cpu()?.target().tti().map_or(0, |tti| tti.rep_movs_at_speed_max());
+        let inline_variable_unlooped = options.cpu()?.size
+            && options.cpu()?.target().tti().is_some_and(|tti| tti.inlines_variable_memcpy_at_size());
         timed("mir memcpy calls", || {
-            program.modules.iter_mut().try_for_each(|module| {
-                crate::backend::memcpycall::expanded(
-                    module,
-                    *convention,
-                    symbol,
-                    inline_variable,
-                    rep_movsb,
-                    rep_movs_speed_max,
+            program
+                .modules
+                .iter_mut()
+                .try_for_each(
+                    |module| crate::backend::memcpycall::expanded(
+                        module,
+                        *convention,
+                        symbol,
+                        inline_variable,
+                        rep_movsb,
+                        rep_movs_speed_max,
+                        inline_variable_unlooped,
+                    ),
                 )
-            })
         })?;
     }
     timed("mir constant intrinsics", || {

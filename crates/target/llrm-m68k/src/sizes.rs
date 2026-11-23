@@ -313,6 +313,25 @@ pub fn call_sequence(
     shape: &CallShape,
     kind: CostKind,
 ) -> Cost {
+    sequence(cpu, shape, kind, true)
+}
+
+/// [`call_sequence`] without the `rts`: a call inside an inlined body adds the
+/// `jsr` and the setup; the callee's `rts` is not copied.
+pub fn body_call_sequence(
+    cpu: Cpu,
+    shape: &CallShape,
+    kind: CostKind,
+) -> Cost {
+    sequence(cpu, shape, kind, false)
+}
+
+fn sequence(
+    cpu: Cpu,
+    shape: &CallShape,
+    kind: CostKind,
+    with_return: bool,
+) -> Cost {
     let words: i64 = shape
         .arguments
         .iter()
@@ -321,7 +340,10 @@ pub fn call_sequence(
             None => argument.ty.map_or(1, pieces),
         })
         .sum();
-    let mut total = form(cpu, "jsr 0x1000:l", 6, kind) + form(cpu, "rts", 2, kind);
+    let mut total = form(cpu, "jsr 0x1000:l", 6, kind);
+    if with_return {
+        total += form(cpu, "rts", 2, kind);
+    }
     total += words * form(cpu, "move.l (4,%sp), -(%sp)", 4, kind);
     if words > 0 {
         total += if words <= 2 {

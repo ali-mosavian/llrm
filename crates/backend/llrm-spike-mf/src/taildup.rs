@@ -81,7 +81,81 @@ pub fn duplicate_returns<C>(
     changed
 }
 
-/// Whether a branch names block `at` or the block before it falls into it.
+/// Copies each block that ends in an indirect jump (`is_indirect`) of at most
+/// `max_size` instructions into every predecessor that goes only there, so
+/// each handler of a computed `goto` ends in a jump of its own: the branch
+/// predictor sees one site per handler (`TailDupIndirectBranchSize`, 20 in the
+/// pin, which does this before allocation for the same blocks). True when
+/// anything was copied.
+pub fn duplicate_indirect_jumps<C>(
+    function: &mut MFunction<C>,
+    max_size: usize,
+    is_indirect: &dyn Fn(&Inst) -> bool,
+) -> bool {
+    let mut changed = false;
+    // a copy ends in the jump too, so its own predecessors are copied into in
+    // turn, up to the size
+    loop {
+        let mut again = false;
+        let mut tail = 0;
+        while tail < function.blocks.len() {
+            if duplicate_indirect_jump::<C>(function, tail, max_size, is_indirect) {
+                again = true;
+                if !reached(function, tail) {
+                    function.blocks.remove(tail);
+                    continue;
+                }
+            }
+            tail += 1;
+        }
+        changed |= again;
+        if !again {
+            return changed;
+        }
+    }
+}
+
+fn duplicate_indirect_jump<C>(
+    function: &mut MFunction<C>,
+    tail: usize,
+    max_size: usize,
+    is_indirect: &dyn Fn(&Inst) -> bool,
+) -> bool {
+    let id = function.blocks[tail].id;
+    let body = &function.blocks[tail].insts;
+    if !body.last().is_some_and(|last| last.terminator && last.barrier && is_indirect(last))
+        || body.len() > max_size
+        || body.iter().any(|inst| inst.call || inst.side_effects)
+        || body.iter().any(|inst| inst.operands.iter().any(|op| matches!(op, Operand::Block(to) if *to == id)))
+    {
+        return false;
+    }
+    let copy: Vec<Inst> = body.clone();
+    let mut copied = false;
+    for pred in 0..function.blocks.len() {
+        if pred == tail {
+            continue;
+        }
+        let Some(from) = analyze(function, pred) else { continue };
+        let ends_in_jump = function.blocks[pred].insts.last().is_some_and(|inst| inst.terminator && inst.barrier);
+        // a predecessor goes only here: by a jump, or by falling into the block
+        let jumps = from.cond.is_none() && from.other.is_none() && from.taken == Some(id) && ends_in_jump;
+        let falls = pred + 1 == tail && from.cond.is_none() && from.taken.is_none() && !ends_in_jump;
+        if !jumps && !falls {
+            continue;
+        }
+        let block = &mut function.blocks[pred].insts;
+        if jumps {
+            block.pop();
+        }
+        block.extend(copy.iter().cloned());
+        copied = true;
+    }
+    copied
+}
+
+/// Whether a branch names block `at` or the block before it falls into it, or
+/// its address is taken.
 fn reached<C>(
     function: &MFunction<C>,
     at: usize,
@@ -99,7 +173,7 @@ fn reached<C>(
                     .any(|inst| inst.operands.iter().any(|op| matches!(op, Operand::Block(to) if *to == id))),
         );
     let falls = at > 0 && !function.blocks[at - 1].insts.last().is_some_and(|inst| inst.barrier);
-    named || falls
+    named || falls || function.address_symbols.iter().any(|(block, _)| *block == id)
 }
 
 /// A block that only returns is copied into each predecessor that ends in a

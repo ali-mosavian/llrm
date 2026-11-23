@@ -959,7 +959,7 @@ pub fn merged(
     size: bool,
     calls: Option<&IndexMap<i64, String>>,
 ) -> Result<Option<LirBody>, masm::Unprintable> {
-    merged_in(body, size, calls, true, false)
+    merged_in(body, size, calls, true, false, false)
 }
 
 /// `merged`, before placement when `after_placement` is false: the layout is
@@ -971,6 +971,7 @@ pub fn merged_in(
     calls: Option<&IndexMap<i64, String>>,
     after_placement: bool,
     faithful: bool,
+    pairs: bool,
 ) -> Result<Option<LirBody>, masm::Unprintable> {
     // A body presented before `_placed` has jumps that are fall-throughs.
     for block in &body.blocks {
@@ -978,7 +979,8 @@ pub fn merged_in(
             return Ok(None);
         }
     }
-    // T14: `BranchFolding.cpp` has no minimum on the blocks; `faithful` (m64) lifts it, and D1.
+    // T14: `BranchFolding.cpp` has no minimum on the blocks; `faithful` (m64)
+    // lifts it, and D1.
     if body.blocks.len() <= 3 && !faithful {
         return Ok(None);
     }
@@ -998,7 +1000,10 @@ pub fn merged_in(
         touched: IndexMap::default(),
         rename: IndexMap::default(),
         next: body.blocks.iter().map(|block| block.at).max().unwrap_or(0) + 1,
-        minimum: if size { 2 } else { 3 },
+        // The pass of its own takes `TailMergeSize` (3) at every level; the one
+        // in
+        // `MachineBlockPlacement` takes `TailDupSize + 1`, 2 at `-Os` (T7).
+        minimum: if size && (after_placement || pairs) { 2 } else { 3 },
         size,
         after_placement,
         faithful,

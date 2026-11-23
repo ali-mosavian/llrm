@@ -262,14 +262,6 @@ fn size_letter(bits: u32) -> Option<char> {
 }
 
 impl Tti for M68k {
-    /// `indirectbr` is a `switch` over block numbers (`IndirectBrExpandPass`).
-    /// DEVIATE M68K-INDIRECTBR: the pin's M68k selects `brind` as `jmp (An)`
-    /// of a block's address; this backend has no block-address operand yet.
-    /// Exit 2026-12-21: lower `blockaddress` and `brind` natively.
-    fn expands_indirect_br(&self) -> bool {
-        true
-    }
-
     /// The pin's M68k has no FP register class: `FADD` is not legal on `float`
     /// or `double`, so `getFPOpCost` is `TCC_Expensive` (every float
     /// operation is a soft-float call).
@@ -477,6 +469,18 @@ impl Tti for M68k {
         kind: CostKind,
     ) -> Option<Cost> {
         Some(crate::sizes::call_sequence(self.cpu, shape, kind))
+    }
+
+    /// DEVIATE INLINE-BODY-CALL (the z80's `body_call_cost`; the pin prices a
+    /// call as one instruction): a call inside an inlined body is its `jsr` and
+    /// pushed arguments, as bytes. Priced flat, a helper of two calls looked 15 B
+    /// and was copied into seven wrappers at -Os (num_fpmath +252 B).
+    fn body_call_cost(
+        &self,
+        shape: &llrm_mir::tti::CallShape,
+        kind: CostKind,
+    ) -> Option<Cost> {
+        Some(crate::sizes::body_call_sequence(self.cpu, shape, kind))
     }
 
     fn callee_frame_cost(

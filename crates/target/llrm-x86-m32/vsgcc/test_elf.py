@@ -84,3 +84,14 @@ def test_build_sh_links_every_compiler_for_a_program(work, monkeypatch):
     assert "FAIL" not in out
     for name in ("llrmElf", "gcc", "clang"):
         assert (work / "b" / f"fib.{name}O2.elf").exists(), name
+
+
+def test_a_64_bit_divide_in_llrms_elf_object_links_with_the_hosts_libgcc(work):
+    """build.sh gave llrmElf no runtime: x_int64_division and x_ll_div failed `undefined reference to __divdi3` (and `__moddi3`,
+    `__udivdi3`, `__umoddi3`), so build.sh exited 1 and run.sh stopped at program 65 of 71 with no table."""
+    done = subprocess.run(
+        [str(Path(__file__).parent / "build.sh"), "x_int64_division"],
+        capture_output=True, text=True, env={**harness.cc_env(), "VSGCC_WORK": str(work)},
+    )
+    assert done.returncode == 0 and "LINK FAIL" not in done.stdout, done.stdout + done.stderr
+    assert (work / "b" / "x_int64_division.llrmElfOs.elf").exists()

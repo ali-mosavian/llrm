@@ -1,10 +1,16 @@
 > Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/phielim.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/phielim.rs); edit the header, not this file.
-<!-- src: crates/codegen/llrm-codegen/src/backend/phielim.rs sha256:c10d5dfe363a09abc589a807956af73b81742bb0055a67d29d2ab13edcb07745 -->
+<!-- src: crates/codegen/llrm-codegen/src/backend/phielim.rs sha256:590cbf63672ce186a8cd04bc2f645d42a2f3a687205813953a2c94554df0b96d -->
 
 # phielim
 
 Takes LIR out of SSA: each phi becomes parallel copies on its incoming
 edges.
+
+The phase `PhiElimination` runs [`crate::phielimination::lowered_with`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/phielimination.rs), the
+translation of LLVM's `PHIElimination` (a temporary per phi, one copy per
+incoming edge); this module keeps `unsplit` and `placed_on_edges`, and the
+parallel-copy description below is of the earlier lowering (no flag selects
+it any more).
 
 ## How it works
 For each phi `r = phi [p1: v1, p2: v2]` the pass puts `r := v1` at the end
@@ -64,14 +70,6 @@ flowchart TB
 
 The new block's label is above every physical offset (`(entry + 1) << 32`),
 in a namespace of its own per body entry.
-
-`LLRM_PHIELIM_LLVM=1` lowers the phis that are not x87 by the translation of
-LLVM's `PHIElimination` ([`crate::phielimination`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/phielimination.rs)) first, and this pass the
-rest. Off by default: it leaves a cycle of loop-carried values to be broken
-by copies through a register, where the parallel copy here breaks it with an
-`xchg`, and the i64 Fibonacci loop
-(`test_an_i64_is_a_dword_pair_through_phis_calls_and_returns`)
-spills a dword with it.
 
 `unsplit` undoes a split whose copies coalescing removed: a block of only a
 jump is bypassed, so the jump is not taken on every pass. The peephole calls

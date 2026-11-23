@@ -61,6 +61,7 @@ pub mod pccall;
 pub mod regalloc;
 pub mod routine;
 pub mod scaledindex;
+pub mod narrowext;
 pub mod sextacc;
 pub mod shiftadd;
 pub mod wordtable;

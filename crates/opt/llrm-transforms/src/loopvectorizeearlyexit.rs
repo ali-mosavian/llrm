@@ -47,6 +47,9 @@
 //!
 //! The rows' owner is x87-cordic-2, exit 2026-12-10.
 //!
+//! # Runs
+//! Inside `loopvectorize`, where the planner meets a loop with an uncountable early exit.
+//!
 //! # Example
 //! A read-only search loop that leaves at the first match gets a vector loop in front of it; the original loop finishes the rest.
 //!

@@ -2,7 +2,7 @@
 
 # Backend phases
 
-From the `//!` headers of `crates/codegen/llrm-codegen/src/backend`: 161 documented, 1 undocumented.
+From the `//!` headers of `crates/codegen/llrm-codegen/src/backend`: 163 documented, 0 undocumented.
 
 | Name | Summary | Runs | Page |
 |---|---|---|---|
@@ -16,7 +16,7 @@ From the `//!` headers of `crates/codegen/llrm-codegen/src/backend`: 161 documen
 | arrival | Finds how long a parameter stays in the register its convention passed it in, from the machine code. | `debuginfo.rs`, for 32-bit `-g` output: the parameter's location list is | [arrival](arrival.md) |
 | asm | The result of code layout: a body's bytes, where each instruction landed and the relocations that must follow, as the object writer needs them. | `layout.rs`, `objbuild.rs`. | [asm](asm.md) |
 | assemble | Takes a MIR module to masm, as `llc` takes a module to an object: each defined function selected and put through the machine phases, each defined variable's data, and the symbols both name. | Once per module. Per-function candidates are described above; the gating | [assemble](assemble.md) |
-| assignment_tracking | `AssignmentTrackingAnalysis`: where each variable of a function lives, from its `#dbg_assign` records and the stores they name, as a table of locations the code generator emits. |  | [assignment_tracking](assignment_tracking.md) |
+| assignment_tracking | `AssignmentTrackingAnalysis`: where each variable of a function lives, from its `#dbg_assign` records and the stores they name, as a table of locations the code generator emits. | In the driver, once per module before code generation, when the module carries `#dbg_assign` records (`tracked`, `module_rewritten`). | [assignment_tracking](assignment_tracking.md) |
 | bitcounts | Expands `llvm.ctpop`, `llvm.ctlz` and `llvm.cttz` into shifts, masks and adds in MIR before instruction selection, for the targets whose description lists them under `expand`. | Once per module in `driver::optimized`, before the odd widths are promoted, | [bitcounts](bitcounts.md) |
 | blockaddress | The address of a block (`blockaddress`) as a symbol: one per address-taken block, named by its function and its MIR block, so code and data in any module order can name it before the function that holds it is lowered. | Named by `builder`, `globals`. | [blockaddress](blockaddress.md) |
 | bodyfacts | Facts about the definitions of a body's values that the passes around the allocator ask: which values are literals, addresses or copies, which loads of a cell hold until their last use, and what may write a cell. | `spiller`, `ssaspill`, `constrain`, `floatassign`, `peep`, `greedy::remat`. | [bodyfacts](bodyfacts.md) |
@@ -76,7 +76,7 @@ From the `//!` headers of `crates/codegen/llrm-codegen/src/backend`: 161 documen
 | genericdriver | `GenericScheduler` over a dependence graph: the loop that picks a node from the top or the bottom zone, schedules it and releases its neighbours (row 65, S2 of ARM64-SCHED-HOIST). | Named by `machinesched`, `schedmodel`. | [genericdriver](genericdriver.md) |
 | genericsched | `GenericScheduler::tryCandidate`: how the pre-RA machine scheduler picks between two ready nodes (row 65, S0 of ARM64-SCHED-HOIST). | Named by `genericdriver`, `machinesched`. | [genericsched](genericsched.md) |
 | globals | Turns a MIR module's globals into assembler symbols and data: names, and each initializer's bytes with a relocation for every address in it. | `global names` and the data loop in `assemble::assembled_by`, once per | [globals](globals.md) |
-| hooks | What the shared backend asks of a target's own backend code. | Named by `assemble`, `builder`, `dag_select`, `shadow`. | [hooks](hooks.md) |
+| hooks | What the shared backend asks of a target's own backend code. | Named by `assemble`, `builder`, `dag_select`, `env`, `shadow`. | [hooks](hooks.md) |
 | incremental | A dataflow answer over a body's blocks, held between asks and brought up to date from the blocks that changed. | `liveness`, `upperzero` and `peephole` (flag liveness). | [incremental](incremental.md) |
 | intbits | Integers of a given width held in an `i64`: the masks and wraps that stay defined at eight bytes, where `1 << 64` is not. | `stepflags` (the constant of a compare against a step) and `peephole` | [intbits](intbits.md) |
 | isel | Instruction selection: one MIR function becomes LIR over virtual registers, as LLVM's SelectionDAG makes MachineInstrs. | First of the staged phases in `assemble::staged`, once per function and | [isel](isel.md) |
@@ -92,7 +92,7 @@ From the `//!` headers of `crates/codegen/llrm-codegen/src/backend`: 161 documen
 | leaffold | A constant a leaf block makes for a join, made in the block that jumps to it. | Phase 1 of the machine phases, after `SharedConstants`, before `SsaSpill`. | [leaffold](leaffold.md) |
 | leaopt | Two address computations that differ only in a displacement are one: LLVM's `X86OptimizeLEAs` ([X86OptimizeLEAs.cpp](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86OptimizeLEAs.cpp)). | A machine phase after `machinesink` and before `phielim` | [leaopt](leaopt.md) |
 | legalize | Promotes the integers of an odd width (i2..i63 but 8, 16 and 32) to the next machine width, in MIR before instruction selection. | Once per module in `driver::optimized`, after `minmax_expanded` and before | [legalize](legalize.md) |
-| libcall_choice | Which operations a size-built module calls a runtime routine for, and which it expands inline, by the bytes of the whole linked program. |  | [libcall_choice](libcall_choice.md) |
+| libcall_choice | Which operations a size-built module calls a runtime routine for, and which it expands inline, by the bytes of the whole linked program. | Called by a target's libcall table (`llrm-m68k` `libcalls.rs`) at `-Os`, once per module. | [libcall_choice](libcall_choice.md) |
 | libmcalls | Turns the rounding intrinsics x87 has no instruction for into calls of the C library: `llvm.floor.f64` is a call of `floor`. | Once per module in `driver::optimized`, after the pipeline: the optimizer | [libmcalls](libmcalls.md) |
 | licm_core | The target-neutral half of early `MachineLICM`: which loops have a preheader, which values a loop reads from outside, which copies a loop phi takes, and the walk that moves what the target's policy calls hoistable to the end of the preheader. | Named by `machinelicm`. | [licm_core](licm_core.md) |
 | lifetimes | Where a block local's bytes are live, from its lifetime markers, so that locals never live together can share a frame slot. | `isel` takes the intervals in its own instruction numbering; `slots` then | [lifetimes](lifetimes.md) |
@@ -124,6 +124,7 @@ From the `//!` headers of `crates/codegen/llrm-codegen/src/backend`: 161 documen
 | phiconst | One value for a constant that several edges of a phi carry. | Phase 1 of the machine phases, before `SsaSpill`, so both allocation routes | [phiconst](phiconst.md) |
 | phielim | Takes LIR out of SSA: each phi becomes parallel copies on its incoming edges. | A machine phase after `ssaspill` (spiller route only) and before | [phielim](phielim.md) |
 | postings | An index of where each value is defined, read and required in a body, kept current as the body is rewritten. | [`crate::backend::allocate`](allocate.md), `crate::coalescer::pass`, | [postings](postings.md) |
+| postralicm | Moves a constant a loop makes on every trip to the loop's entry. | After `loopslots`, before `schedule`, at every -O level but -O0. | [postralicm](postralicm.md) |
 | postrasink | Moves a register copy, or a spill store, into the one successor that needs it. | A sub-pass of [`crate::backend::peephole`](peephole.md), after `copysink`. Once per | [postrasink](postrasink.md) |
 | precse | The same pure computation made twice, made once: `MachineCSE` before PHI elimination, where a value has one definition. | A machine phase before `machinesink` (`flow::machine_with`), at every -O | [precse](precse.md) |
 | prezeroed | The entry block's zero writes to a local nothing has touched yet, for a frame the runtime zero-fills (QB's `B$ENRA`): the frame already holds them. | The DAG path (`selectiondag/builder.rs`) and the old selector (`isel.rs`), | [prezeroed](prezeroed.md) |
@@ -152,7 +153,7 @@ From the `//!` headers of `crates/codegen/llrm-codegen/src/backend`: 161 documen
 | slotcopies | Keeps one frame cell where a value is copied from a cell into a spill cell. | A sub-pass of [`crate::backend::peephole`](peephole.md), after `postrasink`. | [slotcopies](slotcopies.md) |
 | slots | Lets two values share one frame slot when they are never live together, so a frame holds the most that is live at once, not the sum of all spills. | - `crate::backend::spiller`, which shares spill slots by the live range of | [slots](slots.md) |
 | spillplacement | Decides, for each value being split, which edge bundles hold it in a register and which on the stack. | Not a pass: `crate::backend::splitkit` queries it for each value it | [spillplacement](spillplacement.md) |
-| splitparams | undocumented | | [source](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/splitparams.rs) |
+| splitparams | Splits the live range of an argument register where the calls begin, so the frame and the kept registers can wait for them. | On SSA, before the phis go, after every pass that moves values. Only where | [splitparams](splitparams.md) |
 | stackcoloring | StackColoring ([source](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/CodeGen/StackColoring.cpp#L1)), shared by every target: the static allocas whose lifetimes never overlap share one frame object. | - [`crate::backend::selectiondag::dag_function`](selectiondag.md), which groups the allocas | [stackcoloring](stackcoloring.md) |
 | stackusage | How much stack a program may use, as gcc's `-fstack-usage` and `-Wstack-usage` report it. | `elide_checks` is the `stack checks` step of assembly, once per module. | [stackusage](stackusage.md) |
 | statustest | An x87 compare read from the status word: `fnstsw ax; test ah, mask; jcc` for `fnstsw ax; sahf; jcc`. | After allocation, before the peephole optimizer, on a target whose profile | [statustest](statustest.md) |

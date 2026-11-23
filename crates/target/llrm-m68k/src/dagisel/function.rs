@@ -112,6 +112,11 @@ pub struct Selected {
     /// The blocks each of the function's jump tables goes to, by table number
     /// (`MachineJumpTableInfo`; the same on every block).
     pub tables: Vec<Vec<u32>>,
+    /// The blocks an `indirectbr` that ends this block may go to.
+    pub indirect: Vec<u32>,
+    /// The symbol of each block whose address is taken, defined at its label
+    /// (`AsmPrinter::GetBlockAddressSymbol`; the same on every block).
+    pub address_symbols: Vec<(u32, String)>,
 }
 
 /// Function `name` of `module`, block by block in layout order.
@@ -280,6 +285,13 @@ pub fn select_function_with(
             locals: Vec::new(),
             ends_unreachable,
             tables: Vec::new(),
+            indirect: info
+                .indirect_targets
+                .iter()
+                .filter(|(from, _)| *from == block)
+                .flat_map(|(_, targets)| targets.iter().map(|target| target.0))
+                .collect(),
+            address_symbols: Vec::new(),
         });
         for (id, mut extra) in extras {
             let units = select_block_with(
@@ -306,6 +318,8 @@ pub fn select_function_with(
                 locals: Vec::new(),
                 ends_unreachable: false,
                 tables: Vec::new(),
+                indirect: Vec::new(),
+                address_symbols: Vec::new(),
             });
         }
     }
@@ -315,8 +329,15 @@ pub fn select_function_with(
     if let Some(entry) = selected.first_mut() {
         entry.locals = locals;
     }
+    let mut address_symbols: Vec<(u32, String)> = function
+        .address_taken_blocks()
+        .map(|block| (block.0, llrm_codegen::backend::blockaddress::symbol(id, block)))
+        .collect();
+    address_symbols.sort();
+    address_symbols.dedup();
     for one in &mut selected {
         one.tables.clone_from(&info.jump_tables);
+        one.address_symbols.clone_from(&address_symbols);
     }
     for (one, pending) in selected.iter_mut().zip(updates) {
         for (at, &(phi, incoming)) in pending.iter().enumerate() {

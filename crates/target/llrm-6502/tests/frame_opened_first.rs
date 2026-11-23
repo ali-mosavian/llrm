@@ -3,7 +3,8 @@
 //! saved `rc8`/`rc9` and a spilled argument at the offsets of the new frame
 //! from the old stack pointer, into the caller's slots: `arg_registers_abi`
 //! (hand-sunk `deep`) HALTed at -O1..-Os on the plain compiler. Needs
-//! `llrm-cc` built (`LLRM_CC`).
+//! `llrm-cc` built (`LLRM_CC`). The source's result is `t * 3 + s`: with `t + s` tailcallelim's
+//! accumulator (#10651) made the recursion a loop and no frame was left to open.
 
 use std::process::Command;
 
@@ -16,8 +17,8 @@ fn assembly(
 ) -> String {
     let dir = std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("frame-opened-first-{test}"));
     std::fs::create_dir_all(&dir).unwrap();
-    let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/data/recursive_stack_args.c");
-    let out = dir.join(format!("recursive_stack_args.{level}.s"));
+    let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/data/recursive_stack_args_frame.c");
+    let out = dir.join(format!("recursive_stack_args_frame.{level}.s"));
     let made = Command::new(llrm_cc())
         .current_dir(&dir)
         .args(["--target=6502-sim65", level, "-fno-inline-functions", "-S", "-w", "-o"])

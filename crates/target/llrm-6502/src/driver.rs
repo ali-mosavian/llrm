@@ -216,6 +216,7 @@ fn program(
     // a private function takes arguments in rc16..rc25 (`calling.toml`
     // `[mos_private]`), where the platform has them
     crate::abi::allow_private_row(request.platform.zero_page >= crate::alloc::MOST_CELLS);
+    MID_ENDS.with(|count| count.set(count.get() + 1));
     let mut module =
         llrm_mir::parse::module(&without_reserved_symbols(&without_triple(text), &request.platform.c_symbol_prefix))
             .map_err(|error| error.to_string())?;
@@ -269,13 +270,64 @@ pub fn assembly(
     crate::dagisel::function::take_step_sites();
     let kept = assembly_flow(text, request)?;
     let steps = crate::dagisel::function::take_step_sites();
-    long_step_trial(kept, steps, text, request)
+    long_step_trial(kept, steps, request).map(|done| done.text)
 }
 
 fn assembly_flow(
     text: &str,
     request: &Request,
-) -> Result<String, String> {
+) -> Result<Assembled, String> {
+    crate::alloc::take_save_drops();
+    let kept = flow_once(text, request)?;
+    save_drop_trial(kept, crate::alloc::take_save_drops(), request)
+}
+
+/// The backend alone on the program a flow kept: the mid-end and its trials
+/// are not run again (`save_drop_trial`, `long_step_trial`).
+fn backend_flow(
+    kept: &Assembled,
+    request: &Request,
+) -> Result<Assembled, String> {
+    crate::alloc::take_save_drops();
+    let done = tail(kept.source.clone(), request, false, false)?;
+    save_drop_trial(done, crate::alloc::take_save_drops(), request)
+}
+
+/// DEVIATE 6502-SAVE-DROP-TRIAL (owner llrm-target-6502, exit 2026-12-06): a
+/// module whose carry saves were dropped before allocation (`drops`) has its
+/// kept program written again with them dropped after it, and the text with
+/// fewer bytes is kept (a tie keeps the first). The pin has one form. Reason:
+/// the free `a` helps some modules and defeats the outliner in others, whose
+/// sites of one chain allocate differently (wide_shift_by_one -O2 843 B after,
+/// 916 B before; call_keeps -O2 1,402 B before, 1,409 B after).
+///
+/// Compile time: only a module with two such saves runs the backend twice; the
+/// mid-end and its trials run once (`backend_flow`).
+fn save_drop_trial(
+    kept: Assembled,
+    drops: usize,
+    request: &Request,
+) -> Result<Assembled, String> {
+    // a chain the outliner shares needs two sites
+    if drops < 2 || request.level == Level::O0 || std::env::var_os("LLRM_6502_NO_SAVE_TRIAL").is_some() {
+        return Ok(kept);
+    }
+    let Ok(other) = crate::alloc::with_early_save_drop(false, || tail(kept.source.clone(), request, false, false))
+    else {
+        return Ok(kept);
+    };
+    crate::alloc::take_save_drops();
+    let (kept_bytes, other_bytes) = (image_bytes_of(&kept.text, request)?, image_bytes_of(&other.text, request)?);
+    if std::env::var_os("LLRM_DEBUG_TRIAL").is_some() {
+        eprintln!("trial save drop: {drops} drops; {other_bytes} B after allocation against {kept_bytes} B before");
+    }
+    Ok(if other_bytes < kept_bytes { other } else { kept })
+}
+
+fn flow_once(
+    text: &str,
+    request: &Request,
+) -> Result<Assembled, String> {
     llrm_transforms::trial::take_speed_unrolls();
     let built = program(text, request)?;
     let made = llrm_transforms::trial::take_speed_unrolls().made;
@@ -286,30 +338,32 @@ fn assembly_flow(
 
 /// DEVIATE 6502-LONG-STEP-TRIAL (owner llrm-target-6502, exit 2026-12-06): a
 /// module that has a long plus or minus one stepped with an early exit
-/// (`INC32`/`DEC32`, llvm-mos `G_INC`/`G_DEC`) is compiled again with the carry
-/// chain, and the text with fewer bytes is kept. The pin has one form. Reason:
-/// the stepping chain has labels and branches, which the outliner (the pin's
-/// `MachineOutliner`) does not share, and the carry chain of many sites is one
-/// `jsr` each (div_constants_long -O1: 13,520 B with the chain, 14,464
-/// stepped), while one loop counter is 14 B stepped against 22 B as a chain
-/// (licm_graph_callee_footprint: 306 B, 290 B).
+/// (`INC32`/`DEC32`, llvm-mos `G_INC`/`G_DEC`) or a long equality tested byte
+/// by byte (`CMPZ32`, llvm-mos `G_CMPZ`) has its kept program written again
+/// with the carry chain and the word compare, and the text with fewer bytes is
+/// kept. The pin has one
+/// form. Reason: those forms have labels and branches, which the outliner (the
+/// pin's `MachineOutliner`) does not share, and the chain of many sites is one
+/// `jsr` each (div_constants_long -O1: 13,520 B with the chains, 14,464
+/// stepped, 15,431 with the byte compares), while one loop counter is 14 B
+/// stepped against 22 B as a chain (licm_graph_callee_footprint: 306 B, 284 B).
 ///
-/// Compile time: only a module with such a step compiles twice.
+/// Compile time: only a module with such a site runs the backend twice; the
+/// mid-end and its trials run once (`backend_flow`).
 fn long_step_trial(
-    kept: String,
+    kept: Assembled,
     steps: usize,
-    text: &str,
     request: &Request,
-) -> Result<String, String> {
+) -> Result<Assembled, String> {
     if steps == 0 || request.level == Level::O0 || std::env::var_os("LLRM_6502_NO_STEP_TRIAL").is_some() {
         return Ok(kept);
     }
     let debug = std::env::var_os("LLRM_DEBUG_TRIAL").is_some();
-    let Ok(other) = crate::dagisel::function::with_long_steps(false, || assembly_flow(text, request)) else {
+    let Ok(other) = crate::dagisel::function::with_long_steps(false, || backend_flow(&kept, request)) else {
         return Ok(kept);
     };
     crate::dagisel::function::take_step_sites();
-    let (kept_bytes, other_bytes) = (image_bytes_of(&kept, request)?, image_bytes_of(&other, request)?);
+    let (kept_bytes, other_bytes) = (image_bytes_of(&kept.text, request)?, image_bytes_of(&other.text, request)?);
     if debug {
         eprintln!("trial long step: {steps} steps; {other_bytes} B carry chain against {kept_bytes} B stepped");
     }
@@ -320,7 +374,7 @@ fn assembly_trials(
     built: Program,
     text: &str,
     request: &Request,
-) -> Result<String, String> {
+) -> Result<Assembled, String> {
     let (built, inlined, assembled, joint) = trial_inlined(built, text, request)?;
     llrm_transforms::trial::with_inlined(&inlined, || trial_unrolled(built, assembled, joint, text, request))
 }
@@ -338,12 +392,12 @@ fn assembly_trials(
 /// kept one (`size`): a variant with as many or more cannot be fewer bytes
 /// (write_through_parameter's folded 43 B against 249 B).
 fn speed_unroll_trial(
-    kept: String,
+    kept: Assembled,
     made: usize,
     size: usize,
     text: &str,
     request: &Request,
-) -> Result<String, String> {
+) -> Result<Assembled, String> {
     use llrm_transforms::trial::{SpeedUnroll, with_speed_unroll};
     let tried = matches!(request.level, Level::O2 | Level::O3)
         && made > 0
@@ -353,7 +407,7 @@ fn speed_unroll_trial(
         return Ok(kept);
     }
     let debug = std::env::var_os("LLRM_DEBUG_TRIAL").is_some();
-    let variant = |text: &str| -> Result<Option<String>, String> {
+    let variant = |text: &str| -> Result<Option<Assembled>, String> {
         let built = program(text, request)?;
         if debug {
             eprintln!("trial speed unroll: {} instructions against {size}", instructions(&built));
@@ -367,12 +421,12 @@ fn speed_unroll_trial(
             }
             return Ok(None);
         }
-        tail(built, request, false, false).map(|done| Some(done.text))
+        tail(built, request, false, false).map(Some)
     };
     let Ok(Some(other)) = with_speed_unroll(Some(SpeedUnroll::NoGrow), || variant(text)) else {
         return Ok(kept);
     };
-    let bytes = |assembly: &str| -> Result<i64, String> { image_bytes_of(assembly, request) };
+    let bytes = |assembly: &Assembled| -> Result<i64, String> { image_bytes_of(&assembly.text, request) };
     let (kept_bytes, other_bytes) = (bytes(&kept)?, bytes(&other)?);
     if debug {
         eprintln!("trial speed unroll: {made} unrolls; {other_bytes} B no-growth against {kept_bytes} B kept");
@@ -537,6 +591,13 @@ pub fn size_audit(
 
 thread_local! {
     static SELECTED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static MID_ENDS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// The mid-end runs this thread has made: a trial that only changes a switch
+/// of the backend must not add one (`backend_flow`).
+pub fn mid_ends() -> usize {
+    MID_ENDS.with(std::cell::Cell::get)
 }
 
 /// The functions this thread has selected: the cost of a compile, which the
@@ -576,6 +637,9 @@ struct Assembled {
     bytes: i64,
     /// Each function's bytes, when asked for (`size_audit`).
     functions: Vec<(String, i64)>,
+    /// The program as `tail` was given it: written again by the backend
+    /// trials, which change a switch of the backend and not the mid-end.
+    source: Program,
 }
 
 /// The assembly of `program`: every function selected (the copies as loops and
@@ -586,6 +650,7 @@ fn tail(
     price: bool,
     audit: bool,
 ) -> Result<Assembled, String> {
+    let source = program.clone();
     // The copies as loops, for the functions that call `memcpy`: priced
     // against the calls below.
     let copies = if request.level == Level::O0 {
@@ -849,7 +914,7 @@ fn tail(
             bytes = finished + data_bytes(&data.0);
         }
     }
-    Ok(Assembled { text: equates(&request.platform) + &files + &text + &data.0, clocks, bytes, functions })
+    Ok(Assembled { text: equates(&request.platform) + &files + &text + &data.0, clocks, bytes, functions, source })
 }
 
 /// DEVIATE UNROLL-TRIAL (owner llrm-target-6502, exit 2026-12-05): the program
@@ -870,13 +935,13 @@ fn trial_unrolled(
     joint: bool,
     text: &str,
     request: &Request,
-) -> Result<String, String> {
+) -> Result<Assembled, String> {
     use llrm_transforms::loopunrollpass::trial;
     // `assembled`: `built` as the inline trial already wrote it (price and text
     // of `tail`)
     let kept_text = |built: Program, assembled: Option<Assembled>| match assembled {
-        Some(done) => Ok(done.text),
-        None => tail(built, request, false, false).map(|done| done.text),
+        Some(done) => Ok(done),
+        None => tail(built, request, false, false),
     };
     let tti = built.target.tti();
     let Some(limit) = tti.as_ref().and_then(|tti| tti.unroll_trial_threshold()) else {
@@ -933,7 +998,7 @@ fn trial_unrolled(
     // An unroll the trial kept has taken the loops the pair would unroll.
     if !joint || unrolled {
         return match best {
-            Some(done) => Ok(done.text),
+            Some(done) => Ok(done),
             None => kept_text(built.take().expect("the program"), kept),
         };
     }
@@ -961,7 +1026,7 @@ fn trial_unrolled(
     };
     let Ok(both) = llrm_transforms::trial::with_pin_inlines(|| trial::with(limit, || program(text, &pair_request)))
     else {
-        return Ok(priced.text);
+        return Ok(priced);
     };
     // Priced by the backend only where the byte model finds it smaller: the
     // pair wins by folding the program away, and a pair that does not is the
@@ -971,7 +1036,7 @@ fn trial_unrolled(
         eprintln!("trial inline+unroll: model {model} B against {modeled} B");
     }
     if model >= modeled || !trial_fits(instructions(&both).saturating_sub(size)) {
-        return Ok(priced.text);
+        return Ok(priced);
     }
     let tried = tail(both, request, true, false)?;
     let (saved, added) = (priced.clocks - tried.clocks, tried.bytes - priced.bytes);
@@ -982,7 +1047,7 @@ fn trial_unrolled(
             if pays { "kept" } else { "put back" }
         );
     }
-    Ok(if pays { tried.text } else { priced.text })
+    Ok(if pays { tried } else { priced })
 }
 
 /// The instructions a trial may add before it is priced: the byte limit below

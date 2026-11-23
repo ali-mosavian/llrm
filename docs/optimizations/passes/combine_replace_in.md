@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/combine_replace_in.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/combine_replace_in.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/combine_replace_in.rs sha256:9a1fc7262af8ae460026363abf86a720a9da1d9afd62aac357061cc2533a7e21 -->
+<!-- src: crates/opt/llrm-transforms/src/combine_replace_in.rs sha256:4e6154a02f8f1b7612eecde509019ab1f375e438639d272d745ed10cb15afdd2 -->
 
 # combine_replace_in
 
@@ -15,6 +15,9 @@ MIRROR: two instructions up, each with one use and safe to execute with
 its operands replaced.
 
 DEVIATE 1: no lane-crossing check (MIR has no vectors).
+
+## Runs
+In InstCombine's select visit (`combine_visit_select`) and in `combine_select_equivalence`.
 
 ## Example
 ```text

@@ -35,6 +35,9 @@
 //! # See also
 //! `loopvectorize`, which makes the vectors where the target prices them
 //! (`Tti::vector_arithmetic_cost`: only the bitwise operations).
+//!
+//! # Example
+//! `%w = xor <2 x i16> %v, %s` becomes `%w = xor i32 %v, %s`, where `%v` and `%s` are the same two lanes held in one `i32`.
 
 use llrm_mir::context::{Constant, ConstantKind, Context};
 use llrm_mir::dense::IdMap;

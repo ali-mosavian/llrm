@@ -25,8 +25,11 @@ echo -n $ABI > $O/abi
 EMU=$(python3 "$R/tools/linkrecipe.py" x86-m32 ld-emulation)
 # the 64-bit divides gcc and clang call, from each compiler's own 32-bit runtime
 # VSGCC_ONLY=llrm: llrm's objects alone, for what compares llrm with itself (m16.py), with no gcc or clang installed
+# llrm's ELF objects call the same `__divdi3` family gcc's do (its OMF objects carry them): linked with the host's libgcc, loops.py got no
+# ELF for x_int64_division and x_ll_div, and run.sh stopped there
+RT_llrmElf=$(gcc -m32 -print-libgcc-file-name)
 if [ -z "${VSGCC_ONLY:-}" ]; then
-RT_gcc=$(gcc -m32 -print-libgcc-file-name)
+RT_gcc=$RT_llrmElf
 # the pin's clang only: PATH's is the distro's 20.1.8 (its numbers were read as the pin's); pin_clang.py refuses anything else
 CLANG=$(python3 "$R/tools/pin_clang.py")
 export LLRM_PIN_CLANG=$CLANG

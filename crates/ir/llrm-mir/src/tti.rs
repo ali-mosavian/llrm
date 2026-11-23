@@ -1461,6 +1461,15 @@ pub trait Tti {
         false
     }
 
+    /// Whether a recursive call whose result joins a phi, one associative
+    /// operation and the `ret` is turned into an accumulator loop
+    /// (TCE-ACC-PHI, `tailcallelim`). The pin does not; GCC's
+    /// `pass_tail_recursion` does, so a target with GCC in its bar keeps it and
+    /// one measured against the pin alone (wasm) does not.
+    fn eliminates_accumulator_through_join(&self) -> bool {
+        true
+    }
+
     /// Whether `indirectbr` is expanded to a `switch` over block numbers
     /// before selection (`TargetSubtargetInfo::enableIndirectBrExpand`): the
     /// target has no jump through a register to a block's address.
@@ -1611,6 +1620,11 @@ pub trait Tti {
 
     /// DEVIATE IPRA-DSO-LOCAL: see `Tuning::ipra_binds_local`.
     fn ipra_binds_local(&self) -> bool {
+        false
+    }
+
+    /// DEVIATE IPRA-OS-TRIAL: `Tuning::ipra_trial_at_size`.
+    fn ipra_trial_at_size(&self) -> bool {
         false
     }
 
@@ -2509,6 +2523,11 @@ pub trait Tti {
 
     /// `Tuning::inline_variable_memcpy`.
     fn inlines_variable_memcpy(&self) -> bool {
+        false
+    }
+
+    /// `Tuning::inline_variable_memcpy_at_size`.
+    fn inlines_variable_memcpy_at_size(&self) -> bool {
         false
     }
 

@@ -277,12 +277,19 @@ fn common_tail(
 /// length, and at optsize two instructions are enough where a block is all tail
 /// (`ProfitableToMerge`'s layout-successor and `OptForSize` rules).
 ///
+/// DEVIATE TM-PAIRS-OS (owner w11, review 2027-01-31): at optsize two
+/// instructions are enough for any pair, not only where a block is all tail, as
+/// gcc's cross-jumping (`-fcrossjumping`, `min-crossjump-insns` 2) does: arm64
+/// QB -Os, 156 modules, -1,624 B, 48 modules smaller, none larger, none
+/// crossing its best of gcc and clang.
+///
 /// DEVIATE: the pin takes the pairs by the hash of their ends, not by the last
 /// instruction, and the first `TAIL_MERGE_THRESHOLD` predecessors of a block
 /// at a time, not chunks of a group. Exit: 2026-12-11.
 fn merge_return_tails(
     blocks: &mut Vec<Lowered>,
     optsize: bool,
+    dead_ends: &mut Vec<String>,
 ) {
     // The block that is only a return, where there is one: a block that
     // returns, or jumps there, ends the same way.
@@ -296,29 +303,34 @@ fn merge_return_tails(
                 },
             )
     };
-    let ends_alike = |blocks: &[Lowered], at: usize, bare: &Option<(String, Inst)>| -> Option<Vec<Inst>> {
-        let mut insts = blocks[at].insts.clone();
-        match (insts.last(), bare) {
-            (Some(Inst::Ret { .. }), None) => Some(insts),
-            (Some(last), Some((label, ret)))
-                if last == ret
-                    || matches!(
-                        last,
-                        Inst::Branch { link: false, target: Target::Label(to) } if to == label
-                    ) =>
-            {
-                if blocks[at].label == *label || insts.len() < 2 {
-                    return None;
+    let ends_alike =
+        |blocks: &[Lowered], at: usize, bare: &Option<(String, Inst)>, dead_ends: &[String]| -> Option<Vec<Inst>> {
+            let mut insts = blocks[at].insts.clone();
+            match (insts.last(), bare) {
+                (Some(Inst::Ret { .. }), None) => Some(insts),
+                (Some(last), Some((label, ret)))
+                    if last == ret
+                        || matches!(
+                            last,
+                            Inst::Branch { link: false, target: Target::Label(to) } if to == label
+                        ) =>
+                {
+                    if blocks[at].label == *label || insts.len() < 2 {
+                        return None;
+                    }
+                    *insts.last_mut()? = Inst::Branch { link: false, target: Target::Label(label.clone()) };
+                    Some(insts)
                 }
-                *insts.last_mut()? = Inst::Branch { link: false, target: Target::Label(label.clone()) };
-                Some(insts)
+                // A jump (to a block, or a tail call): the blocks that jump to
+                // the same place end alike.
+                (Some(Inst::Branch { link: false, .. }), _) => Some(insts),
+                // A block that ends in a call that never returns has no
+                // successor:
+                // `TailMergeBlocks` takes those first, whatever they end in.
+                (Some(Inst::Branch { link: true, .. }), _) if dead_ends.contains(&blocks[at].label) => Some(insts),
+                _ => None,
             }
-            // A jump (to a block, or a tail call): the blocks that jump to the
-            // same place end alike.
-            (Some(Inst::Branch { link: false, .. }), _) => Some(insts),
-            _ => None,
-        }
-    };
+        };
     loop {
         // A block merged whole is only a jump now: the branches to it go on
         // to its target, so that the blocks that led to it end alike
@@ -331,8 +343,9 @@ fn merge_return_tails(
             }
         }
         let bare_block = bare(blocks);
-        let ending: Vec<(usize, Vec<Inst>)> =
-            (0..blocks.len()).filter_map(|at| ends_alike(blocks, at, &bare_block).map(|insts| (at, insts))).collect();
+        let ending: Vec<(usize, Vec<Inst>)> = (0..blocks.len())
+            .filter_map(|at| ends_alike(blocks, at, &bare_block, dead_ends).map(|insts| (at, insts)))
+            .collect();
         // Blocks are compared with those that end in the same instruction.
         let mut groups: HashMap<String, Vec<usize>> = HashMap::default();
         for (at, (_, insts)) in ending.iter().enumerate() {
@@ -370,7 +383,7 @@ fn merge_return_tails(
                         (length == blocks[*one].insts.len(), length == blocks[*other].insts.len());
                     let falls_in =
                         real >= 2 && ((*other == *one + 1 && other_full) || (*one == *other + 1 && one_full));
-                    let small = optsize && real >= 2 && (one_full || other_full);
+                    let small = optsize && real >= 2;
                     if (real >= TAIL_MERGE_SIZE || identical || falls_in || small)
                         && !whole
                         && best.is_none_or(|(a, b, longest)| {
@@ -384,7 +397,7 @@ fn merge_return_tails(
         }
         let Some((one, other, length)) = best else { return };
         for at in [one, other] {
-            if let Some(insts) = ends_alike(blocks, at, &bare_block) {
+            if let Some(insts) = ends_alike(blocks, at, &bare_block, dead_ends) {
                 blocks[at].insts = insts;
             }
         }
@@ -409,6 +422,9 @@ fn merge_return_tails(
             let tail =
                 Lowered { label, insts: blocks[other].insts.split_off(at), locs: blocks[other].locs.split_off(at) };
             let label = tail.label.clone();
+            if dead_ends.contains(&blocks[other].label) {
+                dead_ends.push(label.clone());
+            }
             blocks[other].insts.push(Inst::Branch { link: false, target: Target::Label(label) });
             blocks[other].locs.push(None);
             blocks.insert(other + 1, tail);
@@ -721,9 +737,10 @@ pub fn fold_with_odds(
     dead_ends: &[String],
     kept: &[String],
     indirect: &[(String, Vec<String>)],
-) -> (Vec<Lowered>, Likelihood) {
+) -> (Vec<Lowered>, Likelihood, Vec<String>) {
+    let mut dead_ends = dead_ends.to_vec();
     if blocks.is_empty() {
-        return (blocks, Likelihood::default());
+        return (blocks, Likelihood::default(), dead_ends);
     }
     // A fall-through becomes a branch, so that blocks can move.
     for at in 0..blocks.len() - 1 {
@@ -743,7 +760,7 @@ pub fn fold_with_odds(
             blocks[at].locs.push(None);
         }
     }
-    merge_return_tails(&mut blocks, optsize);
+    merge_return_tails(&mut blocks, optsize, &mut dead_ends);
     hoist_common_code(&mut blocks, tables);
     // The entry is never forwarded away.
     let entry = blocks[0].label.clone();
@@ -1038,7 +1055,7 @@ pub fn fold_with_odds(
     for (edge, odds) in copied_tails {
         priced.entry(edge).or_insert(odds);
     }
-    (ordered, priced)
+    (ordered, priced, dead_ends)
 }
 
 #[cfg(test)]
@@ -1129,6 +1146,40 @@ mod tests {
         };
         assert_eq!(zeroings(true), 1);
         assert_eq!(zeroings(false), 2);
+    }
+
+    /// At optsize two common instructions merge though neither block is all
+    /// tail (gcc's `min-crossjump-insns` 2): QB arm64 -Os wrote `mov x0, x19;
+    /// mov w1, #n` before a shared `b` on every path, 1,624 B over 156 modules.
+    /// At speed they stay.
+    #[test]
+    fn a_two_instruction_tail_merges_at_optsize_though_neither_block_is_all_tail() {
+        use crate::mc::inst::{Logic, Shift};
+        let jump = |to: &str| Inst::Branch { link: false, target: Target::Label(to.into()) };
+        let zero = |rd| Inst::LogicShifted {
+            op: Logic::Orr,
+            invert: false,
+            width: Width::X,
+            rd: Gpr(rd),
+            rn: Gpr(31),
+            rm: Gpr(31),
+            shift: Shift::Lsl,
+            amount: 0,
+        };
+        let blocks = || {
+            vec![
+                block(".Lf.0", vec![cbz(1, ".Lf.2"), jump(".Lf.1")]),
+                block(".Lf.1", vec![Inst::Nop, zero(0), zero(1), jump(".Lf.4")]),
+                block(".Lf.2", vec![Inst::Nop, Inst::Nop, zero(2), zero(1), jump(".Lf.4")]),
+                block(".Lf.4", vec![Inst::Ret { rn: Gpr(30) }]),
+            ]
+        };
+        let writes = |optsize: bool| {
+            let out = fold(blocks(), &mut [], &Odds::default(), optsize, &[]);
+            out.iter().flat_map(|block| &block.insts).filter(|inst| **inst == zero(1)).count()
+        };
+        assert_eq!(writes(true), 1);
+        assert_eq!(writes(false), 2);
     }
 
     /// `-tail-merge-threshold` bounds the blocks compared at once, not the

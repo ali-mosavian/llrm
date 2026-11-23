@@ -14,4 +14,7 @@ static long deep(long n, long a, long b, long c, long d)
     }
     return t + s;
 }
-int main(void) { report(deep(5, 1, 2, 3, 4)); return 0; }
+/* The arguments come from volatile objects: gcc evaluated the whole recursion at compile time (`pea 64`), so a clock census measured no
+   kernel on its side. Every compiler runs the recursion. */
+static volatile long n0 = 5, a0 = 1, b0 = 2, c0 = 3, d0 = 4;
+int main(void) { report(deep(n0, a0, b0, c0, d0)); return 0; }

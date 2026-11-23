@@ -19,6 +19,12 @@
 //! - LVA2 only an update `acc op x` whose `acc` is the reduction's own phi and
 //!   `x` a widened value; a chain of several operations keeps the wide
 //!   accumulator.
+//!
+//! # Runs
+//! Inside `loopvectorize`, on a reduction whose vector is wider than a register.
+//!
+//! # Example
+//! `acc = acc + x` with `x: <16 x i64>` on a 128-bit target becomes eight adds of `<2 x i64>` pieces of `x` into one `<2 x i64>` accumulator.
 
 use llrm_mir::context::{Constant, ConstantKind, Context};
 use llrm_mir::edit::Position;

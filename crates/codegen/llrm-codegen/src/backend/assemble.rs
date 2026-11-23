@@ -195,7 +195,7 @@ pub fn assembled(
     cpu: ProfileOrName<'_>,
     segments: &Segments,
 ) -> Result<masm::Module, String> {
-    assembled_by(module, abi, code, cpu, segments, isel::m16(), Selector::Old, &llrm_x86_m16::M16, &[])
+    assembled_by(module, abi, code, cpu, segments, isel::m16(), Selector::Old, &llrm_x86_m16::M16, &[], false)
 }
 
 /// `module` as masm, its code in the segment `code`, selected by `selection`.
@@ -209,6 +209,7 @@ pub fn assembled_by(
     selector: Selector,
     arch: &dyn llrm_target::Target,
     libcalls: &[(String, u32, String)],
+    elf: bool,
 ) -> Result<masm::Module, String> {
     let cpu = crate::backend::cpu::profile(cpu)?;
     // A far object of more bytes than a segment holds is laid down in
@@ -239,6 +240,9 @@ pub fn assembled_by(
     // Off when tuned for size: each load site costs the `cs:` byte, which the
     // moved table's data bytes do not repay (QCport -Os grew).
     let reads_in_code = cpu.target().tuning().read_only_in_code && !cpu.size;
+    // `elf`: the format the driver writes, which a target's default (x86-m32's
+    // is OMF) does not say.
+    let flat_elf = elf && arch.object().code_model().flat();
     let mut aligned_tables: Vec<codetables::Table> = Vec::new();
     let mut sectioned: IndexMap<String, Vec<masm::Datum>> = IndexMap::default();
     let mut huge_objects: Vec<(String, Vec<masm::Datum>)> = Vec::new();
@@ -253,8 +257,19 @@ pub fn assembled_by(
     let mut comdats: std::collections::BTreeMap<String, masm::Comdat> = Default::default();
     let pool = Rc::new(RefCell::new(Pool::new(module.globals.len() as i64)));
     let classes = Rc::new(RegisterClasses::of(arch));
-    let (facts, order) =
-        calleefacts::CalleeFacts::of_binding(module, cpu.target().tti().is_some_and(|tti| tti.ipra_binds_local()));
+    let tti = cpu.target().tti();
+    let binds_local = tti.as_ref().is_some_and(|tti| tti.ipra_binds_local())
+        || llrm_support::env_flag!("LLRM_IPRA_BINDS_LOCAL")
+        || llrm_transforms::trial::ipra_binds_local();
+    // DEVIATE IPRA-OS-TRIAL: noted for the driver, which compiles again with
+    // the facts on.
+    if !binds_local
+        && tti.as_ref().is_some_and(|tti| tti.ipra_trial_at_size())
+        && calleefacts::CalleeFacts::local_binding_matters(module)
+    {
+        llrm_transforms::trial::note_ipra_matters();
+    }
+    let (facts, order) = calleefacts::CalleeFacts::of_binding(module, binds_local);
     let facts = facts.aligning_every_call(cpu.aligned_calls);
     let target = Target {
         facts: &facts,
@@ -332,6 +347,13 @@ pub fn assembled_by(
                     huge_objects.push((name.to_owned(), datums));
                 } else if matches!(global.address_space, FAR_SPACE | HUGE_SPACE) {
                     far_data.extend(datums);
+                } else if flat_elf && variable.constant && comdat_of(module, name).is_none() {
+                    // The pin's `.rodata`, and `.data.rel.ro` for a table of
+                    // addresses in position independent code, whose
+                    // relocations the loader applies.
+                    let relocated = datums.iter().any(|one| matches!(one, masm::Datum::Pointer(_)));
+                    let section = if relocated && module.position_independent() { ".data.rel.ro" } else { "CONST" };
+                    sectioned.entry(section.to_owned()).or_default().extend(datums);
                 } else if variable.constant
                     && global.linkage == Linkage::Private
                     && comdat_of(module, name).is_none()
@@ -544,6 +566,7 @@ pub fn assembled_by(
                             cpu.size,
                             Some(&calls),
                             cpu.tail_merge_pin_faithful,
+                            cpu.tail_merge_pairs_at_size,
                         )
                         .map_err(|error| error.to_string())?;
                         masm::Procedure { body, ..procedure }
@@ -561,7 +584,6 @@ pub fn assembled_by(
         let registers = shared_registers.clone().expect("a routine is shared by a function");
         procedures.push(masm::routine_procedure(&name, code, registers, Regs(arch.registers())));
     }
-    let flat_elf = arch.object().default == llrm_target::object::Format::Elf && arch.object().code_model().flat();
     // A flat ELF object keeps the pool in mergeable sections, with no gap to
     // fill.
     let entries = pool.borrow();
@@ -657,7 +679,8 @@ pub fn assembled_by(
         })
         .filter_map(|(at, _)| names.get(&(globals::space(module, GlobalId(at as u32)), at as i64)).map(String::as_str))
         .collect();
-    for datum in &data {
+    // The addresses in a section of its own name an external as the data's do.
+    for datum in data.iter().chain(sectioned.values().flatten()) {
         if let masm::Datum::Pointer(pointer) = datum
             && declared.contains(pointer.name.as_str())
         {

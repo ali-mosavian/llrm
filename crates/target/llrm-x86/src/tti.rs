@@ -931,6 +931,10 @@ impl Tti for X86 {
         self.tuning.ipra_binds_local
     }
 
+    fn ipra_trial_at_size(&self) -> bool {
+        self.tuning.ipra_trial_at_size
+    }
+
     fn unroll_trial_at_size(&self) -> Option<u32> {
         self.tuning.unroll_trial_at_size
     }
@@ -1544,6 +1548,10 @@ impl Tti for X86 {
 
     fn inlines_variable_memcpy(&self) -> bool {
         self.tuning.inline_variable_memcpy
+    }
+
+    fn inlines_variable_memcpy_at_size(&self) -> bool {
+        self.tuning.inline_variable_memcpy_at_size
     }
 
     fn copy_price_for_size(&self) -> Option<llrm_mir::target::CopyPrice> {

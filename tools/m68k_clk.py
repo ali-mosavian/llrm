@@ -4,6 +4,7 @@
 m68k_clk.py [--cc LLRM_CC] [--cpus 68000,68020] [--levels O1,O2,Os] [--jobs N] FILE.c...
 
 Each program is linked with the support objects of `m68k_exec_sweep`, run under qemu-m68k and priced by the `cycles` example (CYCLES_CPUS).
+The support objects (compiler-rt archive) are built by the compiler under test and linked into BOTH the ours and the gcc executables: cells that call the library (soft float, multiply, divide) compare user code only, and library codegen differences against gcc are invisible.
 An empty clocks cell is unmeasured: no row or uncovered code (`?`); never a number.
 Environment: GCC_M68K (the cross toolchain root), LLRM_CC, CYCLES (the built `cycles` example; default under CARGO_TARGET_DIR).
 """
@@ -17,6 +18,34 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent
 sys.path.insert(0, str(HERE))
+
+
+def sources_stamp(root):
+    """The stamp `crates/target/llrm-m68k/build.rs` bakes into `cycles` (`cycles --stamp`): FNV-1a 64 over the relative path and text of every file under the crate's `src` and `examples`, in path order. A binary whose stamp differs was built from other sources."""
+    crate = Path(root) / "crates/target/llrm-m68k"
+    names = sorted(
+        (str(path.relative_to(crate)).replace(os.sep, "/"), path)
+        for sub in ("src", "examples")
+        for path in (crate / sub).rglob("*")
+        if path.is_file()
+    )
+    value = 0xCBF29CE484222325
+    for name, path in names:
+        for chunk in (name.encode(), b"\0", path.read_bytes(), b"\0"):
+            for byte in chunk:
+                value = ((value ^ byte) * 0x100000001B3) & 0xFFFFFFFFFFFFFFFF
+    return f"{value:016x}"
+
+
+def verify_cycles(cycles, root, target_dir):
+    """Refuse a `cycles` binary that is not this checkout's: outside its target dir (another session's build priced a whole census from before #10557: `>=` where the tip says `<=`), or built from other `llrm-m68k` sources (stale)."""
+    path = Path(cycles).resolve()
+    allowed = [Path(target_dir).resolve(), (Path(root) / "target").resolve()]
+    if not any(path.is_relative_to(one) for one in allowed):
+        raise SystemExit(f"m68k_clk: CYCLES {path} is outside this checkout's target dir ({allowed[0]}): build it here (cargo build -p llrm-m68k --example cycles)")
+    out = subprocess.run([str(path), "--stamp"], capture_output=True, text=True)
+    if out.returncode or out.stdout.strip() != sources_stamp(root):
+        raise SystemExit(f"m68k_clk: CYCLES {path} was built from other llrm-m68k sources (stamp {out.stdout.strip() or 'none'}, this checkout {sources_stamp(root)}): rebuild it")
 
 
 def gcc_is_comparable(source):
@@ -97,7 +126,7 @@ def gcc_command(gcc, gcc_root, cpu, level, path, obj, pcrel, flags=()):
     import external_flags
 
     return [gcc, f"-B{gcc_root}/usr/lib/gcc-cross/m68k-linux-gnu/15/", f"-B{gcc_root}/usr/m68k-linux-gnu/bin/",
-            "-nostdlib", "-w", "-msoft-float", *(["-mpcrel"] if pcrel else []), f"-mcpu={cpu}", f"-{level}",
+            "-nostdlib", "-w", "-msoft-float", *external_flags.flags("none", (), 15), *(["-mpcrel"] if pcrel else []), f"-mcpu={cpu}", f"-{level}",
             *external_flags.GCC_DIALECT, *external_flags.gcc_source_defines(Path(path).read_text() if Path(path).is_file() else ""), *external_flags.gcc_program_flags(flags), *(["-isystem", os.environ["M68K_GCC_HEADERS"]] if os.environ.get("M68K_GCC_HEADERS") else []), "-isystem", str(ROOT / "runtime/shared/posix"), "-c", str(path), "-o", str(obj)]
 
 
@@ -118,6 +147,8 @@ def main():
     gcc_root = os.environ["GCC_M68K"]
     target = os.environ.get("CARGO_TARGET_DIR", str(ROOT / "target"))
     cycles = os.environ.get("CYCLES", f"{target}/release/examples/cycles")
+    if not args.libs_only:
+        verify_cycles(cycles, ROOT, target)
     gcc = f"{gcc_root}/usr/bin/m68k-linux-gnu-gcc"
     size = f"{gcc_root}/usr/bin/m68k-linux-gnu-size"
     print("cpu\tprogram\tlevel\tours_B\tours_clk\tgcc_B\tgcc_clk\tours_lib\tgcc_lib")
