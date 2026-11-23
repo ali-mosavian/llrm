@@ -112,14 +112,15 @@ fn a_remainder_loop_that_is_the_whole_module_keeps_the_compact_routine_at_os() {
     assert!(text.contains("__umodhi3c\n"), "the compact remainder at -Os:\n{text}");
 }
 
-/// idiv_loop_os at -Os: the Euclid loop saves 1.5 times its byte share by the
-/// estimate (-57% clocks measured): under the rule, so compact. Row
-/// 6502-DIV-16-CALLEE-SAVES.
+/// idiv_loop_os at -Os ran 2.31M clocks against llvm-mos's 1.07M on the compact
+/// remainder: the share rule (64% of the clocks for its 32% of the bytes)
+/// refused a speed routine whose image (229 B) is under the 285 B the pin links
+/// for a signed remainder (`[pin.division16]`). Row 6502-DIV-16-OS-IDIV-LOOP.
 #[test]
-fn the_euclid_loop_stays_compact_at_os_under_the_rule() {
+fn the_euclid_loop_takes_the_speed_routine_at_os_within_the_pins_image() {
     let ir = format!("target datalayout = \"{}\"\n{GCD_SUM}", datalayout());
     let text = assembly(&ir, &Request::new(Level::Os)).unwrap_or_else(|e| panic!("{e}"));
-    assert!(text.contains("__modhi3c\n"), "the compact remainder at -Os:\n{text}");
+    assert!(text.contains("__modhi3\n") && !text.contains("__modhi3c"), "the speed remainder at -Os:\n{text}");
 }
 
 /// A division that runs once repays no byte: -Os keeps the compact routine.

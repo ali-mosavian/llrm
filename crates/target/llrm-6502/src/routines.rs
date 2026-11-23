@@ -256,3 +256,25 @@ fn scan_cells(name: &str) -> Option<std::collections::BTreeSet<u8>> {
     }
     Some(cells)
 }
+
+/// The bytes the pin's flow links for a 16-bit division of the same kind
+/// (`[pin.division16]`): signed (the remainder with its sign pair) or unsigned.
+pub fn pin_division16_image(signed: bool) -> u64 {
+    let doc: toml::Table = ROUTINES.parse().expect("routines.toml is well formed");
+    doc.get("pin")
+        .and_then(|t| t.as_table())
+        .and_then(|t| t.get("division16"))
+        .and_then(|t| t.as_table())
+        .and_then(|t| t.get(if signed { "signed" } else { "unsigned" }))
+        .and_then(|v| v.as_integer())
+        .and_then(|v| u64::try_from(v).ok())
+        .expect("pin.division16 has a signed and an unsigned image")
+}
+
+/// Whether the speed routines in `image` (the routines a module links) link no
+/// more than the pin does for the same kind of 16-bit division: signed when the
+/// image holds a signed routine.
+pub fn within_pin_division16_image(image: &std::collections::BTreeSet<String>) -> bool {
+    let signed = ["__divhi3", "__modhi3", "__divmodhi4"].iter().any(|one| image.contains(*one));
+    crate::mulimage::image_bytes(image) as u64 <= pin_division16_image(signed)
+}

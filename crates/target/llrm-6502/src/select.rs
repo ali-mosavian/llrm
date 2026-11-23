@@ -450,12 +450,14 @@ pub fn module_text(
             }
         }
         let (saved, growth, clocks, bytes) = division16_terms(module, parts, &faster, &texts)?;
+        let names: Vec<String> = parts.iter().map(|(name, _)| (*name).to_owned()).collect();
         if crate::mulimage::pays_by_share_at(
             crate::routines::size_share_percent("division16"),
             (saved, growth),
             clocks,
             bytes,
-        ) {
+        ) || division16_within_pin_image(&names, &faster, saved, growth)
+        {
             texts = faster;
             variants = chosen;
         }
@@ -1350,6 +1352,25 @@ fn speed_division16_pays(
             clocks,
             bytes,
         ))
+}
+
+/// The speed 16-bit divisions at size when the image they link is no larger
+/// than the pin's for the same kind (`[pin.division16]`) and the clocks they
+/// save repay the bytes they add at the speed rate: a cold division stays
+/// compact.
+///
+/// DEVIATE 6502-DIV-16-OS-PIN-IMAGE (owner llrm-target-6502, review
+/// 2027-01-31): the pin links one routine; the share rule at size alone
+/// refuses a speed routine the pin's own flow spends as many bytes on
+/// (idiv_loop_os -Os: 2.31M clocks against llvm-mos's 1.07M).
+fn division16_within_pin_image(
+    names: &[String],
+    speed: &[String],
+    saved: u64,
+    growth: i64,
+) -> bool {
+    let repays = saved >= growth.max(0) as u64 * u64::from(crate::alloc::Tuning::SPEED.clocks_per_byte);
+    repays && crate::routines::within_pin_division16_image(&crate::mulimage::image_of_texts(names, speed))
 }
 
 /// What taking the speed 16-bit divisions (`speed` texts) instead of the
