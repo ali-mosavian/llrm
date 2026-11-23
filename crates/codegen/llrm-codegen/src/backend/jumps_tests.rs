@@ -674,8 +674,8 @@ fn test_merged_tails_share_their_values() {
 
 /// Two arms stored through the same register but the allocator had split the
 /// address into a value per arm (`Mem::base` 36 and 37): the stores compared
-/// unequal, so QB `tty_parse` m64 -Os kept eight `host_bios_key` calls where the
-/// pin has five (1,461 B against 1,446).
+/// unequal, so QB `tty_parse` m64 -Os kept eight `host_bios_key` calls where
+/// the pin has five (1,461 B against 1,446).
 #[test]
 fn test_stores_through_one_register_are_one_tail_whatever_their_values_are_named() {
     let store = |at: i64, value: u32| {
@@ -684,7 +684,10 @@ fn test_stores_through_one_register_are_one_tail_whatever_their_values_are_named
             base: Some(crate::model::ir::Held { value, width: 2, offset: 0 }),
             ..llrm_lir::Mem::new(None, 2)
         });
-        Arc::new(Insn { uses: vec![value], ..(*_inserted(_insn(at, Operation::Move, "mov", vec![cell], vec![ax()], None))).clone() })
+        Arc::new(Insn {
+            uses: vec![value],
+            ..(*_inserted(_insn(at, Operation::Move, "mov", vec![cell], vec![ax()], None))).clone()
+        })
     };
     let source = body(
         "f",
@@ -698,7 +701,11 @@ fn test_stores_through_one_register_are_one_tail_whatever_their_values_are_named
     );
     let result = merged(&placed(&source).unwrap()).unwrap();
 
-    assert_eq!(physical(&result).iter().filter(|what| what.op == Operation::Move).count(), 1, "the two stores stayed apart");
+    assert_eq!(
+        physical(&result).iter().filter(|what| what.op == Operation::Move).count(),
+        1,
+        "the two stores stayed apart"
+    );
 }
 
 /// Both ways of a branch led to bare jumps to one block: threading sent each
