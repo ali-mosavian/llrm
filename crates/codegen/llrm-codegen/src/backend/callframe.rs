@@ -198,9 +198,10 @@ impl LIRTransform for ReserveCallFrame {
             .filter_map(|one| imm_of(one, 0))
             .max()
             .unwrap_or(0);
-        // The area is not padded: the frame's own size is aligned to the call alignment past the return address (a
-        // 40-byte Win64 area is `sub rsp, 40`, not 48 + 8).
-        // The destroys that re-reserve what a callee popped become `sub`.
+        // The area is not padded: the frame's own size is aligned to the call
+        // alignment past the return address (a 40-byte Win64 area is
+        // `sub rsp, 40`, not 48 + 8). The destroys that re-reserve what
+        // a callee popped become `sub`.
         let mut out = body.clone();
         for block in &mut out.blocks {
             let insns: Vec<Arc<Insn>> = block
@@ -276,9 +277,22 @@ impl ReserveCallFrame {
             })
             .collect();
         let pushed = self.saved.iter().filter(|whole| written.contains(whole)).count() as i64;
-        let locals = self.frame.as_ref().map_or(0, |frame| frame.borrow().size());
+        // The frame's own size is the spill slots below the floor; the objects
+        // the body addresses itself (static allocas) lie above it, and the
+        // phase counts them too: a four-byte local read as no local put the
+        // phase four bytes off and padded the frame and every call.
+        let locals = self
+            .frame
+            .as_ref()
+            .map_or(
+                0,
+                |frame| {
+                    let frame = frame.borrow();
+                    frame.size() - frame.floor
+                },
+            );
         let base = (slot + slot * pushed + (locals + slot - 1) / slot * slot) % align;
-        best_phase(&sizes, Some(base), align, self.phase_step.max(slot))
+        best_phase(&sizes, Some(base), align, self.phase_step.max(slot), locals > 0)
     }
 }
 
@@ -290,10 +304,14 @@ fn best_phase(
     base: Option<i64>,
     align: i64,
     step: i64,
+    has_locals: bool,
 ) -> i64 {
     let cost = |phase: i64| -> i64 {
+        // A frame that has locals has its `sub` already: the pad is a larger
+        // immediate, no code.
         let frame = match base.map_or(0, |base| (phase - base).rem_euclid(align)) {
             0 => 0,
+            _ if has_locals => 0,
             4 => 2,
             _ => 6,
         };
@@ -481,7 +499,7 @@ impl CallFrameOpt {
             return 0;
         }
         let sizes: Vec<i64> = contexts.iter().map(|one| imm_of(&one.setup, 0).unwrap_or(0)).collect();
-        best_phase(&sizes, None, align, self.phase_step.max(self.slot))
+        best_phase(&sizes, None, align, self.phase_step.max(self.slot), false)
     }
 
     // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86CallFrameOptimization.cpp#L147
@@ -1220,18 +1238,18 @@ mod tests {
     #[test]
     fn the_frame_takes_the_phase_that_pads_the_fewest_bytes() {
         // calls of 8, 8, 8 and 0 bytes
-        assert_eq!(best_phase(&[8, 8, 8, 0], Some(8), 16, 4), 8);
+        assert_eq!(best_phase(&[8, 8, 8, 0], Some(8), 16, 4, false), 8);
         // two calls of 0 bytes and one of 8: no pad at 0, and the frame is
         // aligned already
-        assert_eq!(best_phase(&[8, 0, 0], Some(0), 16, 4), 0);
+        assert_eq!(best_phase(&[8, 0, 0], Some(0), 16, 4, false), 0);
         // one call of 8 bytes from a frame whose own pad is 8 at phase 0: phase
         // 8 pays neither
-        assert_eq!(best_phase(&[8], Some(8), 16, 4), 8);
+        assert_eq!(best_phase(&[8], Some(8), 16, 4, false), 8);
         // a frame object 8-aligned keeps the phase a multiple of 8
-        assert_eq!(best_phase(&[4], Some(4), 16, 8) % 8, 0);
+        assert_eq!(best_phase(&[4], Some(4), 16, 8, false) % 8, 0);
         // `isProfitable` prices the calls alone: a one-argument call is aligned
         // at phase 12, not 0
-        assert_eq!(best_phase(&[4, 4], None, 16, 4), 12);
+        assert_eq!(best_phase(&[4, 4], None, 16, 4, false), 12);
     }
 
     /// The frame pseudos that no push replaced were `sub`/`add` in the DAG
