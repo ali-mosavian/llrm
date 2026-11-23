@@ -1,7 +1,7 @@
 """A 1 KB local buffer with no spills counted 1,000+ stack ops (diag.c 0x40c); a spill-free function must count 0 spill slots."""
 import os,subprocess,tempfile,sys,re
 src=open(os.path.join(os.path.dirname(__file__),'spillcensus.py')).read().split("files=sorted")[0]
-os.environ.setdefault('QB_TREE','/nonexistent'); sys.argv=['x','m64','Os','x']; ns={}; exec(src,ns)
+os.environ.setdefault('QB_TREE','/nonexistent'); sys.argv=['x','m64','Os','x']; ns={'__file__':os.path.join(os.path.dirname(__file__),'spillcensus.py')}; exec(src,ns)
 def obj(c):
     d=tempfile.mkdtemp(); o=d+'/o.o'; subprocess.run(['gcc','-Os','-m64','-fno-pic','-fno-stack-protector','-fcf-protection=none','-c','-x','c','-','-o',o],input=c,text=True,check=True); return o
 def test_buffer_is_not_a_spill():
