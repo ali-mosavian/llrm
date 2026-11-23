@@ -40,6 +40,12 @@
 //! every way into a block agrees on (`entered_with`; GCC asks ranger); the path
 //! may not copy more than `max-jump-thread-duplication-stmts` (15)
 //! instructions; a function with `optsize` or `minsize` is left alone.
+//!
+//! # Example
+//! ```text
+//!   q: x > 0 known; p: join of q and r; bb: br (x > 0), A, B
+//!   =>  q jumps through the copies p', bb' straight to A; r still goes through p and bb
+//! ```
 
 use llrm_analysis::edges::{self, phis, single_predecessor, starts_with_landing_pad};
 use llrm_analysis::occurrence::{arms, from_arms};
