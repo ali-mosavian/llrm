@@ -229,6 +229,8 @@ fn popping(what: &Semantics) -> Option<Semantics> {
         (Operation::Compare, "fcom") => Some(renamed("fcomp")),
         (Operation::Compare, "fcomp") if what.sources == [st(0), st(1)] => Some(renamed("fcompp")),
         (Operation::Compare, "fucom") => Some(renamed("fucomp")),
+        (Operation::Compare, "fcomi") => Some(renamed("fcomip")),
+        (Operation::Compare, "fucomi") => Some(renamed("fucomip")),
         (Operation::Compare, "fucomp") if what.sources == [st(0), st(1)] => Some(renamed("fucompp")),
         (Operation::Compare, "ficom") => Some(renamed("ficomp")),
         // `ST(i) = ST(i) op ST(0)` pops as `op p`.
@@ -542,7 +544,7 @@ impl Fps<'_> {
             self.values.push(results[0]);
             self.vacate();
         } else if what.op == Operation::FloatStore && unnamed(&what) && what.dests.is_empty() && !operands.is_empty() {
-            self.handle_stack_values(&operands)?;
+            self.handle_stack_values(&operands, &step.live_after)?;
         } else if what.op == Operation::Compare && operands.len() == 2 && results.is_empty() {
             self.handle_compare_fp(step, operands[0], operands[1])?;
         } else if what.op == Operation::Compare
@@ -605,8 +607,15 @@ impl Fps<'_> {
     fn handle_stack_values(
         &mut self,
         values: &[u32],
+        live_after: &HashSet<u32>,
     ) -> Result<(), Raised> {
         let distinct: BTreeSet<u32> = values.iter().copied().collect();
+        // The block clears the stack (`handleCall`): a value read after it,
+        // still on the stack, would be dropped with the inputs and found
+        // missing at its next read.
+        if self.values.iter().any(|value| !distinct.contains(value) && live_after.contains(value)) {
+            return Err(unlowered("a floating value is live across a boundary"));
+        }
         self.adjust_live_regs(&distinct)?;
         let mut wanted = values.to_vec();
         for at in (1..wanted.len()).rev() {
@@ -983,10 +992,13 @@ impl Fps<'_> {
         let slot = self.slot(right)?;
         // The quiet compare of a constrained `fcmp` stays `fucom`: `fcom`
         // would signal on a quiet NaN.
-        let name = if self.one().what.as_ref().is_some_and(|what| what.name.as_deref() == Some("fucom")) {
-            "fucom"
-        } else {
-            "fcom"
+        // `fucomi` / `fcomi` (the pin's `UCOM_FpIr` / `COM_FpIr`) write the
+        // flags: no status word follows them.
+        let own = self.one().what.as_ref().and_then(|what| what.name.clone());
+        let sets_flags = matches!(own.as_deref(), Some("fucomi" | "fcomi"));
+        let name = match own.as_deref() {
+            Some(name @ ("fucom" | "fucomi" | "fcomi")) => name,
+            _ => "fcom",
         };
         self.emit(semantics(Operation::Compare, name, Vec::new(), vec![st(0), st(slot)]));
         self.deferred = Some(Vec::new());
@@ -1002,7 +1014,9 @@ impl Fps<'_> {
         })();
         let deferred = self.deferred.take().unwrap_or_default();
         result?;
-        self.status()?;
+        if !sets_flags {
+            self.status()?;
+        }
         for slot in deferred {
             self.insert(semantics(Operation::FloatStore, "fstp", vec![st(slot)], vec![st(0)]));
         }
@@ -1432,10 +1446,16 @@ fn spills_before_stack_inputs(body: &LirBody) -> Option<LirBody> {
         let mut run: Option<(usize, Vec<u32>)> = None;
         for one in block.insns.iter() {
             if inputs(one) {
-                let read = one.what.iter().flat_map(|what| &what.sources).filter_map(|source| match source {
-                    Loc::Held(held) => Some(held.value),
-                    _ => None,
-                });
+                let read = one
+                    .what
+                    .iter()
+                    .flat_map(|what| &what.sources)
+                    .filter_map(
+                        |source| match source {
+                            Loc::Held(held) => Some(held.value),
+                            _ => None,
+                        },
+                    );
                 let (_, values) = run.get_or_insert((out.len(), Vec::new()));
                 values.extend(read);
                 out.push(Arc::clone(one));
@@ -1510,7 +1530,8 @@ pub(super) fn converted_with(
     }
     let mut orders: HashMap<i64, Vec<u32>> = HashMap::default();
     let found = crate::analysis::loops::loops(&current.blocks, Some(current.entry));
-    // Liveness only where there is a loop: a body without one asked it twice for nothing.
+    // Liveness only where there is a loop: a body without one asked it twice
+    // for nothing.
     if found.is_empty() {
         return Ok(best);
     }

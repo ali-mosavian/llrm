@@ -196,7 +196,9 @@ pub fn is_x87_compare(one: &Insn) -> bool {
         .as_ref()
         .is_some_and(
             |what| what.op == Operation::Compare
-                && what.name.as_deref().is_some_and(|name| name.starts_with("fcom") || name.starts_with("ficom")),
+                && what.name.as_deref().is_some_and(|name| {
+                    (name.starts_with("fcom") && !name.starts_with("fcomi")) || name.starts_with("ficom")
+                }),
         )
 }
 

@@ -5632,7 +5632,8 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             }
             _ => false,
         };
-        if !(self.legal_operations() && legal || !self.legal_operations() && !info.volatile) {
+        // `(!LegalOperations && isSimple) || isLoadLegal`
+        if !(!self.legal_operations() && !info.volatile || legal) {
             return None;
         }
         let (chain, ptr) = (self.dag.operand(load, 0), self.dag.operand(load, 1));

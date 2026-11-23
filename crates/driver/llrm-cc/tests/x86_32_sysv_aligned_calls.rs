@@ -114,3 +114,21 @@ fn a_local_is_counted_where_the_frame_leaves_the_stack_for_the_calls() {
         assert!(subs[0].trim() == "sub esp, 8", "{level}: an 8-byte frame:\n{}", body.join("\n"));
     }
 }
+
+/// The cleanup of a call was freed and the next call padded again
+/// (`pop ecx` then `sub esp, 12` between two calls): GCC defers it, and the
+/// bytes of one call pad the next. Three calls of 4, 4 and 8 bytes need one
+/// `sub esp` at -Os, and every call still finds the stack 16-aligned.
+#[test]
+fn the_cleanup_of_a_call_is_the_pad_of_the_next() {
+    let (depths, listing) = depths_of("x86_32-linux", "-Os", "trio");
+    assert_eq!(depths.len(), 3, "{listing}");
+    assert!(depths.iter().all(|depth| depth % 16 == 0), "depths {depths:?}\n{listing}");
+    let start = listing.lines().position(|line| line.trim() == "trio proc near").unwrap();
+    let body: Vec<&str> = listing.lines().skip(start).take_while(|line| line.trim() != "trio endp").collect();
+    let calls: Vec<usize> =
+        body.iter().enumerate().filter(|(_, line)| line.trim().starts_with("call")).map(|(at, _)| at).collect();
+    let between = &body[calls[1] + 1..calls[2]];
+    let freed = between.iter().any(|line| line.trim().starts_with("pop") || line.trim().starts_with("add esp"));
+    assert!(!freed, "the second call's bytes are freed by the pad of the third:\n{}", body.join("\n"));
+}
