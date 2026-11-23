@@ -12,3 +12,11 @@ int pair(int a) {
     g(a, 2);
     return a;
 }
+
+/* A four-byte local and a four-byte argument: eight bytes of frame, none per call. */
+extern void sink(volatile int *);
+int local_alone(void) {
+    volatile int x = 1;
+    sink(&x);
+    return x;
+}
