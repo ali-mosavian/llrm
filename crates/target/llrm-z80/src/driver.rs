@@ -449,6 +449,13 @@ pub struct Reuse<'a> {
     pub digests: &'a Digests,
 }
 
+/// What follows a function's name in the name of an alternative that is
+/// another form of it than the multiply's: the divide's speed routines
+/// (`DIVIDE`), and those with the multiply's form (`BOTH`).
+pub const EXTRA: char = '\u{1}';
+pub const DIVIDE: &str = "div";
+pub const BOTH: &str = "both";
+
 /// [`selections_with_alternatives`], taking from `reuse` the selections of the
 /// functions the mid-end left as it left them there, and the digests of this
 /// compile's functions.
@@ -614,9 +621,16 @@ pub fn selections_reusing(
         .collect();
     let mut alternatives: Vec<Selected> = names
         .iter()
-        .filter_map(|name| {
+        .flat_map(|name| -> Vec<Selected> {
             if let Some(before) = kept(name) {
-                return before.alternatives.iter().find(|(one, ..)| one == name).cloned();
+                return before
+                    .alternatives
+                    .iter()
+                    .filter(|(one, ..)| {
+                        one == name || one.strip_prefix(name.as_str()).is_some_and(|rest| rest.starts_with(EXTRA))
+                    })
+                    .cloned()
+                    .collect();
             }
             // The all-calls form is priced bytes first at every level (it was
             // -O1 only: at 1 B = 3 T the static loop weights, about
@@ -634,7 +648,7 @@ pub fn selections_reusing(
             let call_shifts = has_long_shifts(name);
             let products = has_products(name);
             if muls.is_none() && !fills && !shifts && !divides && !call_shifts && !products {
-                return None;
+                return Vec::new();
             }
             let switch = muls.map(|(_, decompose)| {
                 if decompose { &crate::dagisel::pipeline::DECOMPOSE_MULS } else { &crate::dagisel::pipeline::CALL_MULS }
@@ -663,7 +677,31 @@ pub fn selections_reusing(
             if let Some(switch) = switch {
                 switch.with(|one| one.set(false));
             }
-            Some(selected)
+            let mut found = vec![selected];
+            // A sized function with a multiply alternative and a long divide
+            // has the divide's speed routines as an alternative of
+            // their own (`DIVIDE`) and beside the multiply's
+            // (`BOTH`): the module chooser takes the divide's
+            // first, the multiply's over it (`compile::settled`), so neither
+            // axis holds the function's one slot (bench/switch
+            // -Os).
+            let alone = !fills && !shifts && !call_shifts && !products;
+            if let (true, true, Some((true, decompose))) = (divides, alone, muls) {
+                let switch = if decompose {
+                    &crate::dagisel::pipeline::DECOMPOSE_MULS
+                } else {
+                    &crate::dagisel::pipeline::CALL_MULS
+                };
+                crate::dagisel::pipeline::SPEED_ROUTINES.with(|one| one.set(true));
+                let (source, ilp) = select(module, name);
+                found.push((format!("{name}{EXTRA}{DIVIDE}"), source, ilp));
+                switch.with(|one| one.set(true));
+                let (source, ilp) = select(module, name);
+                found.push((format!("{name}{EXTRA}{BOTH}"), source, ilp));
+                switch.with(|one| one.set(false));
+                crate::dagisel::pipeline::SPEED_ROUTINES.with(|one| one.set(false));
+            }
+            found
         })
         .collect();
     // A function that calls itself twice is also selected without the

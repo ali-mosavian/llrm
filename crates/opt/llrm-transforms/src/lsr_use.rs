@@ -596,6 +596,7 @@ impl Cost {
             num_regs: u32::MAX,
             add_rec_cost: u32::MAX,
             num_iv_muls: u32::MAX,
+            written_work: u32::MAX,
             num_base_adds: u32::MAX,
             imm_cost: u32::MAX,
             setup_cost: u32::MAX,
@@ -811,7 +812,8 @@ impl Cost {
             if f.has_global() {
                 // Symbolic values are rated conservatively.
                 self.c.imm_cost += 64;
-            } else if offset.is_non_zero() && !(lu.kind == Kind::ICmpZero && r.tti.lsr_exit_compare_immediate_is_free()) {
+            } else if offset.is_non_zero() && !(lu.kind == Kind::ICmpZero && r.tti.lsr_exit_compare_immediate_is_free())
+            {
                 let bits = 65 - (offset.0 ^ (offset.0 >> 63)).leading_zeros();
                 self.c.imm_cost += bits;
             }
@@ -986,10 +988,7 @@ impl Cost {
                 loop_cost = 0;
             }
             self.c.add_rec_cost += loop_cost;
-            if loop_cost > 0
-                && !lu.all_fixups_unconditional
-                && lu.kind == Kind::Address
-            {
+            if loop_cost > 0 && !lu.all_fixups_unconditional && lu.kind == Kind::Address {
                 self.c.add_rec_cost += r.tti.lsr_conditional_use_step_cost();
             }
             if loop_cost > 0
@@ -1022,6 +1021,8 @@ impl Cost {
             {
                 let bits = r.se.get_type_size_in_bits(r.cx, r.se.type_of(reg));
                 self.c.num_iv_muls += r.tti.lsr_written_step_multiplies(c.sext_value() as i64, bits);
+                self.c.written_work =
+                    self.c.written_work.saturating_add(r.tti.lsr_written_step_work(c.sext_value() as i64, bits));
             }
             // DEVIATE LU23: `gep p, n` where only `n` is a phi forms the
             // pointer addrec by an add each trip it is used, not a recurrence

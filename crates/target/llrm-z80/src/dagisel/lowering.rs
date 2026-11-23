@@ -57,10 +57,14 @@ pub mod cond {
 pub fn target_lowering(speed_routines: bool) -> TargetLowering {
     use ISD::*;
     let mut tl = TargetLowering::empty(
-        TargetLoweringInfo::new(&[MVT::I1, MVT::I8, MVT::I16], false).with_soft_float().with_soft_compare_classes().with_narrow_library_shift(),
+        TargetLoweringInfo::new(&[MVT::I1, MVT::I8, MVT::I16], false)
+            .with_soft_float()
+            .with_soft_compare_classes()
+            .with_narrow_library_shift(),
     );
     tl.init_actions();
-    // SD241: the shift routine stays for a variable amount known small until an inline policy is priced
+    // SD241: the shift routine stays for a variable amount known small until an
+    // inline policy is priced
     tl.set_libcall_for_small_variable_shift();
     for vt in [MVT::I1, MVT::I8, MVT::I16, MVT::I32, MVT::I64] {
         for ext in [LoadExt::SExtLoad, LoadExt::ZExtLoad, LoadExt::ExtLoad] {
@@ -119,8 +123,9 @@ pub fn target_lowering(speed_routines: bool) -> TargetLowering {
     // `expandFunnelShift`)
     set(&[Rotl, Rotr], &[MVT::I8, MVT::I16], Action::Expand);
     set(&[FShl, FShr], &[MVT::I8], Action::Expand);
-    // `MatchRotate` makes `fshl` of the two shifts of a long shifted by one; a word funnel by 15 left or 1 right is
-    // `FSHR1`, the other amounts are the shifts and an or again
+    // `MatchRotate` makes `fshl` of the two shifts of a long shifted by one; a
+    // word funnel by 15 left or 1 right is `FSHR1`, the other amounts are
+    // the shifts and an or again
     set(&[FShl, FShr], &[MVT::I16], Action::Custom);
     // the action is by the type extended from (`LegalizeDAG`): a word from a
     // byte is the byte sign-extended (`lower_sign_extend_inreg`)
@@ -147,9 +152,10 @@ pub fn target_lowering(speed_routines: bool) -> TargetLowering {
         }
     }
     // the product of two zero-extended words is one call in a function tuned
-    // for size, the whole 32-bit result in `hl` (low) and `de` (`expand_mul`): 15 B
-    // for the product against 216 B of partial products. At -O2 the partial
-    // products ran faster in div_constants_short and compare_to_int64.
+    // for size, the whole 32-bit result in `hl` (low) and `de` (`expand_mul`):
+    // 15 B for the product against 216 B of partial products. At -O2 the
+    // partial products ran faster in div_constants_short and
+    // compare_to_int64.
     tl.set_size_libcall_name(UMulLoHi, MVT::I16, "__umulhisi3");
     tl.set_size_libcall_name(SMulLoHi, MVT::I16, "__mulhisi3");
     // the longs are expanded to words; a divide or a variable shift of one is
@@ -170,7 +176,8 @@ pub fn target_lowering(speed_routines: bool) -> TargetLowering {
     for (op, name) in [Shl, Srl, Sra].into_iter().zip(["__ashlsi3", "__lshrsi3", "__ashrsi3"]) {
         tl.set_size_libcall_name(op, MVT::I32, name);
     }
-    // the 64-bit shifts have a smaller routine for a function tuned for size (a bit at a time: 101 B against 189)
+    // the 64-bit shifts have a smaller routine for a function tuned for size (a
+    // bit at a time: 101 B against 189)
     for (op, name) in [Shl, Srl, Sra].into_iter().zip(["__s_ashldi3", "__s_lshrdi3", "__s_ashrdi3"]) {
         if !speed_routines {
             tl.set_size_variable_libcall_name(op, MVT::I64, name);
@@ -641,7 +648,11 @@ impl Hooks for Z80Lowering {
                 ]
             }
         };
-        let callee = dag.get_target_external_symbol(EVT::I16, name);
+        let symbol = match divide_dividend_range(dag, name) {
+            Some((low, high)) => crate::runtime_size::call_with_dividend_range(name, low, high),
+            None => name.to_owned(),
+        };
+        let callee = dag.get_target_external_symbol(EVT::I16, &symbol);
         let root = dag.entry_node();
         let (chain, values) = lower_call(dag, root, callee, &outs, &ins).ok()?;
         if let Some(cell) = slot {
@@ -663,6 +674,21 @@ impl Hooks for Z80Lowering {
             _ => None,
         }
     }
+}
+
+/// The range the middle end proves of the dividend of a long divide or
+/// remainder libcall (`__modsi3`, `__s_udivsi3`, ...): the call carries it, as
+/// the speed routine's clocks are a step a bit of the values it will divide.
+fn divide_dividend_range(
+    dag: &SelectionDAG,
+    name: &str,
+) -> Option<(i64, i64)> {
+    let divides =
+        matches!(
+            name.trim_start_matches("__s_").trim_start_matches("__"),
+            "divsi3" | "udivsi3" | "modsi3" | "umodsi3"
+        );
+    dag.libcall_dividend.filter(|_| divides).map(|range| (range.low, range.high))
 }
 
 /// A bit in memory is a byte with the upper bits zero, as the pin's type
@@ -869,8 +895,10 @@ fn translate_cc(
     }
 }
 
-/// The byte and the bit of it that `value` is, as far as a compare with zero can tell: `x & (1 << n)`, in a byte or
-/// a word, and the same after the combiner narrowed it to the byte that holds the bit (`trunc (srl (and w, 1 << n), 8)`).
+/// The byte and the bit of it that `value` is, as far as a compare with zero
+/// can tell: `x & (1 << n)`, in a byte or a word, and the same after the
+/// combiner narrowed it to the byte that holds the bit (`trunc (srl (and w, 1
+/// << n), 8)`).
 fn single_bit_of(
     dag: &mut SelectionDAG,
     value: SDValue,
@@ -935,7 +963,8 @@ fn compare(
         let flags = dag.get_node(z80isd::TSTS, EVT::I8, &[op0]);
         return (if cc == SetLt { cond::NZ } else { cond::Z }, flags);
     }
-    // x > 0 is x >= 1, x <= 0 is x < 1: on a word, the carry of `TSTP` (zero or negative). A byte has `cp`.
+    // x > 0 is x >= 1, x <= 0 is x < 1: on a word, the carry of `TSTP` (zero or
+    // negative). A byte has `cp`.
     if vt == EVT::I16 {
         let at_most_zero = match (cc, dag.constant(op1)) {
             (SetLe, Some(0)) | (SetLt, Some(1)) => Some(true),
@@ -947,8 +976,9 @@ fn compare(
             return (if at_most_zero { cond::C } else { cond::NC }, flags);
         }
     }
-    // `(x & (1 << n)) == 0` is `bit n, x`: the Z flag is set when the bit is clear. X86's `LowerAndToBT`, on the byte
-    // of the word that holds the bit (`bit` has no word form).
+    // `(x & (1 << n)) == 0` is `bit n, x`: the Z flag is set when the bit is
+    // clear. X86's `LowerAndToBT`, on the byte of the word that holds the
+    // bit (`bit` has no word form).
     if matches!(cc, SetEq | SetNe) && dag.constant(op1) == Some(0) {
         if let Some((byte, index)) = single_bit_of(dag, op0) {
             let bit = dag.get_constant(u128::from(index), EVT::I8);
