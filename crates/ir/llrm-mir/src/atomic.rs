@@ -612,7 +612,14 @@ pub fn ordered_accesses_plain(
             AtomicKind::Load => Some(instruction.ty),
             _ => function.operand_type(&module.context, instruction.operands[0]),
         };
-        if accessed.and_then(|ty| module.context.types.int_bits(ty)).is_none_or(|bits| bits > native) {
+        // a pointer or a float is as wide as the layout says
+        let bits = accessed.and_then(|ty| {
+            module.context.types.int_bits(ty).or_else(|| {
+                let layout = crate::datalayout::DataLayout::parse(module.datalayout.as_deref()?).ok()?;
+                u32::try_from(layout.size_bits(&module.context.types, ty)).ok()
+            })
+        });
+        if bits.is_none_or(|bits| bits > native) {
             continue;
         }
         let plain = match info.kind {

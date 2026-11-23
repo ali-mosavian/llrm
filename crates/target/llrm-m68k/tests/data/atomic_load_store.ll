@@ -27,3 +27,12 @@ define void @seq_cst_store() {
   store atomic i32 7, ptr @flag seq_cst, align 4
   ret void
 }
+@slot = global ptr null, align 4
+define ptr @pointer_acquire() {
+  %p = load atomic ptr, ptr @slot acquire, align 4
+  ret ptr %p
+}
+define void @pointer_release(ptr %p) {
+  store atomic ptr %p, ptr @slot release, align 4
+  ret void
+}
