@@ -672,6 +672,35 @@ fn test_merged_tails_share_their_values() {
     assert_eq!(undefined, Vec::<String>::new());
 }
 
+/// Two arms stored through the same register but the allocator had split the
+/// address into a value per arm (`Mem::base` 36 and 37): the stores compared
+/// unequal, so QB `tty_parse` m64 -Os kept eight `host_bios_key` calls where the
+/// pin has five (1,461 B against 1,446).
+#[test]
+fn test_stores_through_one_register_are_one_tail_whatever_their_values_are_named() {
+    let store = |at: i64, value: u32| {
+        let cell = Loc::Mem(llrm_lir::Mem {
+            through: RegId::BX,
+            base: Some(crate::model::ir::Held { value, width: 2, offset: 0 }),
+            ..llrm_lir::Mem::new(None, 2)
+        });
+        Arc::new(Insn { uses: vec![value], ..(*_inserted(_insn(at, Operation::Move, "mov", vec![cell], vec![ax()], None))).clone() })
+    };
+    let source = body(
+        "f",
+        1,
+        vec![
+            block(1, vec![_compare(1), _branch(2, "je", 20)], vec![20, 10]).into(),
+            block(10, vec![store(10, 36), _inserted(_jump(11, 30))], vec![30]).into(),
+            block(20, vec![store(20, 37), _inserted(_jump(21, 30))], vec![30]).into(),
+            block(30, vec![_compare(30), _compare(31), _compare(32), _return(33)], vec![]).into(),
+        ],
+    );
+    let result = merged(&placed(&source).unwrap()).unwrap();
+
+    assert_eq!(physical(&result).iter().filter(|what| what.op == Operation::Move).count(), 1, "the two stores stayed apart");
+}
+
 /// Both ways of a branch led to bare jumps to one block: threading sent each
 /// to it, which left `jae L; jmp L` with the successor listed twice. A second
 /// threading then took the jump to `L` and stranded `L` under the branch's
