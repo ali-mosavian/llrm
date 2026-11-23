@@ -34,7 +34,12 @@
 //! DEVIATE: a block with a CFI directive or a jump-table label is not copied
 //! (the pin copies DWARF CFI); the backward propagation only looks in blocks
 //! that return, where the source is dead if it is caller-saved and not
-//! returned (the pin reads kill flags). Exit: 11-12.
+//! returned (the pin reads kill flags). Owner w11, exit 2026-12-06.
+//!
+//! DEVIATE ARM64-TD-AFTER-PLACEMENT (owner w11, exit 2026-12-06): the pin
+//! copies before block placement; this runs on the blocks placement ordered,
+//! then propagates copies forward and backward (`MachineCopyPropagation` follows
+//! `TailDuplicate` in `addMachineLateOptimization`).
 
 use std::collections::{HashMap, HashSet};
 
