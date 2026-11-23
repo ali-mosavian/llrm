@@ -2532,11 +2532,6 @@ pub trait Tti {
         false
     }
 
-    /// `Tuning::inline_variable_memcpy`.
-    fn inlines_variable_memcpy(&self) -> bool {
-        false
-    }
-
     /// `Tuning::inline_variable_memcpy_at_size`.
     fn inlines_variable_memcpy_at_size(&self) -> bool {
         false

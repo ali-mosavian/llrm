@@ -874,13 +874,6 @@ pub struct Tuning {
     /// alone. false: the pin's, which splits it there too and grows the code
     /// by a compare, a branch and a copy of the call.
     pub partial_libcalls_skip_at_size: bool,
-    /// DEVIATE MEM-1: an `llvm.memcpy` of a length known only at run time, in
-    /// a function not tuned for size, is `rep movsd` and `rep movsb` inline,
-    /// not a call of `memcpy` (gcc's `rep_prefix_4_byte` stringop strategy for
-    /// the 486 and P5). false: the pin's `EmitTargetCodeForMemcpy`, a libcall.
-    /// Linux x86-64 stays false: glibc's `memcpy` of 0-32 bytes is 6.4 TSC
-    /// ticks a call, `rep movsb` 8.2 (Ryzen 9 9950X3D, fsrm; 2026-11-05).
-    pub inline_variable_memcpy: bool,
     /// DEVIATE MEM-OS-REP (owner x87, exit 2026-12-06): tuned for size, an
     /// `llvm.memcpy` of a length known only at run time that is no loop's work
     /// (its block is in no loop) is one `rep movsb`, not a call of `memcpy`.
@@ -1109,7 +1102,6 @@ impl Tuning {
         select_optimize_penalty: None,
         prefixed_16_bit_counters: false,
         partial_libcalls_skip_at_size: false,
-        inline_variable_memcpy: false,
         inline_variable_memcpy_at_size: false,
         size_copy_price: None,
         ipsccp_widen_keeps_sign: false,
