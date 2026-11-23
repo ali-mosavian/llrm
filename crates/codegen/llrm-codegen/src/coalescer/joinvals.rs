@@ -331,7 +331,7 @@ impl<'a> JoinVals<'a> {
         // Else the value written is valid in OtherVNI: a def that clobbers a
         // live value: when it kills Other it is an early clobber def (illegal
         // to merge), else it clobbers all of the one lane.
-        if llrm_support::env_flag!("LLRM_COALESCE_LOG") {
+        if super::driver::logging() {
             eprintln!(
                 "COAL-IMPOSSIBLE\tv{} def {:?} (block {}, `{}`) clobbers v{} value defined {:?} (other is live there until {:?})",
                 self.sides[me].reg,

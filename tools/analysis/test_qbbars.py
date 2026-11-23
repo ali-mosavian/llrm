@@ -54,3 +54,16 @@ def test_a_table_in_data_ranks_equal_to_one_in_rodata():
         subprocess.run(['gcc', '-c', '-x', 'assembler', '-', '-o', o], input=asm(sec), text=True, check=True); return o
     a, b = build('.data'), build('.rodata')
     assert ns['whole'](a) == ns['whole'](b) == ns['text'](a) + 64
+
+
+def test_extra_modules_outside_core_are_counted(tmp_path):
+    """insns.c and os.c are outside src/core: the m32 census counted 79 modules and never the two the coordinator asked for."""
+    tree, dist, pin = tmp_path / 'tree', tmp_path / 'dist', tmp_path / 'pin'
+    (tree / 'src/core').mkdir(parents=True); (tree / 'src/plat').mkdir(); dist.mkdir(); pin.mkdir()
+    (tree / 'src/core/a.c').write_text('int a(int x){return x*3+1;}')
+    (tree / 'src/plat/b.c').write_text('int b(int x){return x*5+1;}')
+    (dist / 'llrm-cc').write_text('#!/bin/sh\n' + GCC); (pin / 'clang').write_text('#!/bin/sh\n' + GCC)
+    for p in (dist / 'llrm-cc', pin / 'clang'): p.chmod(0o755)
+    env = dict(os.environ, QB_TREE=str(tree), QB_SCRATCH=str(tmp_path), PIN_BIN=str(pin), QB_EXTRA='src/plat/b.c')
+    out = subprocess.run(['python3', os.path.join(os.path.dirname(__file__), 'qbbars.py'), 'm64', 'Os', str(dist)], capture_output=True, text=True, env=env, cwd=tree).stdout
+    assert '2/2 files with all three' in out, out

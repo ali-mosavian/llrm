@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""QB_TREE=<QB checkout> qbbars.py ARCH LEVEL DIST: QB src/core .text per file: ours (DIST/llrm-cc) vs gcc vs the pin's clang; worst by ours - best(gcc,clang)."""
+"""QB_TREE=<QB checkout> [QB_EXTRA=rel/a.c:rel/b.c] qbbars.py ARCH LEVEL DIST: QB src/core .text per file: ours (DIST/llrm-cc) vs gcc vs the pin's clang; worst by ours - best(gcc,clang)."""
 import sys,os,glob,subprocess,tempfile,shutil
 from concurrent.futures import ThreadPoolExecutor
 A,L,D=sys.argv[1:4]; T=os.environ['QB_TREE']; b=os.environ.get('QB_SCRATCH',tempfile.gettempdir())
@@ -28,6 +28,7 @@ def one(f):
     finally: shutil.rmtree(t,ignore_errors=True)
     return os.path.relpath(f,T+'/src/core'),out
 files=sorted(glob.glob(T+'/src/core/**/*.c',recursive=True))
+files+=[os.path.join(T,p) for p in os.environ.get('QB_EXTRA','').split(':') if p]  # modules outside src/core
 with ThreadPoolExecutor(6) as ex: res=list(ex.map(one,files))
 ok=[(n,o) for n,o in res if all(v is not None for v in o.values())]
 print(f'{A} -{L}: {len(ok)}/{len(res)} files with all three; failed:',[n for n,o in res if not all(v is not None for v in o.values())])
