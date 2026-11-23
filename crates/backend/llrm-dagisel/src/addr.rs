@@ -22,9 +22,9 @@
 //!   `computeKnownBits` (constants, `AND` with a constant, zero-extension,
 //!   constant shifts); the folds decline what it cannot prove. Owner sdag-c.
 //!   Exit: when the DAG API has known bits. Review 2026-12-10.
-//! - **SD313** `matchAddressRecursively`'s `ZERO_EXTEND` case has only the
-//!   `nuw` shift part: `zext(addlike)` and `zext(and(srl))` are not matched.
-//!   Exit 2026-11-20.
+//! - **SD313** `matchAddressRecursively`'s `ZERO_EXTEND` case has the `nuw`
+//!   shift part and the `and(srl)` extract/scale part; `zext(addlike)` is not
+//!   matched. Exit 2026-11-20.
 //! - **SD35** The 64-bit and x32 branches, RIP-relative modes, large code
 //!   model, the TLS segment loads (`matchLoadInAddress`) and the vector forms
 //!   (`matchVectorAddress`) are left out: no such target here. m16 has its own
@@ -786,9 +786,9 @@ impl<D: AddrDag> Matcher<'_, D> {
             }
             isd::ZERO_EXTEND => {
                 // Widen a zero-extended `nuw` shift so the shift is the scale
-                // ([L2982][zext]). DEVIATE SD313: not the `zext(addlike)` and
-                // `zext(and(srl))` parts, which the pin matches here too.
-                // Exit 2026-11-20.
+                // ([L2982][zext]). DEVIATE SD313: not the `zext(addlike)` part,
+                // which the pin matches here too. Exit
+                // 2026-11-20.
                 //
                 // [zext]:
                 // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelDAGToDAG.cpp#L2982
@@ -824,6 +824,20 @@ impl<D: AddrDag> Matcher<'_, D> {
                                 am.index_reg = Some(self.match_index_recursively(zext, am, depth + 1));
                                 return false;
                             }
+                        }
+                    }
+                    // `zext(and(srl x, c), m)`: the mask and shift as an
+                    // extract or a scale ([L3056][srl];
+                    // `foldMaskedShiftToBEXTR` is SD34).
+                    //
+                    // [srl]:
+                    // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelDAGToDAG.cpp#L3056
+                    if self.opcode(src) == isd::SRL && mask != low_mask(src_bits) {
+                        let x = self.operand(src, 0);
+                        if !self.fold_mask_and_shift_to_extract(n, mask, src, x, am)
+                            || !self.fold_mask_and_shift_to_scale(n, mask, src, x, am)
+                        {
+                            return false;
                         }
                     }
                 }
