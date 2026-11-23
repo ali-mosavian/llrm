@@ -260,14 +260,18 @@ fn a_copy_that_sets_flags_stays_below_the_branch_that_reads_them() {
     assert_eq!(first_block(&function), names(&["compare", "set", "branch 2"]));
 }
 
-/// The shared greedy put a spill after a block's conditional branch (`spill_store_order`, `pack_ref`). `analyze` reads the terminators after the
-/// last non-terminator, saw none, and the fall-through block was merged into a block whose branch still named it: `tailmerge` died at a stale
-/// label far from the cause. A non-terminator after a terminator is refused where the block is read, as the pin's MachineVerifier does
-/// ("Non-terminator instruction after the first terminator").
+/// The shared greedy put a spill after a block's conditional branch
+/// (`spill_store_order`, `pack_ref`). `analyze` reads the terminators after the
+/// last non-terminator, saw none, and the fall-through block was merged into a
+/// block whose branch still named it: `tailmerge` died at a stale
+/// label far from the cause. A non-terminator after a terminator is refused
+/// where the block is read, as the pin's MachineVerifier does ("Non-terminator
+/// instruction after the first terminator").
 #[test]
 #[should_panic(expected = "non-terminator after a terminator")]
 fn a_block_with_an_instruction_after_its_branch_is_refused() {
-    let mut function = layout(vec![vec![terminator("branch", false, Some(2)), op("spill", vec![])], vec![ret()], vec![halt()]]);
+    let mut function =
+        layout(vec![vec![terminator("branch", false, Some(2)), op("spill", vec![])], vec![ret()], vec![halt()]]);
     branch_fold::<Two>(&mut function);
 }
 
@@ -335,4 +339,60 @@ fn a_twin_compare_does_not_cross_a_copy_that_sets_flags() {
         guard(compare(0), [vec![compare(0), reads.clone(), ret()], vec![copy, compare(0), reads, halt()]]);
     branch_fold_hoisting::<Windowed>(&mut function, &registers());
     assert_eq!(shape(&function)[2].1, names(&["copy", "compare", "reads", "halt"]));
+}
+
+fn address_taken(
+    mut function: MFunction<()>,
+    id: u32,
+) -> MFunction<()> {
+    function.address_symbols.push((id, format!("$BA0_{id}")));
+    function
+}
+
+fn ids(function: &MFunction<()>) -> Vec<u32> {
+    function.blocks.iter().map(|block| block.id).collect()
+}
+
+/// Before: a block only a table names was dropped as dead, and its `$BA` symbol
+/// went undefined (a link error). `BranchFolder` keeps it (`hasAddressTaken`).
+#[test]
+fn an_address_taken_block_nothing_branches_to_is_kept() {
+    let mut function = address_taken(layout(vec![vec![ret()], vec![op("work", vec![]), ret()]]), 1);
+    branch_fold::<Two>(&mut function);
+    assert_eq!(ids(&function), [0, 1]);
+}
+
+/// Before: an empty block was removed and its `$BA` symbol went undefined.
+#[test]
+fn an_empty_address_taken_block_is_kept() {
+    let mut function =
+        address_taken(layout(vec![vec![terminator("branch", false, Some(1)), jump(2)], vec![], vec![ret()]]), 1);
+    branch_fold::<Two>(&mut function);
+    assert!(ids(&function).contains(&1), "{:?}", shape(&function));
+}
+
+/// Before: a block that is the sole successor of its predecessor was merged
+/// into it and its `$BA` symbol went undefined.
+#[test]
+fn an_address_taken_block_is_not_merged_into_its_predecessor() {
+    let mut function = address_taken(layout(vec![vec![op("work", vec![])], vec![op("more", vec![]), ret()]]), 1);
+    branch_fold::<Two>(&mut function);
+    assert_eq!(ids(&function), [0, 1]);
+}
+
+/// Before: a branch-only block was bypassed and dropped, and its `$BA` symbol
+/// went undefined.
+#[test]
+fn an_address_taken_block_that_only_jumps_is_kept() {
+    let mut function = address_taken(
+        layout(vec![
+            vec![terminator("branch", false, Some(2))],
+            vec![ret()],
+            vec![jump(3)],
+            vec![op("work", vec![]), ret()],
+        ]),
+        2,
+    );
+    branch_fold::<Two>(&mut function);
+    assert!(ids(&function).contains(&2), "{:?}", shape(&function));
 }

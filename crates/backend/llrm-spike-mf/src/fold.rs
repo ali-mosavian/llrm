@@ -196,7 +196,7 @@ fn position<C>(
 }
 
 /// `MachineBasicBlock::hasAddressTaken`: a table or a `goto *` reaches the
-/// block by its symbol, so no fold may delete or merge it.
+/// block by its symbol, so the fold keeps it where it is and as it is.
 fn address_taken<C>(
     function: &MFunction<C>,
     id: u32,
@@ -317,26 +317,17 @@ impl<C, J: Jump> Folder<'_, C, J> {
         let fall_through = (at + 1 < self.function.blocks.len()).then(|| self.function.blocks[at + 1].id);
         let current = analyze(self.function, at);
 
-        if self.function.blocks[at].insts.is_empty() {
+        if self.function.blocks[at].insts.is_empty() && !address_taken(self.function, id) {
             let preds = predecessors(self.function, id);
             if preds.is_empty() {
                 return Step::Done(false);
             }
             let Some(next) = fall_through else { return Step::Done(false) };
-            let named = preds
-                .iter()
-                .any(|&pred| terminators(&self.function.blocks[pred].insts).iter().any(|inst| names(inst, id)));
-            if !named && address_taken(self.function, id) {
-                return Step::Done(false);
-            }
             for pred in preds {
                 replace_uses(self.function, pred, id, next);
             }
-            // nothing names it now, and what fell into it falls into `next`;
-            // an address-taken block stays, as `hasAddressTaken` keeps it
-            if !address_taken(self.function, id) {
-                self.function.blocks.remove(at);
-            }
+            // nothing names it now, and what fell into it falls into `next`
+            self.function.blocks.remove(at);
             return Step::Done(true);
         }
 
@@ -428,6 +419,7 @@ impl<C, J: Jump> Folder<'_, C, J> {
                     .first()
                     .is_some_and(|first| first.terminator && target(first).is_some() && !names_many(first))
                     && taken != id
+                    && !address_taken(self.function, id)
                 {
                     remove_branch(self.function, at);
                     let prev_falls = can_fall_through(self.function, prev);
