@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """QuickrBasic host-build clock harness: every column (ours, gcc, clang) is compiled with `tools/external_flags.py`'s set.
 
-  qbclock.py build ARCH LEVEL VARIANT DIST SRC OUT   copy SRC to OUT and make build/host/basic (VARIANT ours|gcc|clang; ARCH m32|m64)
-  qbclock.py bench OUT_PREFIX...                      perf stat each OUT_PREFIX-{ours,gcc,clang}/build/host/basic over tools/bench/*.bas
+  qbclock.py build ARCH LEVEL VARIANT DIST SRC OUT   copy SRC to OUT and make build/hostperf/basic (VARIANT ours|gcc|clang; ARCH m32|m64)
+  qbclock.py bench OUT_PREFIX...                      perf stat each OUT_PREFIX-{ours,gcc,clang}/build/hostperf/basic over tools/bench/*.bas
   qbclock.py cc ARGS...                               the make's HOST_CC (env QBV, QBA, QBDIST, PIN_BIN)
 
 A module llrm-cc refuses fails the build: there is no gcc fallback, so a refused module cannot read as 'unchanged'.
@@ -22,6 +22,8 @@ from external_flags import flags as external_flags  # noqa: E402
 
 # The bar compiler: baselines name gcc-15 (15.2); plain `gcc` is the distro's 13.4, which does not inline what 15 does (QB arrays.bas ran 2.6x the cycles).
 GCC = os.environ.get("QB_GCC", "gcc-15")
+# The perf build (no EXEC_COUNT counters, no -g): what the clock bars measure; `build/host` is the -O1 test build.
+BUILD_TARGET = "build/hostperf/basic"
 MULTIARCH = ("-isystem", "/usr/include/x86_64-linux-gnu")
 
 
@@ -45,6 +47,9 @@ def refuse_cc(message):
 
 def cc(argv, env=os.environ):
     arch, variant, dist, pin = env["QBA"], env["QBV"], env["QBDIST"], env.get("PIN_BIN", "")
+    if "-c" in argv:
+        # The product's perf build appends its own -O2 and -g: the level under test replaces them.
+        argv = [one for one in argv if not (one == "-g" or one.startswith(("-O", "-W")))] + [f"-{env['QBL']}", "-w"]
     if "-c" not in argv:
         return subprocess.call([GCC, f"-{arch}", "-no-pie", *argv, "-latomic"])
     if variant == "gcc":
@@ -72,18 +77,17 @@ def cc(argv, env=os.environ):
 def build(arch, level, variant, dist, src, out):
     shutil.rmtree(out, ignore_errors=True)
     shutil.copytree(src, out)
-    cflags = f"-std=c23 -D_DEFAULT_SOURCE -{level} -DARENA_AT_ZERO=0 -DPFIL_PATH=4096 -DEXEC_COUNT -Isrc/plat/host/include -Isrc -Isrc/core"
     wrapper = os.path.join(os.path.dirname(os.path.abspath(__file__)), "qbcc")
-    env = dict(os.environ, QBA=arch, QBV=variant, QBDIST=dist)
+    env = dict(os.environ, QBA=arch, QBV=variant, QBDIST=dist, QBL=level)
     made = subprocess.run(
-        ["make", "-j6", "-k", "build/host/basic", f"HOST_CC={wrapper}", f"HOST_CFLAGS={cflags}"],
+        ["make", "-j6", "-k", BUILD_TARGET, f"HOST_CC={wrapper}"],
         cwd=out,
         env=env,
         capture_output=True,
         text=True,
     )
     open(os.path.join(out, "make.log"), "w").write(made.stdout + made.stderr)
-    ok = os.path.exists(os.path.join(out, "build/host/basic")) and made.returncode == 0
+    ok = os.path.exists(os.path.join(out, BUILD_TARGET)) and made.returncode == 0
     print(f"{arch}-{level}-{variant}: {'built' if ok else 'FAILED (see make.log: a refused module fails the build)'}")
     return 0 if ok else 1
 
@@ -115,7 +119,7 @@ def bench(prefixes):
             for variant in ("ours", "gcc", "clang"):
                 scratch = tempfile.mkdtemp()
                 try:
-                    row[variant] = measure(f"{prefix}-{variant}/build/host/basic", prog, scratch)
+                    row[variant] = measure(f"{prefix}-{variant}/{BUILD_TARGET}", prog, scratch)
                 finally:
                     shutil.rmtree(scratch, ignore_errors=True)
             rows[os.path.basename(prog)] = row

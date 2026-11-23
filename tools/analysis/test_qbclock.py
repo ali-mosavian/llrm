@@ -25,8 +25,8 @@ def rig(tmp_path, refuse=False):
 
 
 def compile_line(env, arch, variant):
-    env = dict(env, QBA=arch, QBV=variant)
-    return subprocess.run([QBCC, "-std=c23", "-Os", "-c", "x.c", "-o", "x.o"], env=env, capture_output=True, text=True)
+    env = dict(env, QBA=arch, QBV=variant, QBL="Os")
+    return subprocess.run([QBCC, "-std=c23", "-O2", "-g", "-Wall", "-c", "x.c", "-o", "x.o"], env=env, capture_output=True, text=True)
 
 
 def test_every_column_carries_the_shared_flags(tmp_path):
@@ -67,3 +67,13 @@ def test_the_gcc_bar_is_gcc_15_not_the_distro_gcc(tmp_path):
     (tmp_path / "bin/gcc").chmod(0o755)
     assert compile_line(env, "m64", "gcc").returncode == 0
     assert "bin/gcc-15" in log.read_text() and "distro" not in log.read_text()
+
+
+def test_the_level_under_test_replaces_the_perf_builds_own(tmp_path):
+    """build/hostperf appends -O2 and -g to every compile: a column built at -O2 whatever level was asked."""
+    env, log = rig(tmp_path)
+    for variant in ("gcc", "clang", "ours"):
+        assert compile_line(env, "m64", variant).returncode == 0
+    for line in log.read_text().splitlines():
+        words = line.split()
+        assert "-Os" in words and "-O2" not in words and "-g" not in words, line
