@@ -104,3 +104,12 @@ fn a_phi_of_aggregates_is_a_phi_for_each_member() {
     let phis: usize = blocks(body).iter().map(|(phis, _)| phis).sum();
     assert_eq!(phis, 2, "one phi for each member");
 }
+
+/// A `freeze` of an aggregate froze one node of the whole and left the
+/// members unreachable (refused: "an aggregate that is not a node's results",
+/// QB `dwat_break` at arm64 -Os). It freezes each member.
+#[test]
+fn a_freeze_of_an_aggregate_freezes_each_member() {
+    let body = "define i32 @f(i32 %a, i32 %b) {\nentry:\n  %x = insertvalue {i32, i32} undef, i32 %a, 0\n  %y = insertvalue {i32, i32} %x, i32 %b, 1\n  %z = freeze {i32, i32} %y\n  %r = extractvalue {i32, i32} %z, 1\n  ret i32 %r\n}\n";
+    assert_eq!(argument_returned(body), 12, "%b is the second argument");
+}
