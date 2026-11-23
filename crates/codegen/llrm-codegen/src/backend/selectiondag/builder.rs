@@ -158,6 +158,11 @@ pub struct BuilderTarget {
     /// `-fexcess-precision=standard`: an integer too wide for its float type's
     /// mantissa is rounded to that type (x87 would keep it exact).
     pub float_store: bool,
+    /// `LowerArguments` skips the second virtual register of an argument that
+    /// arrives in one (#10681). Off for a target whose allocator carries an
+    /// argument across a loop in its arrival register badly (z80: `x went to
+    /// the frame`, 5 tests red since #10681).
+    pub no_arrival_vreg: bool,
     /// A dense switch may be a jump table: the target prices one (the MIR pass
     /// reads the same cost).
     pub jump_tables: bool,
@@ -566,6 +571,7 @@ impl BuilderTarget {
             max_alloca_align: None,
             va_arg_align_cap: None,
             float_store: false,
+            no_arrival_vreg: false,
             jump_tables: true,
             opt_size: false,
             bytes_strict: false,
@@ -3794,6 +3800,9 @@ impl Builder<'_> {
         arg: ValueId,
         value: SDValue,
     ) -> bool {
+        if self.target.no_arrival_vreg {
+            return false;
+        }
         let mut res = value;
         if self.dag.opcode(res) == ISD::AssertZext {
             res = self.dag.operand(res, 0);
