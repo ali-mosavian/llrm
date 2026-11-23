@@ -6,6 +6,10 @@ plus the program's `-f` flags), the other side its compiler flags. Plumbing is d
 pairs, the input). A flag on one side only must be listed with its reason: anything else is refused, as arm64 lost 24 of 72
 cells to -fomit-frame-pointer on one side (#8708 wasm_flag_check.py)."""
 import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import external_flags  # noqa: E402
 
 PLUMBING = {"-S", "-c", "-emit-llvm", "-w"}
 PAIRS = {"-o", "-I", "-target", "-Xclang"}
@@ -13,12 +17,11 @@ PAIRS = {"-o", "-I", "-target", "-Xclang"}
 OURS_ONLY_SDCC = {
     "-fpack-struct=1": "SDCC lays structs out unpadded",
     "-fno-vectorize": "SDCC has no vectorizer", "-fno-slp-vectorize": "SDCC has no vectorizer",
-    "-fomit-frame-pointer": "SDCC's frame choice is its own", "-fno-stack-protector": "SDCC has none",
-    "-fno-stack-clash-protection": "SDCC has none", "-fno-asynchronous-unwind-tables": "SDCC has none",
-    "-U_FORTIFY_SOURCE": "no libc headers on either side",
     "-fno-inline-functions": "SDCC has no inliner", "-fno-inline-functions-called-once": "SDCC has no inliner",
     "-fwrapv": "SDCC wraps signed overflow", "-fexcess-precision=standard": "SDCC float has no excess precision",
 }
+# The shared bar flags (tools/external_flags.py, the "none" target: z80 has no branch-protection option) are ours-only for SDCC too.
+OURS_ONLY_SDCC.update({flag: "shared bar flag, SDCC has no counterpart" for flag in external_flags.flags("none")})
 # The four variants of the owner table: the one list the harness scripts and the table's check read.
 SDCC_VARIANTS = {
     "sdcc-size": ["--fsigned-char", "--opt-code-size"],

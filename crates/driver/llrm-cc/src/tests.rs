@@ -474,6 +474,31 @@ fn m32_rows_unroll_at_o1_unless_told_otherwise() {
     assert!(!clang.iter().any(|f| f == "-funroll-loops"), "m16 as before");
 }
 
+/// An x86_64 `-fPIE` executable read every external variable through the GOT
+/// (two loads), where gcc and a copy relocation read it with one. The row
+/// takes `-fdirect-access-external-data` under `-fPIE` only: never under
+/// `-fPIC` (shared code), a later `-fno-pie`, or where the command line states
+/// either spelling; other rows are as before.
+#[test]
+fn the_m64_row_reads_extern_data_directly_at_pie_only() {
+    let table = targets(TARGETS).unwrap();
+    let direct = |row: &str, line: &str| {
+        clang_flags(&table[row], &built(line)).iter().any(|f| f == "-fdirect-access-external-data")
+    };
+    assert!(direct("x86_64-linux", "-O2 -fPIE -c x.c"));
+    assert!(direct("x86_64-linux", "-O2 -fPIC -fPIE -c x.c"));
+    for line in [
+        "-O2 -c x.c",
+        "-O2 -fPIC -c x.c",
+        "-O2 -fPIE -fPIC -c x.c",
+        "-O2 -fPIE -fno-pie -c x.c",
+        "-O2 -fPIE -fno-direct-access-external-data -c x.c",
+    ] {
+        assert!(!direct("x86_64-linux", line), "{line}");
+    }
+    assert!(!direct("x86_32-linux", "-O2 -fPIE -c x.c"), "other rows as before");
+}
+
 /// The m68k rows take `-funroll-loops` at -O1 (M68K-UNROLL-O1):
 /// float_in_place_update kept a two-trip float loop, 170 B at -O1 against gcc's
 /// 16. Other levels are as before, and a command line that names either

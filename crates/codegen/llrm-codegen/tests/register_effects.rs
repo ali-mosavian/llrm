@@ -180,6 +180,7 @@ fn operand(
                     index: 0,
                     base: (RegId::None).iced(),
                     segment: (RegId::None).iced(),
+                    linked_direct: false,
                 }),
                 through: RegId::None,
                 ..Mem::new(None, bytes)
@@ -339,6 +340,7 @@ fn the_table_follows_the_encoder_into_what_it_lowers_to() {
             index: 0,
             base: (RegId::None).iced(),
             segment: (RegId::None).iced(),
+            linked_direct: false,
         }),
     });
     let step = |op, name: &str, dests, sources| Semantics {

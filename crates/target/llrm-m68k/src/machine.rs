@@ -504,6 +504,13 @@ impl Tti for M68k {
         true
     }
 
+    /// DEVIATE LASTCALL-NOGROWTH (gcc `-finline-functions-called-once`): a
+    /// static function called once before a noreturn call is inlined at -Os;
+    /// the pin's `allowSizeGrowth` gives threshold 0 and no last-call bonus.
+    fn inline_last_call_when_growth_barred(&self) -> bool {
+        true
+    }
+
     /// DEVIATE INLINEHINT-GROWTH-TRIAL: the size bound stands down for the
     /// pin's `inlinehint` threshold; `driver::lowered` compiles the module
     /// with those calls kept too and keeps the fewer bytes.

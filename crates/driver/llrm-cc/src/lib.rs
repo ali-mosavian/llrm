@@ -138,6 +138,13 @@ pub struct Target {
     /// gcc's 16k).
     #[serde(default)]
     pub unroll_at_o1: bool,
+    /// DEVIATE DIRECT-EXTERN-PIE (owner w11, review 2027-01-31): clang's
+    /// `-fdirect-access-external-data` is the default under `-fPIE` (an
+    /// executable), never `-fPIC`. The pin's clang reads an external variable
+    /// through the GOT; gcc and the linker's copy relocation read it with one
+    /// `mov eax, [rip + sym]`.
+    #[serde(default)]
+    pub direct_extern_at_pie: bool,
     /// DEVIATE JUMPTHREAD-O1 (owner m68k-lsr-addressing, exit 2026-12-04; the
     /// m32 rows extend it, owner x87, exit 2026-11-27; the m64 rows, owner
     /// x86-m64, exit 2026-11-24; the 6502 rows, owner 6502, exit
@@ -735,11 +742,34 @@ pub fn clang_flags(
     if unrolls_at_o1(target, build) {
         flags.push("-funroll-loops".into());
     }
+    if directs_extern_data(target, build) {
+        flags.push("-fdirect-access-external-data".into());
+    }
     // Clang takes `-fexcess-precision=` where the backend does not.
     if !target.llc_passes {
         flags.extend(build.llc.iter().filter(|flag| flag.starts_with("-fexcess-precision=")).cloned());
     }
     flags
+}
+
+/// Whether the target's `-fPIE` takes `-fdirect-access-external-data` as its
+/// default: unless the command line states either
+/// `-f[no-]direct-access-external-data`, and never where the last of the
+/// `-f[no-]pic`/`-f[no-]pie` family is `-fpic`/`-fPIC` (shared code).
+fn directs_extern_data(
+    target: &Target,
+    build: &Build,
+) -> bool {
+    target.direct_extern_at_pie
+        && build.clang.iter().rev().find_map(|flag| match flag.as_str() {
+            "-fpie" | "-fPIE" => Some(true),
+            "-fpic" | "-fPIC" | "-fno-pic" | "-fno-PIC" | "-fno-pie" | "-fno-PIE" => Some(false),
+            _ => None,
+        }) == Some(true)
+        && !build
+            .clang
+            .iter()
+            .any(|flag| flag == "-fdirect-access-external-data" || flag == "-fno-direct-access-external-data")
 }
 
 /// Whether the target's `-O1` takes `-funroll-loops` as its default: unless the

@@ -3426,8 +3426,10 @@ impl<'a> TypeLegalizer<'a> {
     ) -> Option<(SDValue, SDValue)> {
         let vt = self.dag.value_type(value);
         let name = self.tli.libcall_name(op, vt)?;
-        let result = self.hooks.as_mut()?.make_lib_call(self.dag, name, &args, vt, signed)?;
-        Some(self.split_integer(result, half))
+        self.dag.libcall_dividend = self.dag.dividend_ranges.get(&value.node).copied();
+        let result = self.hooks.as_mut()?.make_lib_call(self.dag, name, &args, vt, signed);
+        self.dag.libcall_dividend = None;
+        Some(self.split_integer(result?, half))
     }
 
     /// `ExpandIntRes_SDIV` and the others, as the library call the pin makes
