@@ -1263,7 +1263,9 @@ fn items_once(
         // DEVIATE M68K-FAR-TAIL: the pin's `TAILJMPq` is always `bra`, whose
         // PC16 reaches 32 KiB. Where the model has absolute data
         // (`-mcmodel=medium|large`) a tail call to another function goes
-        // through `%a0`, the pin's `TAILJMPj` form.
+        // through `%a0`, the pin's `TAILJMPj` form. +4 B per external tail
+        // call. Owner: m68k (w11). Review: 2026-12-15, or when the pin picks a
+        // reaching tail-call form, whichever is first.
         let line = match line {
             Line::Inst(inst)
                 if options.code_model.absolute_data()
