@@ -219,7 +219,7 @@ pub fn select_function_with(
     let layout = DataLayout::parse(text)?;
     let arch = Z80;
     let convention = isel::convention(module, &layout, id, &arch).map_err(|why| why.0)?;
-    let target = builder_target();
+    let target = builder_target().with_dividend_ranges(crate::dividends::dividend_ranges(module, function, &layout));
     let sized = ["optsize", "minsize"].into_iter().any(|name| llrm_mir::memory::has(&function.attrs, name));
     let tuned_for_size = sized;
     let chain_credit = llrm_mir::memory::has(&function.attrs, crate::prepare::WORD_CHAINS);

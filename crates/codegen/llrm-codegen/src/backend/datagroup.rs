@@ -258,6 +258,7 @@ fn _prefixed(
             index: 0,
             base: cell.through.iced(),
             segment: through.iced(),
+            linked_direct: false,
         };
         return Some(ir::Mem { addr: Some(addr), ..cell.clone() });
     };
