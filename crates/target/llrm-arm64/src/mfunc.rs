@@ -410,6 +410,9 @@ pub struct MFunc {
     pub outgoing: u64,
     /// Whether the function calls another (it saves the link register).
     pub calls: bool,
+    /// Every call is one the pin's `isNoReturnDef` skips (`crate::frame::
+    /// calls_never_return`): they do not make the link register modified.
+    pub calls_never_return: bool,
     /// The bytes of incoming arguments the caller put on the stack are above
     /// the frame at this offset from the frame pointer.
     pub exported: bool,
