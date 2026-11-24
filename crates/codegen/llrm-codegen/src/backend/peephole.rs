@@ -681,7 +681,7 @@ pub fn pushed_pads(
             match scratch {
                 Some(register) if cpu.pushes_pad(words) && Lanes::flags(arithmetic).is_subset(dead) => {
                     let push = || {
-                        Arc::new(with_what(
+                        let mut push = with_what(
                             one,
                             semantics(
                                 Operation::Push,
@@ -689,7 +689,9 @@ pub fn pushed_pads(
                                 vec![],
                                 vec![Loc::Reg(reg(regs.named(register, unit), unit as u32))],
                             ),
-                        ))
+                        );
+                        push.pad = true;
+                        Arc::new(push)
                     };
                     insns.extend((0..words).map(|_| push()));
                 }
