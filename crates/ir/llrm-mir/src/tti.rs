@@ -1511,6 +1511,16 @@ pub trait Tti {
         false
     }
 
+    /// DEVIATE OS-INLINE-TRIAL (arm64): the most a refused site's modelled
+    /// growth may be, in percent of the caller's bytes, for the finished-code
+    /// trial to be asked about it: the units refused it, the bytes say it is
+    /// about the same, and the loads the copies share are what the model
+    /// cannot place. A site the bytes say grows more is not built. None:
+    /// every refused site.
+    fn opt_size_inline_finished_trial_band(&self) -> Option<i64> {
+        None
+    }
+
     /// Whether a run of copies of adjacent cells is `llvm.memcpy` at every
     /// level, where the bytes of the call are fewer (`mergestores`): the
     /// pin's MemCpyOpt forms it, and the size gate is this target's to lift.

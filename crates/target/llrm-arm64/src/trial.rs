@@ -301,6 +301,13 @@ fn callees(function: &MFunc) -> Vec<Option<String>> {
                 crate::mfunc::Callee::Symbol(name) => Some(name.clone()),
                 crate::mfunc::Callee::Register(_) => None,
             }),
+            // A call the selector made after the ops (a libcall, an atomic
+            // helper).
+            Op::I(Inst::Branch { link: true, target }) => Some(match target {
+                crate::mc::inst::Target::Symbol { name, .. } => Some(name.clone()),
+                _ => None,
+            }),
+            Op::I(Inst::BranchReg { link: true, .. }) => Some(None),
             _ => None,
         })
         .collect()
@@ -356,7 +363,7 @@ pub fn add(
             .flat_map(|block| block.insns.iter())
             .map(|one| {
                 let name = one.what.as_ref().and_then(|what| what.name.as_deref()).unwrap_or_default();
-                (one.at, !name.starts_with("RET"))
+                (one.at, name.starts_with("CALL") || name.starts_with("TCRETURN") || name == "BL" || name == "BLR")
             })
             .collect();
         let mut at: Vec<(i64, f64)> =

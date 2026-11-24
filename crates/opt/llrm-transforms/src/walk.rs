@@ -1020,10 +1020,15 @@ impl ProgramPass for Walk {
                                 // DEVIATE OS-INLINE-TRIAL-CLOCKS: every site
                                 // the size bound alone refused is the
                                 // backend's to price, whatever the model says
-                                // of its bytes.
+                                // of its bytes, unless the target asks only
+                                // where the bytes are within a band
+                                // (`..._finished_trial_band`).
                                 let finished = tti.opt_size_inline_finished_trial()
                                     && !priced
-                                    && size != crate::inlinecost::CallerSize::Speed;
+                                    && size != crate::inlinecost::CallerSize::Speed
+                                    && tti
+                                        .opt_size_inline_finished_trial_band()
+                                        .is_none_or(|band| growth * 100 <= kept_bytes * band);
                                 let site = (by_bytes || finished).then(|| crate::trial::Site {
                                     caller: module.global(id).name.as_deref().unwrap_or_default().to_owned(),
                                     callees: calls
