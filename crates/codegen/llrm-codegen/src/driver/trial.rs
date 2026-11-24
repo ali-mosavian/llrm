@@ -363,6 +363,15 @@ fn rotation_work(
             0.0
         }
     };
+    if llrm_support::debug::enabled("trialwork") {
+        for (index, ((work, _), weight)) in each.iter().zip(&weight).enumerate() {
+            eprintln!(
+                "trialwork {} work={work} weight={weight} paid={}",
+                built.procedures[index].name,
+                paid(index, *weight)
+            );
+        }
+    }
     Some(each.iter().zip(&weight).enumerate().map(|(index, ((work, _), weight))| work * paid(index, *weight)).sum())
 }
 

@@ -43,3 +43,10 @@ fn entries_that_each_run_once_do_not_keep_the_calls_for_bytes() {
     let calls = text.lines().filter(|line| line.contains("call") && line.contains("lead_zeros")).count();
     assert_eq!(calls, 0, "six calls kept (+46 clocks of 193) past the 2% clock cap:\n{text}");
 }
+
+#[test]
+fn six_calls_on_a_path_main_runs_a_thousand_times_are_not_kept() {
+    let text = listing("m32_os_inlinehint_growth_hot.c");
+    let calls = text.lines().filter(|line| line.contains("call") && line.contains("mix")).count();
+    assert_eq!(calls, 0, "{calls} calls kept on a hot path (+43% clocks for -147 B):\n{text}");
+}
