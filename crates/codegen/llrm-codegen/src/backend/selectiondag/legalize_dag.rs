@@ -723,6 +723,14 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
         ) {
             return self.convert_strict_node_to_libcall(node, op).ok_or(refused);
         }
+        // `ExpandNode`, `TRAP` the target does not have: a call of `abort`
+        // on the node's chain.
+        if op == ISD::Trap {
+            let chain = self.dag.operand(node, 0);
+            let (_, out) = self.lib_call_chained("abort", &[], EVT::OTHER, false, chain).ok_or(refused)?;
+            self.replace_node(node, out);
+            return Ok(());
+        }
         let (signed, arity) = match op {
             ISD::SDiv | ISD::SRem => (true, 2),
             ISD::UDiv | ISD::URem | ISD::Mul => (false, 2),
