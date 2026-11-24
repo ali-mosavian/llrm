@@ -1357,9 +1357,9 @@ fn speed_division16_pays(
         ))
 }
 
-/// The speed signed 16-bit divisions at size when the image they link is no larger
-/// than the pin's for a signed one (`[pin.division16]`) and the clocks they
-/// save repay the bytes they add at the speed rate: a cold division stays
+/// The speed signed 16-bit divisions at size when the image they link is no
+/// larger than the pin's for a signed one (`[pin.division16]`) and the clocks
+/// they save repay the bytes they add at the speed rate: a cold division stays
 /// compact.
 ///
 /// DEVIATE 6502-DIV-16-OS-PIN-IMAGE (owner llrm-target-6502, review
