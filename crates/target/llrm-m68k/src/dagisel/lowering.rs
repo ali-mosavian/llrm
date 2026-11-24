@@ -94,8 +94,9 @@ pub fn target_lowering_with(
     use ISD::*;
     let int = [MVT::I8, MVT::I16, MVT::I32];
     let m68020 = cpu.at_least(Cpu::M68020);
-    let mut tl =
-        TargetLowering::empty(TargetLoweringInfo::new(&int, false).with_shift_by_value_type().with_soft_float().with_soft_compare_classes());
+    let mut tl = TargetLowering::empty(
+        TargetLoweringInfo::new(&int, false).with_shift_by_value_type().with_soft_float().with_soft_compare_classes(),
+    );
     tl.init_actions();
     // no FPU at any CPU: every float operation is a compiler-rt call
     tl.set_soft_float_libcall_names();
@@ -505,6 +506,23 @@ impl Hooks for M68kLowering {
         self.make_lib_call_parts(dag, name, args, &[ret], signed)?.first().copied()
     }
 
+    /// `makeLibCall` on `chain`: the call is ordered after it, and its out
+    /// chain comes back with the result (`EVT::OTHER`: a routine with none,
+    /// the chain stands for its value).
+    fn make_lib_call_chained(
+        &mut self,
+        dag: &mut SelectionDAG,
+        name: &'static str,
+        args: &[SDValue],
+        ret: EVT,
+        signed: bool,
+        chain: SDValue,
+    ) -> Option<(SDValue, SDValue)> {
+        let rets: &[EVT] = if ret == EVT::OTHER { &[] } else { &[ret] };
+        let (values, out) = lib_call(dag, name, args, rets, signed, chain)?;
+        Some((values.first().copied().unwrap_or(out), out))
+    }
+
     fn make_lib_call_parts(
         &mut self,
         dag: &mut SelectionDAG,
@@ -513,6 +531,26 @@ impl Hooks for M68kLowering {
         rets: &[EVT],
         signed: bool,
     ) -> Option<Vec<SDValue>> {
+        let root = dag.entry_node();
+        Some(lib_call(dag, name, args, rets, signed, root)?.0)
+    }
+
+    fn little_endian(&self) -> bool {
+        false
+    }
+}
+
+/// `makeLibCall` through `LowerCall` on `root`: the values the routine
+/// returns (a 64-bit one in `d0:d1`) and the out chain.
+fn lib_call(
+    dag: &mut SelectionDAG,
+    name: &'static str,
+    args: &[SDValue],
+    rets: &[EVT],
+    signed: bool,
+    root: SDValue,
+) -> Option<(Vec<SDValue>, SDValue)> {
+    {
         use super::call::{Ext, In, Out};
         let ext = if signed { Ext::Sign } else { Ext::Zero };
         let out = |value: SDValue, dag: &SelectionDAG| Out {
@@ -563,14 +601,13 @@ impl Hooks for M68kLowering {
             }
         }
         let callee = dag.get_target_external_symbol(EVT::I32, name);
-        let root = dag.entry_node();
         let calling = super::call::M68kCalling::default();
         // an `f80` routine result has no register: the pin rejects it too ("do
         // not know how to soften")
         if !calling.returns_in_registers(dag, &ins) {
             return None;
         }
-        let (_chain, values) = calling.lower_call(dag, root, callee, &outs, &ins);
+        let (chain, values) = calling.lower_call(dag, root, callee, &outs, &ins);
         if values.len() != ins.len() {
             return None;
         }
@@ -585,11 +622,7 @@ impl Hooks for M68kLowering {
                 joined.push(next.next()?);
             }
         }
-        Some(joined)
-    }
-
-    fn little_endian(&self) -> bool {
-        false
+        Some((joined, chain))
     }
 }
 
