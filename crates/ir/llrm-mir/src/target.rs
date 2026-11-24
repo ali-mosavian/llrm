@@ -223,7 +223,10 @@ pub struct Tuning {
     /// code's, the -Os trials that keep a smaller shape (`KeepSwitch`,
     /// `KeepCopyLoop`, `KeepLatch`, `KeepHintedCalls`) may cost. The ruling of
     /// 2026-11-14 counts an -Os cell on bytes and clocks both. None: bytes alone
-    /// decide.
+    /// decide. The work it caps is block-frequency weighted (`analysis::frequency`)
+    /// and weighted again by the calls that reach each function from the module's
+    /// roots; a module that defines `main` is a program with that one root, so the
+    /// entries `main` never reaches cost nothing (amendment OS-TRIAL-CLOCK-CAP-ROOT).
     pub os_trial_clock_cap_percent: Option<i64>,
     /// DEVIATE OB1: see `Tti::unroll_object_bound`.
     pub unroll_object_bound: Option<u32>,

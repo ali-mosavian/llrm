@@ -7,9 +7,10 @@
 use std::path::Path;
 use std::process::Command;
 
-fn listing() -> String {
+fn listing(source: &str) -> String {
     let llc = std::env::var_os("LLRM_LLC").expect("LLRM_LLC is not set: this test needs it and does not skip");
-    let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("x86-inlinehint-growth-{}", std::process::id()));
+    let dir =
+        Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("x86-inlinehint-growth-{}-{source}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     let object = dir.join("a.o");
@@ -18,7 +19,7 @@ fn listing() -> String {
         .env("LLRM_LLC", llc)
         .args(["-march=i486", "-Os", "-w", "-ffreestanding", "-c", "-o"])
         .arg(&object)
-        .arg(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/c/m32_os_inlinehint_growth.c"))
+        .arg(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/c").join(source))
         .output()
         .unwrap();
     assert!(run.status.success(), "{}", String::from_utf8_lossy(&run.stderr));
@@ -28,10 +29,17 @@ fn listing() -> String {
 
 #[test]
 fn a_hinted_callee_that_grows_the_object_stays_one_copy_at_os() {
-    let text = listing();
+    let text = listing("m32_os_inlinehint_growth.c");
     let calls = text.lines().filter(|line| line.contains("call") && line.contains("lead_zeros")).count();
     assert!(
         text.contains("<lead_zeros>:") && calls >= 5,
         "the callee is inlined at its six calls (calls to it: {calls})\n{text}"
     );
+}
+
+#[test]
+fn entries_that_each_run_once_do_not_keep_the_calls_for_bytes() {
+    let text = listing("m32_os_inlinehint_growth_lib.c");
+    let calls = text.lines().filter(|line| line.contains("call") && line.contains("lead_zeros")).count();
+    assert_eq!(calls, 0, "six calls kept (+46 clocks of 193) past the 2% clock cap:\n{text}");
 }

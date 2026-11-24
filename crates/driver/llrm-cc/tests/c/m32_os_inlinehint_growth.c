@@ -1,4 +1,5 @@
-/* A `static inline` callee (clang's `inlinehint`) of about twenty instructions,
+/* A program: `main` reaches one of the five entries; the others never run.
+ * A `static inline` callee (clang's `inlinehint`) of about twenty instructions,
  * called from six places: inlined everywhere it is six copies, out of line one
  * body and six calls (gcc -Os keeps the one). */
 typedef unsigned int u32;
@@ -19,3 +20,5 @@ int norm_b(u32 m) { return lead_zeros(m) - 5; }
 int norm_c(u32 m, u32 n) { return lead_zeros(m) + lead_zeros(n); }
 int norm_d(u32 m) { return 31 - lead_zeros(m); }
 int norm_e(u32 m, u32 n) { return lead_zeros(m & n) * 3; }
+
+int main(void) { return norm_a(7); }

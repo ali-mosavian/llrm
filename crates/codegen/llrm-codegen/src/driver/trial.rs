@@ -247,7 +247,7 @@ impl Dimension {
         };
         if llrm_support::debug::enabled("trial") {
             eprintln!(
-                "trial {what}: {added:+} bytes, {saved:+} work saved: {}",
+                "trial {what}: {added:+} bytes, {saved:+} work saved (base work {base_work}, cap {cap:?}): {}",
                 if pays { "kept" } else { "put back" }
             );
         }
@@ -335,7 +335,13 @@ fn rotation_work(
             }
         }
     }
-    let mut weight: Vec<f64> = callers.iter().map(|&n| if n == 0 { 1.0 } else { 0.0 }).collect();
+    // A module that defines `main` is a program: what runs is what `main`
+    // reaches, and a function nothing in the module calls is not run at all
+    // (a library's other entries: a bench's driver calls one of them).
+    let entry = at.get("main").copied();
+    let root = |index: usize| entry.map_or(true, |main| index == main);
+    let mut weight: Vec<f64> =
+        callers.iter().enumerate().map(|(index, &n)| if n == 0 && root(index) { 1.0 } else { 0.0 }).collect();
     let mut ready: Vec<usize> = (0..each.len()).filter(|&index| callers[index] == 0).collect();
     while let Some(index) = ready.pop() {
         for (callee, runs) in &each[index].1 {
@@ -348,7 +354,16 @@ fn rotation_work(
         }
     }
     // What a cycle left unreached is paid once.
-    Some(each.iter().zip(&weight).map(|((work, _), weight)| work * if *weight == 0.0 { 1.0 } else { *weight }).sum())
+    let paid = |index: usize, weight: f64| {
+        if weight != 0.0 {
+            weight
+        } else if entry.is_none() || callers[index] > 0 {
+            1.0
+        } else {
+            0.0
+        }
+    };
+    Some(each.iter().zip(&weight).enumerate().map(|(index, ((work, _), weight))| work * paid(index, *weight)).sum())
 }
 
 /// The unpadded bytes of a finished module: its functions' code and its data
