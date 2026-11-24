@@ -1120,6 +1120,7 @@ entry:
     let done = selected(&module, "f", &llrm_x86_m64::M64, cpu, &[]).expect("selected");
     let names: Vec<_> =
         done.body.insns().iter().filter_map(|i| Some(i.what.as_ref()?.name.as_deref()?.to_string())).collect();
+    assert!(names.iter().any(|n| n == "fcmovnbe"), "{names:?}");
     assert!(!names.iter().any(|n| n == "fcom" || n == "sahf" || n.starts_with("fnstsw")), "{names:?}");
 }
 
