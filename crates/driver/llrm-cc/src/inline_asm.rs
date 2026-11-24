@@ -326,6 +326,8 @@ fn flat_block(
     }
     .into_iter();
     for item in constraints.split(',') {
+        let item = register_alternative(item).unwrap_or_else(|| item.to_owned());
+        let item = item.as_str();
         if let Some(name) = item.strip_prefix("~{").and_then(|one| one.strip_suffix('}')) {
             match name {
                 "memory" => memory = true,
@@ -368,7 +370,9 @@ fn flat_block(
             let register = if item.ends_with('x') {
                 let mut vectors = flat.vector_pool();
                 vectors.retain(|one| !named.contains(&flat.root(one)));
-                vectors.retain(|one| !operands.iter().any(|(_, place)| matches!(place, Some(Place::Register(taken, _)) if taken == one)));
+                vectors.retain(|one| {
+                    !operands.iter().any(|(_, place)| matches!(place, Some(Place::Register(taken, _)) if taken == one))
+                });
                 vectors.first().map(|one| (*one).to_owned())
             } else if pool.is_empty() {
                 None
@@ -863,4 +867,22 @@ mod register_tests {
         let out = translate(ir, &mut |_| Ok(vec![0x00, 0xd8])).unwrap();
         assert!(out.contains("llrm.ia16.asm.00d8.al_bl.al.-.m"), "{out}");
     }
+}
+
+/// A multi-alternative constraint (`rm`, `g`, `imr`) reduced to the one
+/// alternative the block takes (`ComputeConstraintToUse`): a direct operand
+/// with a register alternative is a register, as LLVM prefers the register
+/// class; an indirect one (`=*imr`, clang's form of an output it keeps in
+/// memory) is the memory operand, its address in a register.
+fn register_alternative(item: &str) -> Option<String> {
+    let letters = item.trim_start_matches(['=', '*']);
+    let prefix = &item[..item.len() - letters.len()];
+    let alternatives = letters.len() > 1 || letters == "g";
+    if !alternatives || !letters.bytes().all(|one| b"rmgiqn".contains(&one)) {
+        return None;
+    }
+    if prefix.contains('*') {
+        return letters.bytes().any(|one| matches!(one, b'm' | b'g')).then(|| format!("{prefix}m"));
+    }
+    letters.bytes().any(|one| matches!(one, b'r' | b'g' | b'q')).then(|| format!("{prefix}r"))
 }

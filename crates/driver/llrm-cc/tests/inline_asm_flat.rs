@@ -5,8 +5,9 @@
 //! `qbrt_dos.c` (`fsincos`) were refused by llrm-llc ("expected a constant,
 //! found `asm`"): double.c, fpmath.c and operands.c did not compile at any
 //! level. A constraint that leaves the register to the allocator (`r`, `q`,
-//! `x`) takes a register of the pool at the site; `g` and the rest are refused
-//! by name (stage 2, `ISD::INLINEASM`, takes those); none is miscompiled.
+//! `x`, or a multi-alternative set with a register such as `rm`, `g`) takes a
+//! register of the pool at the site; the rest are refused by name (stage 2,
+//! `ISD::INLINEASM`, takes those); none is miscompiled.
 
 #[path = "common/target_dir.rs"]
 mod target_dir;
@@ -78,16 +79,16 @@ fn test_an_x87_asm_block_takes_st0_and_gives_st0_and_st1() {
 }
 
 #[test]
-fn test_a_constraint_that_is_not_a_register_class_is_refused_by_name() {
+fn test_a_constraint_that_has_no_register_alternative_is_refused_by_name() {
     let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("m32asm-refused-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let source = dir.join("r.c");
-    std::fs::write(&source, "int f(int x) { int y; __asm__(\"mov %1, %0\" : \"=a\"(y) : \"g\"(x)); return y; }\n")
+    std::fs::write(&source, "int f(int x) { int y; __asm__(\"mov %1, %0\" : \"=a\"(y) : \"K\"(x)); return y; }\n")
         .unwrap();
     let (done, _) = compile("refused", &source, "-O2", "x86_32-linux");
     assert!(!done.status.success());
     let message = String::from_utf8_lossy(&done.stderr);
-    assert!(message.contains("constraint imr is not carried"), "{message}");
+    assert!(message.contains("constraint K is not carried"), "{message}");
 }
 
 #[test]
@@ -177,5 +178,28 @@ fn test_x86_64_register_class_blocks_run_with_their_values_live_across() {
         assert!(linked.status.success(), "{level}: {}", String::from_utf8_lossy(&linked.stderr));
         let ran = Command::new(&exe).output().unwrap();
         assert_eq!(String::from_utf8_lossy(&ran.stdout).trim(), "bad 0", "{level}");
+    }
+}
+
+#[test]
+fn test_a_register_or_memory_constraint_takes_the_register() {
+    // `"rm"` was refused ("constraint rm is not carried"): every
+    // multi-alternative constraint with a register alternative failed the
+    // build (QB lib/div64.c).
+    let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("m32asm-rm-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let source = dir.join("rm.c");
+    std::fs::write(
+        &source,
+        "unsigned f(unsigned lo, unsigned hi, unsigned d) { unsigned q, r; __asm__(\"divl %[d]\" : \"=a\"(q), \"=d\"(r) : \"a\"(lo), \"d\"(hi), [d] \"rm\"(d) : \"cc\"); return q + r; }\n\
+         unsigned g(unsigned x) { unsigned y; __asm__(\"mov %1, %0\" : \"=r\"(y) : \"imr\"(x)); return y; }\n\
+         unsigned h(unsigned x) { unsigned y; __asm__(\"nop\" : \"=g\"(y) : \"g\"(x)); return y; }\n\
+         unsigned k(unsigned x) { unsigned y; __asm__(\"nop; nop\" : \"=rm\"(y) : \"rm\"(x)); return y; }\n\
+         unsigned m(unsigned x) { unsigned y; __asm__(\"nop; nop; nop\" : \"=m\"(y) : \"m\"(x)); return y; }\n",
+    )
+    .unwrap();
+    for target in ["x86_32-linux", "x86_64-linux"] {
+        let (done, _) = compile("rm", &source, "-O2", target);
+        assert!(done.status.success(), "{target}: {}", String::from_utf8_lossy(&done.stderr));
     }
 }
