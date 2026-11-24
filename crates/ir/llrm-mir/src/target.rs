@@ -260,7 +260,7 @@ pub struct Tuning {
     pub inline_hot_trial_frequency: Option<i64>,
     /// `Tti::inline_hot_trial_at_o3`.
     pub inline_hot_trial_at_o3: bool,
-    /// DEVIATE SD-DIVMAG (owner x86-m32, exit 2026-11-22): a signed divide by a
+    /// DEVIATE SD-DIVMAG (owner w12, exit 2026-12-08): a signed divide by a
     /// negative constant is the negation of the divide by its magnitude, so it
     /// shares the multiply-high of the remainder (`x % -c` is `x % c`); the
     /// pin multiplies twice (div_constants_long -O2 +4.1% clk over gcc).
@@ -333,7 +333,7 @@ pub struct Tuning {
     /// A constant `memcpy` is `rep movsb` at `-Os` (any alignment, up to
     /// `rep_movs_at_size_max`), not the library call: the setup is a few
     /// bytes against the call's push and pop. DEVIATE REP-MOVS-OS (owner
-    /// x86-m32, exit 2026-11-30): the pin does this at `-Oz` only
+    /// w12, exit 2026-12-08): the pin does this at `-Oz` only
     /// (`EmitTargetCodeForMemcpy`, `hasMinSize`).
     pub rep_movs_at_size: bool,
     /// The largest constant copy (bytes), of any alignment,
@@ -341,8 +341,8 @@ pub struct Tuning {
     /// (`emitConstantSizeRepmov`: `Size > MaxInlineSizeThreshold`, 128). The
     /// library copies by dwords, twice as fast as `rep movsw` of a 2-aligned
     /// block (scroll -Os, 4000 B: 682,269 against 533,965 clk). DEVIATE
-    /// REP-MOVS-OS bounds itself to the pin's limit (owner x86-m32, exit
-    /// 2026-11-30), aligned or not: a longer `rep movs` fixed ESI/EDI/ECX at
+    /// REP-MOVS-OS bounds itself to the pin's limit (owner w12, exit
+    /// 2026-12-08), aligned or not: a longer `rep movs` fixed ESI/EDI/ECX at
     /// exec.c's entry and the interpreter pc spilled in every handler.
     pub rep_movs_at_size_max: u64,
     /// The largest constant copy (bytes) a `-O2`/`-O3` build does with `rep movs` of the pointer's width
@@ -364,8 +364,8 @@ pub struct Tuning {
     pub sdiv_pow2_stays_at_size: bool,
     /// Functions with the same body become one at `-Os` (`MergeFunctions`,
     /// `llrm_transforms::mergefunc`): a local copy is dropped, an exported
-    /// one is a `jmp` to the other. DEVIATE MERGEFUNC-OS (owner x86-m32, exit
-    /// 2026-11-30): the pin's default pipeline does not run the pass
+    /// one is a `jmp` to the other. DEVIATE MERGEFUNC-OS (owner w12, exit
+    /// 2026-12-08): the pin's default pipeline does not run the pass
     /// (`-enable-merge-functions` is off), gcc folds them at `-Os`
     /// (`-fipa-icf`).
     pub merge_functions_at_size: bool,
