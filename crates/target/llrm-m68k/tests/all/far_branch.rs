@@ -61,3 +61,29 @@ fn a_cpu_with_a_long_branch_keeps_it() {
     let text = text(&object);
     assert_eq!(&text[..2], [0x67, 0xff], "beq.l: the 32-bit displacement follows");
 }
+
+#[test]
+fn a_pc_relative_operand_past_32_kib_takes_its_absolute_twin() {
+    // `lea (label,%pc),%a0` and `bsr` to a label further than 16 bits reach (QB
+    // synth.c: a jump table at the end of a 64 KiB function): the `(xxx).l`
+    // form of the same instruction.
+    use llrm_m68k::reg;
+    let a0 = Operand::Reg(reg::A0);
+    let symbol = || Operand::Symbol("f".to_owned(), 0);
+    for (near, far, operands) in [("LEA32q", "LEA32b", vec![a0.clone(), symbol()]), ("CALLq", "CALLb", vec![symbol()])]
+    {
+        let items = vec![
+            Item::Label("g".to_owned()),
+            Item::Inst(Inst { opcode: near, operands: operands.clone() }),
+            Item::Bytes(vec![0x4e, 0x71].repeat(20000)),
+            Item::Label("f".to_owned()),
+            Item::Inst(Inst { opcode: "RTS", operands: vec![] }),
+        ];
+        let twin =
+            vec![Item::Inst(Inst { opcode: far, operands }), items[2].clone(), items[3].clone(), items[4].clone()];
+        let twin = std::iter::once(items[0].clone()).chain(twin).collect::<Vec<_>>();
+        let (got, want) =
+            (object("t", &items).unwrap_or_else(|why| panic!("{near}: {why}")), object("t", &twin).unwrap());
+        assert_eq!(text(&got), text(&want), "{near} is {far} once it cannot reach");
+    }
+}

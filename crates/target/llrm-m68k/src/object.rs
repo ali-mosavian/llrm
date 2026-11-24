@@ -190,6 +190,14 @@ pub(crate) fn far_branch(
     }
 }
 
+/// The absolute-long twin of an instruction with a `(d16,%pc)` operand
+/// (`q`, the pin's `PCD` mode): the same operation on `(xxx).l` (`b`), which
+/// has no reach to run out of. `None` where no twin exists.
+pub(crate) fn absolute_twin(opcode: &str) -> Option<&'static str> {
+    let twin = format!("{}b", opcode.strip_suffix('q')?);
+    encoding(&twin).map(|(name, ..)| *name)
+}
+
 fn inst_item(
     opcode: &'static str,
     operands: Vec<Operand>,
