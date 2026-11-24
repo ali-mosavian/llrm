@@ -253,7 +253,9 @@ pub fn physical(
                             }
                         }
                     }
-                    *complaint = complaint.or(&effect.reads.minus(&defined).minus(&touched).minus(&undef));
+                    let padded = if one.pad { effect.reads } else { Lanes::new() };
+                    *complaint =
+                        complaint.or(&effect.reads.minus(&defined).minus(&touched).minus(&undef).minus(&padded));
                     // The destination it defines is defined, though the table
                     // calls the write of a `bsr` conditional (a zero source
                     // leaves it): the value is the pin's `BSR32rr` def.
@@ -1024,6 +1026,26 @@ mod tests {
             ..Insn::new(4, Some((4, 4)), Some(semantics(Operation::Nothing, "", vec![], vec![])), vec![], vec![])
         };
         assert!(physical_vector(&wide(vec![arrives, sub()]), &BTreeSet::new()).is_empty());
+    }
+
+    /// `-Os` pads a call frame with `push ecx` of a dead register no path wrote
+    /// (QB `file.c` `set`): refused as a read of ecx. A pad reads nothing.
+    #[test]
+    fn test_a_pad_push_of_an_unwritten_register_is_not_a_read() {
+        let push = |pad: bool| Insn {
+            pad,
+            ..Insn::new(
+                1,
+                Some((1, 1)),
+                Some(semantics(Operation::Push, "push", vec![], vec![register(RegId::CX, 4)])),
+                vec![],
+                vec![],
+            )
+        };
+        let none = BTreeSet::new();
+        assert!(physical(&physical_body(vec![push(true)]), &none).is_empty());
+        let said = physical(&physical_body(vec![push(false)]), &none);
+        assert!(said.iter().any(|complaint| complaint.contains("reads ecx before any path writes it")), "{said:?}");
     }
 
     /// `movzx ebx, bx` before a loop that writes the word (STATIC.BAS -O2,
