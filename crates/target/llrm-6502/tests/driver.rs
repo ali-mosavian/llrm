@@ -508,7 +508,11 @@ define void @put() {
 
 /// The bytes `assembly` gives `ir` at -O2, priced by `timing::estimate`.
 fn bytes_at_o2(ir: &str) -> u32 {
-    let request = Request::new(Level::O2);
+    bytes_at(ir, Level::O2)
+}
+
+fn bytes_at(ir: &str, level: Level) -> u32 {
+    let request = Request::new(level);
     let text = assembly(&module(ir), &request).unwrap();
     llrm_6502::timing::estimate(request.cpu, &text).unwrap().bytes
 }
@@ -520,7 +524,8 @@ fn bytes_at_o2(ir: &str) -> u32 {
 /// is checked to see the table when it is there.
 #[test]
 fn crc16_is_the_small_loop_and_the_bound_sees_the_table() {
-    let looped = bytes_at_o2(
+    // -Os: the 8-trip bit loop is unrolled at -O2 (170 B) where the clocks repay it; bytes come first here
+    let looped = bytes_at(
         r#"define i16 @crc16(ptr %p, i8 %n) {
   %crc = alloca i16
   %i = alloca i8
@@ -577,6 +582,7 @@ done:
   %res = load i16, ptr %crc
   ret i16 %res
 }"#,
+        Level::Os,
     );
     assert!(looped < 100, "crc16 grew to {looped} bytes: the table is back");
     // the 88-byte loop of the ruling; 83 bytes while the bit counter kept its
