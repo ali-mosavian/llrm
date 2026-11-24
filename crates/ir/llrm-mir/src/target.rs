@@ -260,10 +260,13 @@ pub struct Tuning {
     pub inline_hot_trial_frequency: Option<i64>,
     /// `Tti::inline_hot_trial_at_o3`.
     pub inline_hot_trial_at_o3: bool,
-    /// DEVIATE SD-DIVMAG (owner w12, exit 2026-12-08): a signed divide by a
+    /// DEVIATE SD-DIVMAG (owner w12, exit 2026-12-22): a signed divide by a
     /// negative constant is the negation of the divide by its magnitude, so it
     /// shares the multiply-high of the remainder (`x % -c` is `x % c`); the
     /// pin multiplies twice (div_constants_long -O2 +4.1% clk over gcc).
+    /// 11-24 instrs:u, ON vs OFF: m64 -2.1%, m32 -1.8%, outputs equal; 0 of
+    /// 126 QB -Os modules touched. Gated cycles due before the exit; a
+    /// regression over 1% retires it.
     /// false: the pin's `BuildSDIV`.
     pub sdiv_by_magnitude: bool,
     /// What one call costs in clocks when the inliner prices its latency
