@@ -150,6 +150,10 @@ pub(crate) fn relax_step(
 /// address (gas `jbra`, `jbsr`, `jbcc`). A conditional branch becomes the
 /// opposite condition over the jump. `skip` names the label after it. `None`
 /// for anything else, or a target with an addend.
+///
+/// DEVIATE M68K-FAR-BRANCH: the pin's `MCAssembler` relax loop has no 16 -> 32
+/// step on the 68000 (`fixupNeedsRelaxationAdvanced` is unreachable); gas
+/// does. Owner: m68k backend; exit 2026-12-22 (the pin adds a far form).
 pub(crate) fn far_branch(
     inst: &Inst,
     skip: String,
