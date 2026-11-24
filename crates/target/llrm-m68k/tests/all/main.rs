@@ -27,6 +27,7 @@ mod arg_store;
 mod ari_form;
 mod atomic_generic_libcall;
 mod atomic_load_store;
+mod atomic_rmw_cas;
 mod bfextu_extracts_a_field;
 mod bfffo;
 mod big_frame_offsets;

@@ -602,7 +602,7 @@ pub fn optimized(
     // `lock xadd`, `lock cmpxchg` and `lock add` come with a 486: not in 16-bit
     // code.
     let rmw = tso && llrm_target::Target::layout(&*options.arch).mode >= 32;
-    program.modules.iter_mut().try_for_each(|module| llrm_mir::atomic::lowered(module, native, tso, tso, rmw))?;
+    program.modules.iter_mut().try_for_each(|module| llrm_mir::atomic::lowered(module, native, tso, tso, rmw, false))?;
     timed("mir markers", || program.modules.iter_mut().for_each(llrm_transforms::dead::markers_dropped));
     timed("mir ehprepare", || {
         program
