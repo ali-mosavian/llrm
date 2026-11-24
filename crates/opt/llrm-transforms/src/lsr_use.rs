@@ -595,6 +595,7 @@ impl Cost {
             insns: u32::MAX,
             num_regs: u32::MAX,
             add_rec_cost: u32::MAX,
+            wide_steps: u32::MAX,
             num_iv_muls: u32::MAX,
             written_work: u32::MAX,
             num_base_adds: u32::MAX,
@@ -988,6 +989,9 @@ impl Cost {
                 loop_cost = 0;
             }
             self.c.add_rec_cost += loop_cost;
+            if loop_cost > 0 {
+                self.c.wide_steps += r.tti.lsr_wide_step_cost(ty);
+            }
             if loop_cost > 0 && !lu.all_fixups_unconditional && lu.kind == Kind::Address {
                 self.c.add_rec_cost += r.tti.lsr_conditional_use_step_cost();
             }
