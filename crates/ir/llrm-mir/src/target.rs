@@ -223,7 +223,10 @@ pub struct Tuning {
     /// code's, the -Os trials that keep a smaller shape (`KeepSwitch`,
     /// `KeepCopyLoop`, `KeepLatch`, `KeepHintedCalls`) may cost. The ruling of
     /// 2026-11-14 counts an -Os cell on bytes and clocks both. None: bytes alone
-    /// decide.
+    /// decide. The work it caps is block-frequency weighted (`analysis::frequency`)
+    /// and weighted again by the calls that reach each function from the module's
+    /// roots; a module that defines `main` is a program with that one root, so the
+    /// entries `main` never reaches cost nothing (amendment OS-TRIAL-CLOCK-CAP-ROOT).
     pub os_trial_clock_cap_percent: Option<i64>,
     /// DEVIATE OB1: see `Tti::unroll_object_bound`.
     pub unroll_object_bound: Option<u32>,
@@ -306,7 +309,7 @@ pub struct Tuning {
     /// rule, which the pin applies at -Oz only): the chain is no smaller.
     /// A constant `memset` past the store limit is `rep stos` at `-Os`
     /// (alignment or not), not the library call: the setup is 9-11 B against
-    /// the call's 12-16. DEVIATE REP-OS (owner w9, exit 2026-11-20): the pin
+    /// the call's 12-16. DEVIATE REP-OS (owner w12, exit 2026-12-08): the pin
     /// calls `memset` unless the destination is dword aligned and the size
     /// within 128 bytes.
     pub rep_stos_at_size: bool,
