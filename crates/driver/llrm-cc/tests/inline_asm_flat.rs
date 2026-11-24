@@ -192,7 +192,10 @@ fn test_a_register_or_memory_constraint_takes_the_register() {
     std::fs::write(
         &source,
         "unsigned f(unsigned lo, unsigned hi, unsigned d) { unsigned q, r; __asm__(\"divl %[d]\" : \"=a\"(q), \"=d\"(r) : \"a\"(lo), \"d\"(hi), [d] \"rm\"(d) : \"cc\"); return q + r; }\n\
-         unsigned g(unsigned x) { unsigned y; __asm__(\"mov %1, %0\" : \"=r\"(y) : \"imr\"(x)); return y; }\n",
+         unsigned g(unsigned x) { unsigned y; __asm__(\"mov %1, %0\" : \"=r\"(y) : \"imr\"(x)); return y; }\n\
+         unsigned h(unsigned x) { unsigned y; __asm__(\"nop\" : \"=g\"(y) : \"g\"(x)); return y; }\n\
+         unsigned k(unsigned x) { unsigned y; __asm__(\"nop; nop\" : \"=rm\"(y) : \"rm\"(x)); return y; }\n\
+         unsigned m(unsigned x) { unsigned y; __asm__(\"nop; nop; nop\" : \"=m\"(y) : \"m\"(x)); return y; }\n",
     )
     .unwrap();
     for target in ["x86_32-linux", "x86_64-linux"] {

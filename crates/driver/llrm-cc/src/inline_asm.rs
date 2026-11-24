@@ -869,13 +869,20 @@ mod register_tests {
     }
 }
 
-/// A multi-alternative constraint (`rm`, `g`, `imr`) that has a register
-/// alternative: any value fits a register, so take it as the plain `r` (LLVM
-/// prefers the register class when several alternatives allow the operand).
+/// A multi-alternative constraint (`rm`, `g`, `imr`) reduced to the one
+/// alternative the block takes (`ComputeConstraintToUse`): a direct operand
+/// with a register alternative is a register, as LLVM prefers the register
+/// class; an indirect one (`=*imr`, clang's form of an output it keeps in
+/// memory) is the memory operand, its address in a register.
 fn register_alternative(item: &str) -> Option<String> {
-    let (prefix, letters) = item.split_at(item.len() - item.trim_start_matches('=').len());
+    let letters = item.trim_start_matches(['=', '*']);
+    let prefix = &item[..item.len() - letters.len()];
     let alternatives = letters.len() > 1 || letters == "g";
-    let all_known = letters.bytes().all(|one| b"rmgiqn".contains(&one));
-    (alternatives && all_known && letters.bytes().any(|one| matches!(one, b'r' | b'g' | b'q')))
-        .then(|| format!("{prefix}r"))
+    if !alternatives || !letters.bytes().all(|one| b"rmgiqn".contains(&one)) {
+        return None;
+    }
+    if prefix.contains('*') {
+        return letters.bytes().any(|one| matches!(one, b'm' | b'g')).then(|| format!("{prefix}m"));
+    }
+    letters.bytes().any(|one| matches!(one, b'r' | b'g' | b'q')).then(|| format!("{prefix}r"))
 }
