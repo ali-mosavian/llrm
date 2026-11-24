@@ -841,13 +841,6 @@ impl llrm_target::Target for M32 {
         false
     }
 
-    /// DEVIATE SD545 (owner anyisa, exit 2026-11-20): the pin pads a loop
-    /// header with up to 15 bytes; gcc's `.p2align 4,,10` pads at most 10.
-    /// -O2 m32 `jpeg_single` ran 15 one-byte nops 14,457 times.
-    fn loop_alignment_max_skip(&self) -> u8 {
-        10
-    }
-
     /// The i486 and Pentium have no `nopl` (`FeatureNOPL`): one byte.
     fn max_nop_bytes(&self) -> u8 {
         1
@@ -913,6 +906,14 @@ impl llrm_target::Target for M32 {
 
 #[cfg(test)]
 mod tests {
+    /// A loop header's alignment pad had a 10 byte limit (gcc's `.p2align 4,,10`,
+    /// DEVIATE SD545) where the pin's X86 sets none: it left the header
+    /// misaligned and the layout off the pin's.
+    #[test]
+    fn test_a_loop_header_pad_has_no_byte_limit_as_the_pin() {
+        assert_eq!(llrm_target::Target::loop_alignment_max_skip(&super::M32), 0);
+    }
+
     /// #9101 narrowed every target's -O1 unroll trial to nests; only m32 was
     /// fit on that (a lone loop paid in 1 of 46 programs), so m32 says so
     /// itself.
