@@ -577,6 +577,7 @@ fn compiled(
         negative: bool,
         looped: bool,
         divides: bool,
+        refused: Vec<llrm_transforms::trial::Site>,
     }
     type Built = (Program, Vec<crate::emit::Function>, crate::trial::Price, Notes);
     let size = matches!(level, Level::Os | Level::Oz);
@@ -589,6 +590,13 @@ fn compiled(
     let hint_trial = divide_trial
         && crate::tti::AArch64::of_cpu(platform.cpu())
             .is_some_and(|tti| llrm_mir::tti::Tti::opt_size_inline_guard_yields_to_inlinehint(&tti));
+    // DEVIATE OS-INLINE-TRIAL: -Os, where the target builds the calls its size
+    // guard refused inlined too (`Tti::opt_size_inline_finished_trial`).
+    let inline_trial = divide_trial
+        && crate::tti::AArch64::of_cpu(platform.cpu())
+            .is_some_and(|tti| llrm_mir::tti::Tti::opt_size_inline_finished_trial(&tti));
+    // The sites the compile in force inlines whatever the guard says.
+    let forced: std::cell::RefCell<Vec<llrm_transforms::trial::Site>> = std::cell::RefCell::new(Vec::new());
     let dumping = std::cell::Cell::new(true);
     let once = |(unrotated, more, unmerged, divided, hinted): (bool, bool, bool, bool, u8)| -> Result<Built, String> {
         let mut program = program(text, platform)?;
@@ -621,6 +629,10 @@ fn compiled(
             let go = |program: &mut Program| {
                 if hinted & 4 != 0 { llrm_transforms::trial::with_kept_loop_calls(|| go(program)) } else { go(program) }
             };
+            let go = |program: &mut Program| {
+                let sites = forced.borrow().clone();
+                llrm_transforms::trial::with_inlined(&sites, || go(program))
+            };
             if unmerged { crate::trial::without_merge(|| go(&mut program))? } else { go(&mut program)? }
         } else {
             lowered_before_selection(&mut program)?;
@@ -629,7 +641,7 @@ fn compiled(
         if divide_trial {
             notes.divides = crate::trial::divides_by_constant(&program.modules[0]);
         }
-        if asked.is_some() || notes.divides || hint_trial {
+        if asked.is_some() || notes.divides || hint_trial || inline_trial {
             use llrm_transforms::trial;
             (notes.left, notes.left_loops) = trial::take_left();
             (notes.rotated, notes.loops) = (trial::take_rotated(), trial::rotated_loops());
@@ -637,14 +649,19 @@ fn compiled(
             notes.hinted = !trial::take_hint_yields().is_empty();
             notes.negative = !trial::take_negative_yields().is_empty();
             notes.looped = !trial::take_loop_yields().is_empty();
+            notes.refused = if inline_trial { trial::take_refused() } else { Vec::new() };
             // A module nothing was noted in is compiled once, unpriced: the
             // pricing is a second walk of every function.
             let noted = !(notes.left.is_empty() && notes.rotated.is_empty() && notes.merged == 0)
                 || notes.divides
                 || notes.hinted
                 || notes.negative
-                || notes.looped;
-            if noted || (unrotated, more, unmerged, divided, hinted) != (false, false, false, false, 0) {
+                || notes.looped
+                || !notes.refused.is_empty();
+            if noted
+                || !forced.borrow().is_empty()
+                || (unrotated, more, unmerged, divided, hinted) != (false, false, false, false, 0)
+            {
                 crate::trial::start();
             }
         }
@@ -656,7 +673,7 @@ fn compiled(
         let cost = crate::trial::price(&lowered);
         Ok((program, lowered, cost, notes))
     };
-    if asked.is_none() && !divide_trial && !hint_trial {
+    if asked.is_none() && !divide_trial && !hint_trial && !inline_trial {
         let (program, lowered, _, _) = once((false, false, false, false, 0))?;
         return Ok((program, lowered));
     }
@@ -673,6 +690,7 @@ fn compiled(
         trial::take_hint_yields(),
         trial::take_negative_yields(),
         trial::take_loop_yields(),
+        trial::take_refused(),
     );
     trial::clear_rotated_loops();
     // Only the compile that is kept writes the stages, where it is made again.
@@ -732,6 +750,55 @@ fn compiled(
         })?
     {
         state.3 |= 4;
+    }
+    // DEVIATE OS-INLINE-TRIAL: the calls the size guard refused and the pin's
+    // cost accepts, inlined, group by group (the sites that share a caller or
+    // a callee), each group kept where its functions come out fewer bytes; a
+    // mixed verdict takes a third compile of the kept groups. The whole is
+    // kept where the module is smaller for work within the cap.
+    if inline_trial && !notes.refused.is_empty() {
+        let sites = notes.refused.clone();
+        let kept = crate::trial::bytes_by_function(&best.1);
+        *forced.borrow_mut() = sites.clone();
+        trial::clear_rotated_loops();
+        let all = once((state.0, state.1, state.2, false, state.3))?;
+        let mut other = crate::trial::bytes_by_function(&all.1);
+        // A caller neither compile defines was inlined away in both (`clip`
+        // into `line`): its sites are priced with the functions that remain.
+        let mut kept = kept;
+        for site in &sites {
+            if !kept.contains_key(&site.caller) && !other.contains_key(&site.caller) {
+                kept.insert(site.caller.clone(), 0);
+                other.insert(site.caller.clone(), 0);
+            }
+        }
+        let verdict = trial::accepted(&sites, &kept, &other);
+        let chosen: Vec<_> =
+            sites.iter().zip(&verdict).filter(|(_, keep)| **keep).map(|(site, _)| site.clone()).collect();
+        let built = if chosen.is_empty() {
+            None
+        } else if chosen.len() == sites.len() {
+            Some(all)
+        } else {
+            *forced.borrow_mut() = chosen;
+            trial::clear_rotated_loops();
+            Some(once((state.0, state.1, state.2, false, state.3))?)
+        };
+        let keeps = built.as_ref().is_some_and(|built| crate::trial::keeps_inlined(best.2, built.2, rotation_cap));
+        if llrm_support::debug::enabled("trial") {
+            eprintln!(
+                "trial inline-refused: {} site(s), {} groups kept: {:?} -> {:?}: {}",
+                sites.len(),
+                verdict.iter().filter(|k| **k).count(),
+                best.2,
+                built.as_ref().map(|b| b.2),
+                if keeps { "kept" } else { "put back" }
+            );
+        }
+        match built {
+            Some(built) if keeps => best = built,
+            _ => forced.borrow_mut().clear(),
+        }
     }
     // Last of the trials that trade bytes: it is priced on the smallest object
     // the others made, so a few bytes it adds cannot displace a trial that

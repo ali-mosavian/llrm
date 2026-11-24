@@ -10,7 +10,7 @@ fn price(
     bytes: i64,
     work: f64,
 ) -> Price {
-    Price { bytes, work, laid_out: work, divides: 0.0 }
+    Price { bytes, work, laid_out: work, divides: 0.0, weighted: work }
 }
 
 #[test]

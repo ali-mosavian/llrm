@@ -13,6 +13,15 @@
 //!   for at most `Tti::rotation_hot_bytes_per_loop` bytes a loop (arm64: 0,
 //!   bytes first) (`keeps_rotation_hot`).
 //!
+//! DEVIATE OS-INLINE-TRIAL (owner qb-arm64-synth-gfx, exit 2026-12-04): the
+//! calls the -Os size guard refused and the pin's cost accepts are built
+//! inlined in a second compile, group by group (`trial::accepted`), and kept
+//! where the object is smaller and the call-weighted work ([`weighted`])
+//! stays within the cap ([`keeps_inlined`]). The weighting differs on purpose
+//! from the trials above, which read `work` per function alone (row
+//! ARM64-TRIAL-CALL-REACH): a copy inlined in a loop would otherwise read as
+//! that many runs against one run of the callee it replaces.
+//!
 //! DEVIATE SD535 (owner llrm-arm64-vec, exit 2026-12-05): the pin expands a
 //! divide by a constant at -Os and keeps it at `minsize`. A module with such a
 //! divide is compiled both ways, and the divides are kept where the clocks the
@@ -52,6 +61,9 @@ pub struct Price {
     pub laid_out: f64,
     /// Divides executed: slow, so a clock more than a unit of `work`.
     pub divides: f64,
+    /// `work` with each function counted as often as the module calls it
+    /// ([`weighted`]); NaN where a call could not be read.
+    pub weighted: f64,
 }
 
 thread_local! {
@@ -59,6 +71,7 @@ thread_local! {
     static UNMERGED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     static MERGED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     static WORK: std::cell::Cell<Option<(f64, f64, f64)>> = const { std::cell::Cell::new(None) };
+    static SHAPES: std::cell::RefCell<Vec<Shape>> = const { std::cell::RefCell::new(Vec::new()) };
     static DIVIDES_KEPT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
@@ -164,6 +177,19 @@ const BYTES_PER_UNMERGED_GLOBAL: i64 = 8;
 /// is noise (jpeg_fixed -Os modelled 0.004% and ran 5,497 instructions more).
 const MIN_GAIN: f64 = 0.001;
 
+/// Bytes of each function by symbol, as [`price`] counts them: what
+/// `trial::accepted` compares per group of inlined sites.
+pub fn bytes_by_function(functions: &[Function]) -> std::collections::BTreeMap<String, i64> {
+    functions
+        .iter()
+        .map(|function| {
+            let words: usize = function.blocks.iter().map(crate::emit::words).sum();
+            let pool: usize = function.pool.iter().map(|entry| entry.bytes.len()).sum();
+            (function.symbol.clone(), 4 * words as i64 + pool as i64)
+        })
+        .collect()
+}
+
 /// DEVIATE GM-TRIAL: whether the compile that merges nothing at -Os is kept
 /// over `kept`, which merged `merged` globals GM-OPTSIZE takes: it executes
 /// less, for no more than the `adrp`+`add` each global needs of its own. A
@@ -186,8 +212,103 @@ pub fn keeps_unmerged(
         || (other.bytes < kept.bytes && runs_no_more)
 }
 
+/// One finished function for [`weighted`]: its work per call, and the calls it
+/// makes with how often each runs per call of it.
+struct Shape {
+    name: String,
+    work: f64,
+    calls: Vec<(String, f64)>,
+}
+
+/// Each function's work times the calls it takes: a callee kept apart runs
+/// once per call of it, not once. Summing the functions alone counts a copy
+/// inlined at a loop site as that many runs and the callee it replaces as
+/// one (gline -Os: `cut` into the clip loop, 144 B smaller, read 3% slower
+/// by `work`). A function nothing in the module calls runs once; a function
+/// in a cycle is taken once (the back edge is dropped). NaN where the work or
+/// a call could not be read.
+fn weighted(shapes: &[Shape]) -> f64 {
+    let at: HashMap<&str, usize> = shapes.iter().enumerate().map(|(at, shape)| (shape.name.as_str(), at)).collect();
+    if shapes.iter().any(|shape| shape.work.is_nan()) {
+        return f64::NAN;
+    }
+    // Callers before callees: a depth-first order over the call edges, a back
+    // edge ignored.
+    let mut order = Vec::with_capacity(shapes.len());
+    let mut state = vec![0u8; shapes.len()];
+    for root in 0..shapes.len() {
+        if state[root] != 0 {
+            continue;
+        }
+        let mut stack = vec![(root, 0usize)];
+        while let Some((now, next)) = stack.pop() {
+            if state[now] == 0 {
+                state[now] = 1;
+            }
+            let edges = &shapes[now].calls;
+            if let Some(callee) =
+                edges.iter().skip(next).enumerate().find_map(|(skip, (name, _))| {
+                    at.get(name.as_str()).filter(|&&to| state[to] == 0).map(|&to| (skip, to))
+                })
+            {
+                stack.push((now, next + callee.0 + 1));
+                stack.push((callee.1, 0));
+            } else {
+                state[now] = 2;
+                order.push(now);
+            }
+        }
+    }
+    order.reverse();
+    let mut times = vec![0.0f64; shapes.len()];
+    let mut called = vec![false; shapes.len()];
+    let position: HashMap<usize, usize> = order.iter().enumerate().map(|(place, &one)| (one, place)).collect();
+    for &one in &order {
+        for (name, _) in &shapes[one].calls {
+            if let Some(&to) = at.get(name.as_str())
+                && position[&to] > position[&one]
+            {
+                called[to] = true;
+            }
+        }
+    }
+    for &one in &order {
+        let runs = if called[one] { times[one] } else { 1.0 };
+        times[one] = runs;
+        for (name, per_call) in &shapes[one].calls {
+            if let Some(&to) = at.get(name.as_str())
+                && position[&to] > position[&one]
+            {
+                times[to] += runs * per_call;
+            }
+        }
+    }
+    shapes.iter().zip(&times).map(|(shape, runs)| shape.work * if *runs > 0.0 { *runs } else { 1.0 }).sum()
+}
+
+/// The callee of each call and tail call of `function`, in block order.
+fn callees(function: &MFunc) -> Vec<Option<String>> {
+    function
+        .blocks
+        .iter()
+        .flat_map(|block| block.ops.iter())
+        .filter_map(|op| match op {
+            Op::Call { callee, .. } => Some(match callee {
+                crate::mfunc::Callee::Symbol(name) => Some(name.clone()),
+                crate::mfunc::Callee::Register(_) => None,
+            }),
+            Op::Return { tail: Some(callee), .. } => Some(match callee {
+                crate::mfunc::Callee::Symbol(name) => Some(name.clone()),
+                crate::mfunc::Callee::Register(_) => None,
+            }),
+            _ => None,
+        })
+        .collect()
+}
+
 /// Starts summing the work of the functions lowered on this thread.
 pub fn start() {
+    SHAPES.with(|shapes| shapes.borrow_mut().clear());
     WORK.with(|work| work.set(Some((0.0, 0.0, 0.0))));
 }
 
@@ -224,6 +345,42 @@ pub fn add(
             .is_some_and(|name| name.starts_with("SDIV") || name.starts_with("UDIV"))
     };
     let divides = before.as_ref().and_then(|body| executed::count_where(body, &is_divide));
+    // The calls the work weighs a callee by: the k-th call of the body is the
+    // k-th call op; a count that differs leaves the work unweighted (NaN).
+    let calls = before.as_ref().and_then(|body| {
+        let runs = executed::executed(body)?;
+        // `calls` also lists every return: only a call or a tail jump is one.
+        let named: HashMap<i64, bool> = body
+            .blocks
+            .iter()
+            .flat_map(|block| block.insns.iter())
+            .map(|one| {
+                let name = one.what.as_ref().and_then(|what| what.name.as_deref()).unwrap_or_default();
+                (one.at, !name.starts_with("RET"))
+            })
+            .collect();
+        let mut at: Vec<(i64, f64)> =
+            runs.calls.into_iter().filter(|(at, _)| named.get(at).copied().unwrap_or(false)).collect();
+        at.sort_by_key(|(at, _)| *at);
+        let names = callees(function);
+        (names.len() == at.len()).then(|| {
+            names.into_iter().zip(at).filter_map(|(name, (_, per_call))| name.map(|name| (name, per_call))).collect()
+        })
+    });
+    SHAPES.with(|shapes| {
+        shapes
+            .borrow_mut()
+            .push(
+                Shape {
+                    name: function.name.clone(),
+                    work: early.unwrap_or(f64::NAN),
+                    calls: calls.clone().unwrap_or_default(),
+                },
+            )
+    });
+    if calls.is_none() {
+        SHAPES.with(|shapes| shapes.borrow_mut().last_mut().expect("pushed").work = f64::NAN);
+    }
     WORK.with(|cell| {
         // A function with no finite estimate poisons the sum: no work saved is
         // claimed.
@@ -384,7 +541,8 @@ pub fn price(functions: &[Function]) -> Price {
         })
         .sum();
     let (work, laid_out, divides) = finish();
-    Price { bytes, work, laid_out, divides }
+    let weighted = SHAPES.with(|shapes| weighted(&shapes.borrow()));
+    Price { bytes, work, laid_out, divides, weighted }
 }
 
 /// Whether `other` is kept over `kept` after a compile that left the loops
@@ -435,6 +593,22 @@ pub fn keeps_unhinted(
     let share = if kept.bytes > 0 { -added * 100 / kept.bytes / 4 } else { 0 };
     let cap = cap.map(|cap| cap.max(share));
     trial::keeps_smaller_at_size(added, saved, kept.work.round() as i64, cap)
+}
+
+/// DEVIATE OS-INLINE-TRIAL: whether the compile that inlines the calls the
+/// size guard refused is kept over `kept`: the object is smaller and the work,
+/// each function counted as often as it is called ([`weighted`]), grows by at
+/// most the target's cap.
+pub fn keeps_inlined(
+    kept: Price,
+    other: Price,
+    cap: Option<i64>,
+) -> bool {
+    if kept.weighted.is_nan() || other.weighted.is_nan() {
+        return false;
+    }
+    let saved = (kept.weighted - other.weighted).round() as i64;
+    trial::keeps_smaller_at_size(other.bytes - kept.bytes, saved, kept.weighted.round() as i64, cap)
 }
 
 /// Whether the compile that also rotates the left loops is kept over `kept`.
