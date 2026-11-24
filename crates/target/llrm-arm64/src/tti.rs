@@ -618,6 +618,15 @@ impl Tti for AArch64 {
         true
     }
 
+    /// DEVIATE OS-INLINE-TRIAL (owner qb-arm64-synth-gfx, exit 2026-12-04, row
+    /// ARM64-OS-GUARD-SMALL): a call the -Os size guard refused and the
+    /// pin's cost accepts is built inlined in a second compile, kept where
+    /// the finished code is smaller for work within the cap (the units
+    /// cannot see the loads copies share).
+    fn opt_size_inline_finished_trial(&self) -> bool {
+        true
+    }
+
     /// `Tti::opt_size_inline_guard_yields_to_inlinehint`: the pin's hint
     /// threshold stands for a callee declared `inline`.
     fn opt_size_inline_guard_yields_to_inlinehint(&self) -> bool {
