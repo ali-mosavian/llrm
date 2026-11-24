@@ -25,8 +25,11 @@
 //! since one more address register live can cost a spill.
 //!
 //! DEVIATE: the pin keeps the add in a data register and leaves the class to
-//! its register allocator, which splits it with copies. Reason: this
-//! allocator does not split, and best of gcc and clang is the goal. Exit: none.
+//! its selector, which narrows a value's class to its uses and copies for the
+//! use that needs the other (`constrainRegClass`); the allocator splits live
+//! ranges, never classes. Reason: gcc chooses the class of a pointer family by
+//! the cost of its uses (`regclass`), and best of gcc and clang is the goal.
+//! Exit: none.
 //!
 //! # See also
 //! `M68kInstrInfo::copyPhysReg`, which is what the copies become; gcc's
