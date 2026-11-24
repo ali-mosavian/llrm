@@ -713,7 +713,7 @@ impl GvnPass<'_> {
             || changed
     }
 
-    /// DEVIATE GVN-PRE-OPTSIZE (owner w12, exit 2026-12-08):
+    /// DEVIATE GVN-PRE-OPTSIZE (owner w12, exit 2026-12-22):
     /// Exit: retires into a size-neutral refinement or the pin's PRE, whichever
     /// the Os A/B supports (refinement tried 2026-11-24: -1 B, 4 modules grow).
     /// `optsize`/`minsize` on a target that says so
