@@ -1836,3 +1836,29 @@ fn an_m64_constant_memcpy_up_to_8192_bytes_is_rep_movsq_at_o2() {
     let large = names(9000);
     assert!(large.iter().any(|n| n == "call"), "{large:?}");
 }
+
+/// A constant vector stored to memory (`store <2 x i8> <35, 0>`, `store <2 x
+/// i32> <-1, -1>`) was a constant-pool load and a store, plus the pool bytes in
+/// `.rodata` (QB: 110 pool loads against the pin's 36). Type legalization
+/// widens the store to a scalar store of a bitcast `BUILD_VECTOR`; the pin's
+/// `visitBITCAST` folds that to a wider-lane constant, so the store is one
+/// immediate `mov` and the pool stays empty.
+#[test]
+fn a_constant_vector_store_is_an_immediate_store_not_a_pool_load() {
+    let text = "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"
+define void @f(ptr %p, ptr %q) optsize {
+  store <2 x i8> <i8 35, i8 0>, ptr %p, align 8
+  store <2 x i32> <i32 -1, i32 -1>, ptr %q, align 4
+  ret void
+}
+";
+    let module = llrm_mir::parse::module(text).expect("parses");
+    let cpu = crate::backend::cpu::tuned_for(&llrm_x86_m64::M64, llrm_x86_m64::CPUS[0], false).expect("a cpu");
+    let pool = &mut crate::backend::constpool::Pool::new(module.globals.len() as i64);
+    let done = super::dag_function::selected_in_pool(&module, "f", &llrm_x86_m64::M64, cpu, &[], None, pool)
+        .expect("selected");
+    assert_eq!(pool.entries().count(), 0, "a constant vector went to the pool");
+    let names: Vec<String> =
+        done.body.insns().iter().filter_map(|i| i.what.as_ref()?.name.as_deref().map(str::to_owned)).collect();
+    assert_eq!(names.iter().filter(|n| n.starts_with("mov")).count(), 2, "two immediate stores: {names:?}");
+}

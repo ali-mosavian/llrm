@@ -1,8 +1,8 @@
 //! `visitBITCAST`'s load fold: `(conv (load x))` is `(load (conv*)x)`, so a
 //! float argument read as its bits is one integer load, not `fld; fstp; mov`.
-//! And `foldBitcastedFPLogic` (a port): a sign-bit `xor`/`and`/`or` of a float's bits,
-//! cast back, is `fneg`/`fabs`/`fneg (fabs)` (`__negdf2` on wasm: `f64.neg`,
-//! 7 B, not reinterpret, const, xor, reinterpret, 20 B).
+//! And `foldBitcastedFPLogic` (a port): a sign-bit `xor`/`and`/`or` of a
+//! float's bits, cast back, is `fneg`/`fabs`/`fneg (fabs)` (`__negdf2` on wasm:
+//! `f64.neg`, 7 B, not reinterpret, const, xor, reinterpret, 20 B).
 //!
 //! DEVIATE SD548: `foldBitcastedFPLogic` takes the operand only when it is a
 //! cast from the result type; the target's `isFNegFree`/`isFAbsFree` second
@@ -25,6 +25,33 @@ use super::isd::ISD;
 use super::mvt::EVT;
 
 impl<H: CombineHooks> DagCombiner<'_, H> {
+    /// `visitBITCAST`'s "if the input is a BUILD_VECTOR with all constant
+    /// elements, fold this now": before type legalization, or with both types
+    /// integer, the lane type legal and operations not yet legal. Only when
+    /// the `BUILD_VECTOR` has no other user.
+    fn fold_constant_vector_bitcast(
+        &mut self,
+        node: SDValue,
+    ) -> Option<SDValue> {
+        let (vt, source) = (self.dag.value_type(node), self.dag.operand(node, 0));
+        if !vt.is_vector() || self.dag.opcode(source) != ISD::BuildVector || !self.dag.has_one_use(source.node) {
+            return None;
+        }
+        let legal_types = self.level >= CombineLevel::AfterLegalizeTypes;
+        if legal_types {
+            let lane_legal = self.tli.is_some_and(|tli| tli.types.is_type_legal(vt.element()));
+            if self.legal_operations()
+                || !vt.element().is_integer()
+                || !self.dag.value_type(source).element().is_integer()
+                || !lane_legal
+            {
+                return None;
+            }
+        }
+        let little_endian = self.hooks.little_endian();
+        self.dag.fold_constant_build_vector(source, vt.element(), little_endian)
+    }
+
     pub(super) fn visit_bitcast(
         &mut self,
         node: SDValue,
@@ -33,6 +60,9 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
             return Some(fp);
         }
         let (vt, load) = (self.dag.value_type(node), self.dag.operand(node, 0));
+        if let Some(folded) = self.fold_constant_vector_bitcast(node) {
+            return Some(folded);
+        }
         if self.dag.opcode(load) != ISD::Load || load.res != 0 {
             return None;
         }
