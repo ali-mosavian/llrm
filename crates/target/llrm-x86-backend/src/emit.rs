@@ -841,6 +841,24 @@ fn based_areas(
 /// `X86::CondCode` order, the jump on each.
 const NE: usize = 5;
 
+/// The x87 conditional moves: condition code, `fcmov` mnemonic.
+const FCMOV: [(usize, &str); 8] = [
+    (2, "fcmovb"),
+    (3, "fcmovnb"),
+    (4, "fcmove"),
+    (5, "fcmovne"),
+    (6, "fcmovbe"),
+    (7, "fcmovnbe"),
+    (10, "fcmovu"),
+    (11, "fcmovnu"),
+];
+
+/// The condition code a `CMOV<cc>_Fp80` names.
+fn fp80_condition(name: &str) -> Option<usize> {
+    let cc = name.strip_prefix("CMOV")?.strip_suffix("_Fp80")?;
+    ["B", "NB", "E", "NE", "BE", "NBE", "P", "NP"].iter().position(|one| *one == cc).map(|at| FCMOV[at].0)
+}
+
 const CONDITIONS: [&str; 16] =
     ["jo", "jno", "jb", "jae", "je", "jne", "jbe", "ja", "js", "jns", "jp", "jnp", "jl", "jge", "jle", "jg"];
 
@@ -1317,7 +1335,7 @@ impl Emitter<'_, '_> {
             "CMOV16rm" | "CMOV32rm" | "CMOV64rm" => 6,
             "CMOV16rr" | "CMOV32rr" | "CMOV64rr" => 2,
             _ if name.starts_with("CMOV_") => 2,
-            _ => return None,
+            _ => return fp80_condition(name),
         };
         node.ops.get(at).and_then(|op| self.dag.constant(*op)).map(|cc| cc as usize)
     }
@@ -1641,15 +1659,30 @@ impl Emitter<'_, '_> {
         ) {
             return self.lowered_select(n, None);
         }
-        // The x87 conditional moves (`fcmov`) name their condition in the
-        // opcode; with no `fcmov` in the LIR they are the same diamond.
-        if let Some(cc) = name.strip_prefix("CMOV").and_then(|rest| rest.strip_suffix("_Fp80")).and_then(|cc| {
-            ["B", "NB", "E", "NE", "BE", "NBE", "P", "NP"]
-                .iter()
-                .position(|one| *one == cc)
-                .map(|at| [2, 3, 4, 5, 6, 7, 10, 11][at])
-        }) {
-            return self.lowered_select(n, Some(cc));
+        // The x87 conditional moves name their condition in the opcode
+        // (`CMOVNBE_Fp80`): `fcmovnbe`, which `handleCondMovFP` places with the
+        // false value on top.
+        if let Some(cc) = fp80_condition(name) {
+            let node = self.dag.node(SDValue { node: n, res: 0 });
+            let cc = self.condition_of(n, cc);
+            let Some(fcmov) = FCMOV.iter().find(|(code, _)| *code == cc).map(|(_, name)| *name) else {
+                return self.lowered_select(n, Some(cc));
+            };
+            let (Loc::Held(when_false), Loc::Held(when_true)) =
+                (self.operand(node.ops[0])?, self.operand(node.ops[1])?)
+            else {
+                return Err(EmitError::Unsupported("a conditional move of a non-register".to_owned()));
+            };
+            let held =
+                self.result_register(SDValue { node: n, res: 0 }, width(self.ctx.map.scalar_sse(), node.values[0]));
+            self.values.insert(SDValue { node: n, res: 0 }, held.value);
+            self.push(
+                Operation::Select,
+                fcmov,
+                vec![Loc::Held(held)],
+                vec![Loc::Held(when_false), Loc::Held(when_true)],
+            );
+            return Ok(());
         }
         if name == "VASTART_SAVE_XMM_REGS" {
             return self.lowered_vastart_save_xmm(n);
