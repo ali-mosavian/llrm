@@ -72,3 +72,28 @@ def test_a_kernel_the_compiler_folded_away_reads_as_unmeasured_not_as_a_failure(
     monkeypatch.setattr(bench.maps, "locate", lambda exe, listing, region: None)
     done = bench.measure(("V000", tmp_path / "x.exe", tmp_path / "x.map", "bench_crc", ["1"], tmp_path / "x.obj"))
     assert done["error"].startswith("unmeasured: kernel folded away: bench_crc is not in the map")
+
+
+def test_programs_whose_corpus_files_share_a_name_and_differ_run_in_folders_of_their_own(monkeypatch, tmp_path):
+    """stft_fixed's SIGNAL is cut to ci_bytes and stft_single's is whole: in one DOSBox folder the second program
+    read the cut and printed 297713636 where 78803551 is wanted, five levels and every reference alike."""
+    cut, whole = tmp_path / "cut" / "SIGNAL", tmp_path / "whole" / "SIGNAL"
+    for file, size in ((cut, 4), (whole, 9)):
+        file.parent.mkdir()
+        file.write_bytes(b"x" * size)
+    folders = []
+
+    class Ran:
+        text = "1\nTSC 5"
+
+    def fake_run(jobs, folder, conf=None):
+        folders.append((str(folder.name), [one.stem for one in jobs], {f.parent.name for one in jobs for f in one.files if f.name == "SIGNAL"}))
+        return {one.stem: Ran() for one in jobs}
+
+    monkeypatch.setattr(bench.subprocess, "run", lambda *a, **k: type("R", (), {"returncode": 0, "stderr": ""})())
+    monkeypatch.setattr(bench.dosbatch, "run", fake_run)
+    exes = {("a", "c", "O2"): Path("a.exe"), ("b", "c", "O2"): Path("b.exe"), ("c", "c", "O2"): Path("c.exe")}
+    inputs = {("a", "c", "O2"): {"files": (cut,), "want": ["1"]}, ("b", "c", "O2"): {"files": (whole,), "want": ["1"]}, ("c", "c", "O2"): {"files": (cut,), "want": ["1"]}}
+    bench.time_programs(exes, tmp_path / "w", inputs)
+    assert all(len(seen) <= 1 for _, _, seen in folders), folders
+    assert len(folders) == 2 and sorted(len(jobs) for _, jobs, _ in folders) == [1, 2], "the two cut ones share, the whole one apart"
