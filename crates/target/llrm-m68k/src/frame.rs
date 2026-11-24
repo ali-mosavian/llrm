@@ -67,13 +67,19 @@ pub struct Function {
     pub frame_pointer_all: bool,
     pub has_var_sized: bool,
     pub frame_address_taken: bool,
-    /// The frame operands that name each of `objects`, for [`layout`]'s reordering of a frame
-    /// past what a 16-bit displacement reaches; empty keeps the order they were made in.
+    /// The frame operands that name each of `objects`, for [`layout`]'s
+    /// reordering of a frame past what a 16-bit displacement reaches; empty
+    /// keeps the order they were made in.
     pub uses: Vec<u64>,
 }
 
 /// The farthest an object may lie for `(d16,%sp)` and `(d16,%a6)` to name it.
 const DISPLACEMENT_REACH: i64 = 32767;
+
+/// The bytes beyond an object's laid-out displacement the stack pointer can
+/// be further down at an access: arguments still pushed, a saved condition
+/// code.
+const PUSHED_ROOM: i64 = 64;
 
 /// The register an object is addressed through.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -97,7 +103,8 @@ pub enum FrameOp {
     Save { registers: Vec<RegId>, base: Base, offset: i64 },
     /// `movem.l (offset, base), regs`
     Restore { registers: Vec<RegId>, base: Base, offset: i64 },
-    /// `BuildStackAlignAND`: `move.l %sp, %d0; and.l #-align, %d0; move.l %d0, %sp`
+    /// `BuildStackAlignAND`: `move.l %sp, %d0; and.l #-align, %d0; move.l %d0,
+    /// %sp`
     AlignSp(i64),
     /// `move.l reg, -(%sp)` for one register, else `movem.l regs, -(%sp)`
     Push { registers: Vec<RegId> },
@@ -148,10 +155,12 @@ pub fn needs_frame_pointer(function: &Function) -> bool {
     has_fp(function) || max_align > stack_align.max(REALIGN_ABOVE) || locals_past_reach(function)
 }
 
-/// DEVIATE (the pin has no such rule): locals together larger than a 16-bit displacement reaches
-/// leave the incoming arguments out of `(d16,%sp)`'s reach, so the frame takes `%a6` (QuickrBasic
-/// `indent.c`: a 65 KB buffer put an argument at `(65048,%sp)`). Spill slots (one long) are not
-/// counted, so the answer is the same before and after allocation. Exit: when the pin has a rule.
+/// DEVIATE (the pin has no such rule): locals together larger than a 16-bit
+/// displacement reaches leave the incoming arguments out of `(d16,%sp)`'s
+/// reach, so the frame takes `%a6` (QuickrBasic `indent.c`: a 65 KB buffer put
+/// an argument at `(65048,%sp)`). Spill slots (one long) are not counted, so
+/// the answer is the same before and after allocation. Exit: when the pin has a
+/// rule.
 fn locals_past_reach(function: &Function) -> bool {
     function.objects.iter().skip(function.fixed).filter(|one| one.size > SLOT).map(|one| one.size).sum::<i64>()
         > DISPLACEMENT_REACH
@@ -191,11 +200,12 @@ pub fn layout(function: &Function) -> Layout {
         max_call_frame_size: function.max_call_frame,
     };
     let mut stack_size = calculate_frame_object_offsets(&mut objects, fixed, frame);
-    // DEVIATE (the pin lays objects in the order they were made): a frame past what a 16-bit
-    // displacement reaches puts its objects in use-density order (the pin's X86
-    // `orderFrameObjects`, `order_frame_objects`), the densest nearest the register that
-    // addresses them, so the few hot slots stay reachable beside a large buffer (QuickrBasic
-    // `indent.c`: a 65 KB buffer made `(65362,%sp)`). Exit: when the pin orders M68k objects.
+    // DEVIATE (the pin lays objects in the order they were made): a frame past
+    // what a 16-bit displacement reaches puts its objects in use-density
+    // order (the pin's X86 `orderFrameObjects`, `order_frame_objects`), the
+    // densest nearest the register that addresses them, so the few hot
+    // slots stay reachable beside a large buffer (QuickrBasic `indent.c`: a
+    // 65 KB buffer made `(65362,%sp)`). Exit: when the pin orders M68k objects.
     if stack_size > DISPLACEMENT_REACH && function.uses.len() == function.objects.len() {
         let mut uses = function.uses.clone();
         if has_fp {
@@ -240,9 +250,16 @@ impl Layout {
         &self,
         index: usize,
     ) -> (Base, i64) {
-        // the frame pointer's slot sits between the fixed objects and the locals
+        // the frame pointer's slot sits between the fixed objects and the
+        // locals
         let index = if self.has_fp && index >= self.first_local - 1 { index + 1 } else { index };
         self.address_of(index)
+    }
+
+    /// Whether an incoming argument is past what `(d16,%sp)` reaches, with
+    /// room for the bytes a call or a saved condition code leaves pushed.
+    pub fn fixed_out_of_reach(&self) -> bool {
+        (0..self.first_local).any(|at| self.address_of(at).1 + PUSHED_ROOM > DISPLACEMENT_REACH)
     }
 
     /// [`Layout::address`] of an object by its place in [`Layout::objects`].
