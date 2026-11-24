@@ -627,6 +627,13 @@ impl Tti for AArch64 {
         true
     }
 
+    /// OS-INLINE-TRIAL: a refused site is built only where the byte model
+    /// reads the copies as at most 5% of the caller larger (QB Os: every
+    /// module the trial shrank had one; most of those it left alone had none).
+    fn opt_size_inline_finished_trial_band(&self) -> Option<i64> {
+        Some(5)
+    }
+
     /// `Tti::opt_size_inline_guard_yields_to_inlinehint`: the pin's hint
     /// threshold stands for a callee declared `inline`.
     fn opt_size_inline_guard_yields_to_inlinehint(&self) -> bool {
