@@ -1597,6 +1597,22 @@ impl Tti for X86 {
         if optsize { self.tuning.lftr_size_budget } else { 4 }
     }
 
+    fn opt_size_inline_outline_trial(&self) -> bool {
+        self.tuning.inline_outline_trial_at_size
+    }
+
+    fn opt_size_inline_outline_clock_cap_percent(&self) -> Option<i64> {
+        self.tuning.inline_outline_trial_clock_cap_percent
+    }
+
+    fn opt_size_inline_outline_max_callees(&self) -> Option<usize> {
+        self.tuning.inline_outline_trial_max_callees
+    }
+
+    fn opt_size_inline_outline_skips_folded_copies(&self) -> bool {
+        true
+    }
+
     fn inline_trial_defers_to_shared_growth(&self) -> bool {
         self.tuning.inline_trial_defers_to_shared_growth
     }

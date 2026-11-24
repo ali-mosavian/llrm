@@ -737,6 +737,8 @@ pub fn with_pin_inlines<T>(body: impl FnOnce() -> T) -> T {
 thread_local! {
     /// The sites the second compile keeps as calls, while it runs.
     static OUTLINED: RefCell<Vec<Site>> = const { RefCell::new(Vec::new()) };
+    /// Set while the second compile keeps every site the bound accepts a call.
+    static OUTLINE_ALL: Cell<bool> = const { Cell::new(false) };
     /// The sites a compile accepted within the byte model's error, at -Os.
     static ACCEPTED: RefCell<Vec<Site>> = const { RefCell::new(Vec::new()) };
 }
@@ -752,12 +754,22 @@ pub fn with_outlined<T>(
     value
 }
 
+/// Runs `body` with every site the size bound accepts (and
+/// [`note_accepted`] notes) kept as a call.
+pub fn with_outlined_all<T>(body: impl FnOnce() -> T) -> T {
+    let before = OUTLINE_ALL.with(|cell| cell.replace(true));
+    let value = body();
+    OUTLINE_ALL.with(|cell| cell.set(before));
+    value
+}
+
 /// Whether the trial compile in force keeps this site a call.
 pub(crate) fn outlines(
     caller: &str,
     callees: &[String],
 ) -> bool {
-    OUTLINED.with(|list| list.borrow().iter().any(|one| one.caller == caller && one.callees == callees))
+    OUTLINE_ALL.with(Cell::get)
+        || OUTLINED.with(|list| list.borrow().iter().any(|one| one.caller == caller && one.callees == callees))
 }
 
 /// Notes a site accepted at -Os, a candidate for [`with_outlined`].

@@ -76,6 +76,9 @@ enum Dimension {
     /// DEVIATE HOT-INLINE-TRIAL: the -Os size bound holds at a locally hot
     /// site too.
     KeepHotCalls,
+    /// DEVIATE OS-OUTLINE-TRIAL: a callee the size bound let inline, that goes
+    /// with its calls, stays a call.
+    OutlineCalls,
 }
 
 /// What the base compile noted for each dimension.
@@ -90,6 +93,9 @@ struct Noted {
     hinted: Vec<String>,
     looped: Vec<String>,
     hot: Vec<String>,
+    /// The distinct callees of the cold sites the size bound accepted, which
+    /// the trial could keep as calls.
+    accepted: usize,
 }
 
 impl Noted {
@@ -106,6 +112,11 @@ impl Noted {
             hinted: trial::take_hint_yields(),
             looped: trial::take_loop_yields(),
             hot: trial::take_hot_yields(),
+            accepted: trial::take_accepted()
+                .iter()
+                .flat_map(|site| site.callees.iter())
+                .collect::<BTreeSet<_>>()
+                .len(),
         };
         trial::clear_rotated_loops();
         noted
@@ -125,6 +136,7 @@ impl Noted {
             Dimension::KeepHintedCalls => !self.hinted.is_empty(),
             Dimension::KeepLoopCalls => !self.looped.is_empty(),
             Dimension::KeepHotCalls => !self.hot.is_empty(),
+            Dimension::OutlineCalls => self.accepted > 0,
         }
     }
 }
@@ -168,6 +180,13 @@ impl Dimension {
         if tti.rotation_guard_must_fold_at_size() && tti.rotation_trial_at_size() && tti.rotation_hot_at_size() {
             all.push(Dimension::RotateMore { bytes: tti.rotation_hot_bytes_per_loop() });
         }
+        // After the hot rotation: that trial may add bytes, which this one,
+        // priced on the code so far, cannot be left to pay for (QB m32
+        // suggest.c: +142 B of rotation after the outline, +29 before
+        // it).
+        if tti.opt_size_inline_outline_trial() && !llrm_support::env_flag!("LLRM_NO_OUTLINE_TRIAL") {
+            all.push(Dimension::OutlineCalls);
+        }
         all
     }
 
@@ -186,6 +205,7 @@ impl Dimension {
             Dimension::KeepHintedCalls => trial::with_kept_hinted_calls(body),
             Dimension::KeepLoopCalls => trial::with_kept_loop_calls(body),
             Dimension::KeepHotCalls => trial::with_kept_hot_calls(body),
+            Dimension::OutlineCalls => trial::with_outlined_all(body),
         }
     }
 
@@ -210,6 +230,7 @@ impl Dimension {
                 | Dimension::KeepHintedCalls
                 | Dimension::KeepLoopCalls
                 | Dimension::KeepHotCalls
+                | Dimension::OutlineCalls
         )
     }
 
@@ -256,6 +277,7 @@ impl Dimension {
             }
             Dimension::KeepLoopCalls => ("keep-loop-calls", trial::keeps_smaller_at_size(added, saved, base_work, cap)),
             Dimension::KeepHotCalls => ("keep-hot-calls", trial::keeps_smaller_at_size(added, saved, base_work, cap)),
+            Dimension::OutlineCalls => ("outline-calls", trial::keeps_smaller_at_size(added, saved, base_work, cap)),
             Dimension::Unroll { bytes_strict, .. } => {
                 ("unroll-os", measured && trial::keeps_unroll_at_size(saved, added, noted.unroll.0.len(), bytes_strict))
             }
@@ -407,6 +429,7 @@ impl Sizes {
 /// A compiled variant of the module: its code, the program the backend took
 /// (the leaf-fold pair assembles it again) and whether the backend folded a
 /// leaf.
+#[derive(Clone)]
 struct Variant {
     built: masm::Module,
     program: Program,
@@ -583,12 +606,35 @@ fn compiled_module_at_size(
     let _ = Noted::take();
     let base_program = optimized_program(module.clone(), options)?;
     let noted = Noted::take();
-    let active: Vec<Dimension> = dimensions.iter().copied().filter(|one| noted.has(*one)).collect();
+    // OS-OUTLINE-TRIAL's compile cost grows with its candidates, its gain does
+    // not: a module of many candidate callees is not tried
+    // (`Tti::opt_size_inline_outline_max_callees`).
+    let outline_callees = options
+        .cpu()
+        .ok()
+        .and_then(|cpu| cpu.target().tti())
+        .and_then(|tti| tti.opt_size_inline_outline_max_callees());
+    let active: Vec<Dimension> = dimensions
+        .iter()
+        .copied()
+        .filter(|one| noted.has(*one))
+        .filter(|one| *one != Dimension::OutlineCalls || outline_callees.is_none_or(|most| noted.accepted <= most))
+        .collect();
     let base = built(base_program, name, options)?;
     if active.is_empty() {
         return with_leaf_trial(base, name, options, unpadded);
     }
     let cap = options.cpu().ok().and_then(|cpu| cpu.target().tti()).and_then(|tti| tti.os_trial_clock_cap_percent());
+    // OS-OUTLINE-TRIAL has a cap of its own where the target states one: it
+    // trades clocks on every call it keeps (QB m64 funcs.c: -85 B for +18%
+    // of the work, +3.8M guest instructions on a string bench).
+    let outline_cap = options
+        .cpu()
+        .ok()
+        .and_then(|cpu| cpu.target().tti())
+        .and_then(|tti| tti.opt_size_inline_outline_clock_cap_percent())
+        .or(cap);
+    let cap_of = |dimension: Dimension| if dimension == Dimension::OutlineCalls { outline_cap } else { cap };
     let mut again = options.clone();
     again.dump = None;
     // A dimension that stays, with its variant assembled whole or the program
@@ -628,7 +674,7 @@ fn compiled_module_at_size(
             let variant = built(program, name, &again)?;
             let pays = matches!(
                 (price(&base.built), price(&variant.built)),
-                (Some(a), Some(b)) if dimension.keeps(&noted, a, b, cap)
+                (Some(a), Some(b)) if dimension.keeps(&noted, a, b, cap_of(dimension))
             );
             if pays {
                 kept.push((dimension, Ok(variant)));
@@ -639,7 +685,7 @@ fn compiled_module_at_size(
         let (Some(first), Some(second)) = (each(&base.program), each(&program)) else { continue };
         let pays = matches!(
             (price(&first), price(&second)),
-            (Some(a), Some(b)) if dimension.keeps(&noted, a, b, cap)
+            (Some(a), Some(b)) if dimension.keeps(&noted, a, b, cap_of(dimension))
         );
         if pays {
             kept.push((dimension, Err(program)));
@@ -657,6 +703,11 @@ fn compiled_module_at_size(
         Ok(variant) => variant,
         Err(program) => built(program, name, &again)?,
     };
+    // OS-OUTLINE-TRIAL is priced before the backend's own trials (IPRA,
+    // leaf fold) run, which an outlined call changes (QB m64 scope.c: -12 B
+    // priced, +39 B finished). The code without it is kept to decide on the
+    // finished modules.
+    let mut without_outline = (first == Dimension::OutlineCalls).then(|| base.clone());
     for (dimension, _) in kept {
         accepted.push(dimension);
         let program = compiled_with(&accepted, || optimized_program(module.clone(), &again))?;
@@ -670,9 +721,12 @@ fn compiled_module_at_size(
         };
         let pays = matches!(
             (price(&chosen.built), price(&together.built)),
-            (Some(a), Some(b)) if dimension.keeps(&noted, a, b, cap)
+            (Some(a), Some(b)) if dimension.keeps(&noted, a, b, cap_of(dimension))
         );
         if pays {
+            if dimension == Dimension::OutlineCalls {
+                without_outline = Some(chosen.clone());
+            }
             chosen = together;
         } else {
             accepted.pop();
@@ -684,7 +738,19 @@ fn compiled_module_at_size(
         compiled_with(&accepted, || optimized_program(module.clone(), options))?;
     }
     stage_files(options, "", &chosen.built)?;
-    with_leaf_trial(chosen, name, options, unpadded)
+    let Some(without) = without_outline else { return with_leaf_trial(chosen, name, options, unpadded) };
+    let (without, with) =
+        (with_leaf_trial(without, name, options, unpadded)?, with_leaf_trial(chosen, name, options, unpadded)?);
+    let smaller = matches!(
+        (unpadded(&without), unpadded(&with)),
+        (Some(a), Some(b)) if a.total() < b.total()
+    );
+    if llrm_support::debug::enabled("trial") {
+        eprintln!("trial outline-calls finished: {}", if smaller { "put back" } else { "kept" });
+    }
+    let picked = if smaller { without } else { with };
+    stage_files(options, "", &picked)?;
+    Ok(picked)
 }
 
 thread_local! {
