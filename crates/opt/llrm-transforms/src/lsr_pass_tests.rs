@@ -2263,3 +2263,34 @@ fn test_a_target_that_does_not_weigh_entries_expands_a_square_start_in_the_outer
     let (_, text) = reduced_on("", SQUARE_START, "core2", &[&[3], &[10], &[30]]);
     assert!(text.contains("phi i16 [ %8, %b6 ], [ 4, %b0 ]"), "the square is phis of the scan loop: {text}");
 }
+
+/// QB `repl.c` `is_include`: a header with two edges from one block (a
+/// `switch` with two cases to it) got a pointer phi with one input for both,
+/// which `LLRM_VERIFY=1` refused ("1 inputs from block 1 for 2 edges"). The
+/// phi has an input per edge, as the pin's `predecessors(Header)` gives.
+#[test]
+fn a_header_phi_has_an_input_for_each_edge_of_a_switch() {
+    let (changed, after) = reduced_on(
+        FLAT,
+        "declare i8 @g(i8)\n\
+         define i1 @f(i8 %0) {\n\
+           br label %2\n\
+         2:\n\
+           %p = phi ptr [ null, %1 ], [ %n, %2 ], [ %n, %2 ]\n\
+           %n = getelementptr i8, ptr %p, i32 1\n\
+           switch i8 %0, label %3 [ i8 9, label %2\n i8 0, label %2 ]\n\
+         3:\n\
+           br label %4\n\
+         4:\n\
+           %i = phi i32 [ %j, %4 ], [ 0, %3 ]\n\
+           %a = getelementptr i8, ptr %n, i32 %i\n\
+           %v = load i8, ptr %a, align 1\n\
+           %c = call i8 @g(i8 %v)\n\
+           %j = add i32 %i, 1\n\
+           br label %4\n\
+         }\n",
+        "i486",
+        &[],
+    );
+    assert!(changed, "{after}");
+}
