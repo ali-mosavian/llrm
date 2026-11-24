@@ -440,8 +440,8 @@ impl llrm_target::Target for M64 {
                             // entry at m64; see `Tuning::sdiv_by_magnitude`.
                             sdiv_by_magnitude: true,
                             // DEVIATE GVN-PRE-OPTSIZE, MERGEFUNC-OS, REP-MOVS-OS (owner w12,
-                            // exit 2026-12-08): m32's -Os entries, see their `Tuning` fields. 20 -Os cells
-                            // of the corpus shrink, none grows.
+                            // exit 2026-12-22): m32's -Os entries, see their `Tuning` fields. QB -Os 11-24: m64 -778 /
+                            // -154 / -135 B, none crosses the best bar.
                             load_pre_off_at_size: true,
                             merge_functions_at_size: true,
                             rep_movs_at_size: true,
