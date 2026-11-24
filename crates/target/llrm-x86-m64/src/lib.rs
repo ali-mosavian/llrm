@@ -436,7 +436,7 @@ impl llrm_target::Target for M64 {
                             // after inlining, as gcc's IPA-CP): see the m32 entry; m64 -O2
                             // memory_expansion.c text -3281 B.
                             second_ipsccp: true,
-                            // DEVIATE SD-DIVMAG (owner w12, exit 2026-12-08): the m32
+                            // DEVIATE SD-DIVMAG (owner w12, exit 2026-12-22): the m32
                             // entry at m64; see `Tuning::sdiv_by_magnitude`.
                             sdiv_by_magnitude: true,
                             // DEVIATE GVN-PRE-OPTSIZE, MERGEFUNC-OS, REP-MOVS-OS (owner w12,
