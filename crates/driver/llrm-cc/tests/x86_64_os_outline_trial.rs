@@ -1,6 +1,6 @@
 //! `static inline name_at` (an arena base, a table offset, a scaled index) was
 //! inlined at all seven of its calls at -Os: the units count 2 against a call
-//! of 5, the object writes ~11 B a copy and came out 52 B (174 vs 122 B)
+//! of 5, the object writes ~11 B a copy and came out 62 B (240 vs 178 B)
 //! larger than the one copy gcc keeps (QB bind.c `symb_name`). The finished
 //! object decides (OS-OUTLINE-TRIAL). Needs `LLRM_LLC`.
 
@@ -36,7 +36,7 @@ fn calls(text: &str) -> usize {
 #[test]
 fn a_helper_whose_copies_grow_the_object_stays_a_call_at_os() {
     let text = listing(false);
-    assert_eq!(calls(&text), 7, "the helper is inlined at its seven calls (174 B, one copy 122 B):\n{text}");
+    assert_eq!(calls(&text), 7, "the helper is inlined at its seven calls (240 B, one copy 178 B):\n{text}");
 }
 
 #[test]

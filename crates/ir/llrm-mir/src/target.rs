@@ -623,6 +623,12 @@ pub struct Tuning {
     /// calls is compiled again with those sites kept as calls, the smaller
     /// finished code kept. false: the bound's verdict stands.
     pub inline_outline_trial_at_size: bool,
+    /// With `inline_outline_trial_at_size`: the most candidate callees a module
+    /// has and is still tried (`Tti::opt_size_inline_outline_max_callees`).
+    pub inline_outline_trial_max_callees: Option<usize>,
+    /// With `inline_outline_trial_at_size`: its own clock cap, percent
+    /// (`Tti::opt_size_inline_outline_clock_cap_percent`). None: `os_trial_clock_cap_percent`.
+    pub inline_outline_trial_clock_cap_percent: Option<i64>,
     /// With `inline_size_guard_at_size`, the bound also holds an -O1 caller.
     /// false: -O1 keeps the pin's threshold alone, where clang inlines a small
     /// callee that grows the code and clocks are the bar.
@@ -1055,6 +1061,8 @@ impl Tuning {
         immediate_forms_at_size: false,
         inline_size_guard_at_size: false,
         inline_outline_trial_at_size: false,
+        inline_outline_trial_max_callees: None,
+        inline_outline_trial_clock_cap_percent: None,
         inline_size_guard_at_o1: false,
         inline_size_guard_single_site: false,
         inline_size_guard_yields_to_inlinehint: false,

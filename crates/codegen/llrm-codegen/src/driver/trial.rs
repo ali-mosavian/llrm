@@ -93,7 +93,8 @@ struct Noted {
     hinted: Vec<String>,
     looped: Vec<String>,
     hot: Vec<String>,
-    /// The cold sites the size bound accepted that the trial could keep calls.
+    /// The distinct callees of the cold sites the size bound accepted, which
+    /// the trial could keep as calls.
     accepted: usize,
 }
 
@@ -111,7 +112,11 @@ impl Noted {
             hinted: trial::take_hint_yields(),
             looped: trial::take_loop_yields(),
             hot: trial::take_hot_yields(),
-            accepted: trial::take_accepted().len(),
+            accepted: trial::take_accepted()
+                .iter()
+                .flat_map(|site| site.callees.iter())
+                .collect::<BTreeSet<_>>()
+                .len(),
         };
         trial::clear_rotated_loops();
         noted
@@ -601,12 +606,35 @@ fn compiled_module_at_size(
     let _ = Noted::take();
     let base_program = optimized_program(module.clone(), options)?;
     let noted = Noted::take();
-    let active: Vec<Dimension> = dimensions.iter().copied().filter(|one| noted.has(*one)).collect();
+    // OS-OUTLINE-TRIAL's compile cost grows with its candidates, its gain does
+    // not: a module of many candidate callees is not tried
+    // (`Tti::opt_size_inline_outline_max_callees`).
+    let outline_callees = options
+        .cpu()
+        .ok()
+        .and_then(|cpu| cpu.target().tti())
+        .and_then(|tti| tti.opt_size_inline_outline_max_callees());
+    let active: Vec<Dimension> = dimensions
+        .iter()
+        .copied()
+        .filter(|one| noted.has(*one))
+        .filter(|one| *one != Dimension::OutlineCalls || outline_callees.is_none_or(|most| noted.accepted <= most))
+        .collect();
     let base = built(base_program, name, options)?;
     if active.is_empty() {
         return with_leaf_trial(base, name, options, unpadded);
     }
     let cap = options.cpu().ok().and_then(|cpu| cpu.target().tti()).and_then(|tti| tti.os_trial_clock_cap_percent());
+    // OS-OUTLINE-TRIAL has a cap of its own where the target states one: it
+    // trades clocks on every call it keeps (QB m64 funcs.c: -85 B for +18%
+    // of the work, +3.8M guest instructions on a string bench).
+    let outline_cap = options
+        .cpu()
+        .ok()
+        .and_then(|cpu| cpu.target().tti())
+        .and_then(|tti| tti.opt_size_inline_outline_clock_cap_percent())
+        .or(cap);
+    let cap_of = |dimension: Dimension| if dimension == Dimension::OutlineCalls { outline_cap } else { cap };
     let mut again = options.clone();
     again.dump = None;
     // A dimension that stays, with its variant assembled whole or the program
@@ -646,7 +674,7 @@ fn compiled_module_at_size(
             let variant = built(program, name, &again)?;
             let pays = matches!(
                 (price(&base.built), price(&variant.built)),
-                (Some(a), Some(b)) if dimension.keeps(&noted, a, b, cap)
+                (Some(a), Some(b)) if dimension.keeps(&noted, a, b, cap_of(dimension))
             );
             if pays {
                 kept.push((dimension, Ok(variant)));
@@ -657,7 +685,7 @@ fn compiled_module_at_size(
         let (Some(first), Some(second)) = (each(&base.program), each(&program)) else { continue };
         let pays = matches!(
             (price(&first), price(&second)),
-            (Some(a), Some(b)) if dimension.keeps(&noted, a, b, cap)
+            (Some(a), Some(b)) if dimension.keeps(&noted, a, b, cap_of(dimension))
         );
         if pays {
             kept.push((dimension, Err(program)));
@@ -693,7 +721,7 @@ fn compiled_module_at_size(
         };
         let pays = matches!(
             (price(&chosen.built), price(&together.built)),
-            (Some(a), Some(b)) if dimension.keeps(&noted, a, b, cap)
+            (Some(a), Some(b)) if dimension.keeps(&noted, a, b, cap_of(dimension))
         );
         if pays {
             if dimension == Dimension::OutlineCalls {
