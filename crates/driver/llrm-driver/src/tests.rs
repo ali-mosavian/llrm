@@ -1593,6 +1593,28 @@ fn load_pre_is_off_at_m64_os() {
     assert!(!folded(&speed), "-O2 still PREs the load: {speed}");
 }
 
+/// A frame needed only on a cold path that never returns is set up there, as the pin's ShrinkWrap places it: Restore is the
+/// cold block, and no epilogue goes into a block no path leaves. It was refused (the Restore left by no jump), so the stack pad
+/// of the call sat in the entry: `push rax` before the compare and `pop rcx` before the return, QB `fault_status` sites (875
+/// push/pop of rax/rcx over the corpus against clang's 576).
+#[test]
+fn a_frame_for_a_noreturn_call_is_set_up_on_the_cold_path_at_m64() {
+    let text = "target datalayout = \"@m64-datalayout@\"\n\
+                target triple = \"x86_64-unknown-linux-gnu\"\n\
+                declare void @bad(ptr, i32) noreturn cold noinline\n\
+                define i32 @f(ptr %p, ptr %g, i32 %a) {\n\
+                entry:\n  %x = load i32, ptr %p\n  %c = icmp slt i32 %x, %a\n  br i1 %c, label %cold, label %ok\n\
+                cold:\n  call void @bad(ptr %g, i32 14)\n  unreachable\n\
+                ok:\n  %s = sub i32 %x, %a\n  ret i32 %s\n}\n";
+    let (built, _) = compiled(&flags(&["-m64", "-Os", "--isel=dag"]), text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    let at = |what: &str| listing.lines().position(|line| line.trim_start().starts_with(what));
+    let (push, ret) = (at("push"), at("ret"));
+    assert!(push.is_some() && ret.is_some(), "{listing}");
+    assert!(ret < push, "the push is after the return, on the cold path: {listing}");
+    assert!(!listing.contains("pop "), "no epilogue where nothing returns: {listing}");
+}
+
 /// RS1 leaves a loop whose copied guard does not fold and whose trips are not counted unrotated at -Os, and each trip pays the taken
 /// `jmp` back to the guard (3 clocks on the 486). A walk of a list is that loop; rotated it is one branch back at 4 B.
 /// ROTATION-HOT compiles it rotated too and keeps that where the finished code runs less for a few bytes a loop.

@@ -398,9 +398,15 @@ impl Frequency {
         // block with work in it stays: a body is not a bridge.
         let entry = body.entry;
         let by_at: IndexMap<i64, &Block> = blocks.iter().map(|block| (block.at, block)).collect();
+        // One entered only on edges that are never taken is no bridge: the pin
+        // (`addToDist`) gives such an edge a weight of 1, a mass the join
+        // after it is given and a collapsed bridge would not carry.
+        let entered: std::collections::HashSet<i64> =
+            taken.iter().filter(|(_, chance)| **chance > 0.0).map(|((_, to), _)| *to).collect();
         let bridge = |at: i64| -> Option<i64> {
             let one = by_at.get(&at)?;
-            (at != entry && idle(one) && one.succ.len() == 1 && one.succ[0] != at).then(|| one.succ[0])
+            (at != entry && idle(one) && one.succ.len() == 1 && one.succ[0] != at && entered.contains(&at))
+                .then(|| one.succ[0])
         };
         // Past the bridges, and the share of the edge that reaches there.
         let beyond = |mut at: i64| -> i64 {
@@ -1153,6 +1159,35 @@ mod tests {
         body.frequencies = Some(Arc::new(crate::model::lir::BlockFrequencies(stale)));
         let said = Frequency::violations(&body);
         assert!(said.iter().any(|one| one.contains("block 0x28 runs")), "{said:?}");
+    }
+
+    /// `link.c` at -O3: a jump block entered only on a never-taken edge was
+    /// collapsed to 0 runs while the join after it kept the pin's weight-1
+    /// mass (2^-28), and `violations` refused the module ("block runs 0.000
+    /// times, its predecessors 0.000").
+    #[test]
+    fn test_a_join_behind_a_never_taken_bridge_is_not_refused() {
+        // A loop of ~1000 trips: its header runs a thousand times, so the
+        // weight-1 mass of the dead edge at the join is a thousand times 2^-31.
+        let mut body = LirBody::new(
+            "f",
+            1,
+            vec![
+                block(1, "jmp", Operation::Jump, vec![2]).into(),
+                block(2, "jne", Operation::Branch, vec![3, 5]).into(),
+                block(3, "jmp", Operation::Jump, vec![4]).into(),
+                block(4, "ret", Operation::Return, vec![]).into(),
+                block(5, "jne", Operation::Branch, vec![2, 6]).into(),
+                block(6, "ret", Operation::Return, vec![]).into(),
+            ],
+            IndexMap::default(),
+            IndexMap::default(),
+        );
+        for (edge, probability) in [((2, 3), 0.0), ((2, 5), 1.0), ((5, 2), 0.999), ((5, 6), 0.001)] {
+            body.odds.taken.insert(edge, (probability * BlockOdds::CERTAIN).round() as u32);
+        }
+        body.frequencies = Some(Frequency::of(&body).table());
+        assert!(Frequency::violations(&body).is_empty(), "{:?}", Frequency::violations(&body));
     }
 
     #[test]

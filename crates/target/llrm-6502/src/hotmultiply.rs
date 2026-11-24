@@ -49,6 +49,16 @@ pub fn hot(module: &Module) -> bool {
     runs(module) >= MIN_RUNS
 }
 
+/// Whether, at speed, the multiplies of `module` run often enough that the
+/// clocks the speed routine saves reach `clocks_per_byte` for each byte it
+/// adds: the rate every speed form of the target is taken at
+/// (`select::speed_division16_pays`). One run of a multiply repays it
+/// (uint64_to_float: the module's one multiply ran the compact routine, 2,685
+/// clocks against llvm-mos's early-exit walk's 1,977.)
+pub fn hot_at_speed(module: &Module) -> bool {
+    runs(module) * SAVED_CLOCKS >= fast_bytes() * f64::from(crate::alloc::Tuning::SPEED.clocks_per_byte)
+}
+
 /// The static runs of the 32-bit multiplies of `module`: 10 per level of loop
 /// depth, times the runs of the function.
 pub fn runs(module: &Module) -> f64 {
