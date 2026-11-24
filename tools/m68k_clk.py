@@ -131,6 +131,7 @@ def gcc_command(gcc, gcc_root, cpu, level, path, obj, pcrel, flags=()):
 
 
 def main():
+    import external_flags
     import m68k_exec_sweep as sweep
     import llrmbin
     import o0_sweep
