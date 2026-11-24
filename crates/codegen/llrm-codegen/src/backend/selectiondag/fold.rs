@@ -311,8 +311,9 @@ impl SelectionDAG {
         if opcode.is_commutative_binop() && self.is_constant_int(n1) && !self.is_constant_int(n2) {
             std::mem::swap(&mut n1, &mut n2);
         }
-        // `N2CV = isConstOrConstSplat(N2, AllowUndefs=false, AllowTruncation=true)`:
-        // a splat of a lane counts as the constant, at the lane's width.
+        // `N2CV = isConstOrConstSplat(N2, AllowUndefs=false,
+        // AllowTruncation=true)`: a splat of a lane counts as the
+        // constant, at the lane's width.
         let lane = if vt.is_vector() { vt.element() } else { vt };
         let lane_bits = if lane.is_integer() { lane.size_in_bits() } else { 0 };
         let n2_const = self.constant(n2);
@@ -770,6 +771,78 @@ impl SelectionDAG {
             lanes.push(self.get_constant(extend_signed(value, element_bits, lane_ty.size_in_bits()), lane_ty));
         }
         Some(self.get_build_vector(vt, &lanes))
+    }
+
+    /// `FoldConstantBuildVector`
+    /// ([SelectionDAG.cpp#L8312](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/SelectionDAG.cpp#L8312)):
+    /// a constant integer `BUILD_VECTOR` recast to lanes of `dst_lane` bits,
+    /// through `BuildVectorSDNode::getConstantRawBits`. An undef source lane
+    /// makes a destination lane undef only when all its source lanes are.
+    ///
+    /// DEVIATE CV1: floating-point lanes, source or destination, are not made.
+    pub(super) fn fold_constant_build_vector(
+        &mut self,
+        build: SDValue,
+        dst_lane: EVT,
+        little_endian: bool,
+    ) -> Option<SDValue> {
+        let src_vt = self.value_type(build);
+        let src_lane = src_vt.element();
+        if src_lane == dst_lane {
+            return Some(build);
+        }
+        if !src_lane.is_integer() || !dst_lane.is_integer() {
+            return None;
+        }
+        let (src_bits, dst_bits) = (src_lane.size_in_bits(), dst_lane.size_in_bits());
+        let total = src_vt.lanes() * src_bits;
+        if total % dst_bits != 0 {
+            return None;
+        }
+        let mut src = Vec::with_capacity(src_vt.lanes() as usize);
+        for index in 0..src_vt.lanes() as usize {
+            let lane = self.operand(build, index);
+            if self.is_undef(lane) {
+                src.push(None);
+            } else if self.opcode(lane) == ISD::Constant {
+                src.push(Some(self.constant(lane)? & mask(src_bits)));
+            } else {
+                return None;
+            }
+        }
+        let mut lanes = Vec::new();
+        if src_bits <= dst_bits {
+            let scale = (dst_bits / src_bits) as usize;
+            for chunk in src.chunks(scale) {
+                let mut value = 0u128;
+                let mut defined = false;
+                for (at, part) in chunk.iter().enumerate() {
+                    let Some(part) = part else { continue };
+                    defined = true;
+                    let at = if little_endian { at } else { scale - at - 1 };
+                    value |= part << (at as u32 * src_bits);
+                }
+                lanes.push(defined.then_some(value));
+            }
+        } else {
+            let scale = (src_bits / dst_bits) as usize;
+            for part in &src {
+                for at in 0..scale {
+                    let at = if little_endian { at } else { scale - at - 1 };
+                    lanes.push(part.map(|value| (value >> (at as u32 * dst_bits)) & mask(dst_bits)));
+                }
+            }
+        }
+        let EVT::Simple(dst_mvt) = dst_lane else { return None };
+        let ops: Vec<SDValue> = lanes
+            .into_iter()
+            .map(|lane| match lane {
+                Some(value) => self.get_constant(value, dst_lane),
+                None => self.get_undef(dst_lane),
+            })
+            .collect();
+        let vt = EVT::vector(dst_mvt, ops.len() as u32);
+        Some(self.get_build_vector(vt, &ops))
     }
 
     /// `foldConstantFPMath`: two constants fold to one; an undef operand
