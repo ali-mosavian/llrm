@@ -158,7 +158,9 @@ fn tuning(costs: &llrm_mir::target::OperationCosts) -> llrm_mir::target::Tuning 
         // branch changes form (floats -Os +5 B, x_list +8 B for a loop each):
         // 8 B a loop, not the default 4.
         rotation_hot_bytes_per_loop: 8,
-        // DEVIATE GVN-PRE-OPTSIZE (owner w12, exit 2026-12-08):
+        // DEVIATE GVN-PRE-OPTSIZE (owner w12, exit 2026-12-22):
+        // QB -Os 11-24: m64 -778 B (8 modules +81 B), m32 -1166 B (13 modules
+        // +212 B); no grown cell crosses the best bar.
         // see `Tti::load_pre_off_at_size`.
         load_pre_off_at_size: true,
         // DEVIATE UNROLL-O1 (owner x86-m32, exit 2026-11-27,
@@ -226,7 +228,7 @@ fn tuning(costs: &llrm_mir::target::OperationCosts) -> llrm_mir::target::Tuning 
         // (QB dialog.c `find`: 38 B against 7).
         max_stores_per_memcpy_opt_size: 2,
         sdiv_pow2_stays_at_size: false,
-        // DEVIATE MERGEFUNC-OS (owner w12, exit 2026-12-08):
+        // DEVIATE MERGEFUNC-OS (owner w12, exit 2026-12-22):
         // see `Tuning::merge_functions_at_size`.
         merge_functions_at_size: true,
         x87_stack_slots: Some(8),

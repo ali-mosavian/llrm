@@ -991,7 +991,21 @@ def time_programs(exes: dict[tuple[str, str, str], Path], work: Path, inputs: di
     out |= {key: {"error": "skipped: " + one["skip"]} for key, one in inputs.items() if "skip" in one}
     keys = [key for key in exes if key not in out]
     jobs = [Job(f"W{at:03d}", "exe", exes[key], runner="TIMEIT.COM", files=(stub, *LOADERS.get(exes[key], ()), *inputs.get(key, {}).get("files", ())), budget_ms=600_000 if key in inputs else None) for at, key in enumerate(keys)]
-    ran = dosbatch.run(jobs, work / "run", conf=TIMING_CONF)
+    # One folder holds one file of each name: programs whose corpus files share a name and differ in content (a cut
+    # of SIGNAL for stft_fixed, the whole for stft_single) run in folders of their own, or one reads the other's.
+    groups: list[tuple[dict[str, str], list[Job]]] = []
+    for key, job in zip(keys, jobs):
+        named = {file.name: hashlib.md5(file.read_bytes()).hexdigest() for file in inputs.get(key, {}).get("files", ())}
+        for seen, members in groups:
+            if all(seen.get(name, digest) == digest for name, digest in named.items()):
+                seen |= named
+                members.append(job)
+                break
+        else:
+            groups.append((dict(named), [job]))
+    ran = {}
+    for at, (_, members) in enumerate(groups):
+        ran |= dosbatch.run(members, work / ("run" if len(groups) == 1 else f"run{at}"), conf=TIMING_CONF)
     for key, job in zip(keys, jobs):
         text = ran[job.stem].text
         found = [line for line in text.splitlines() if line.startswith("TSC ")]
