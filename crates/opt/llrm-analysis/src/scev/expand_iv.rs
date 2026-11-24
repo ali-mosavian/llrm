@@ -283,7 +283,7 @@ impl Run<'_> {
         let ir_ty = self.ir_ty(ty);
         let zero = self.constant(ir_ty, 0);
         let one = self.constant(ir_ty, 1);
-        let preds = self.function.predecessors(header);
+        let preds = self.function.predecessor_edges(header);
         let l = self.env.loops.get_loop_for(header).expect("a loop");
         // A placeholder for each backedge value, filled once the phi exists.
         let operands: Vec<Operand> = preds.iter().flat_map(|&p| [zero, Operand::Block(p)]).collect();
@@ -294,6 +294,12 @@ impl Run<'_> {
         let value = self.result_of(phi);
         for (at, &pred) in preds.iter().enumerate() {
             if !l.contains(pred) {
+                continue;
+            }
+            // A second edge from the same block carries the same value.
+            if let Some(first) = preds[..at].iter().position(|&one| one == pred) {
+                let same = self.function.instruction(phi).operands[2 * first];
+                self.function.set_operand(phi, 2 * at, same);
                 continue;
             }
             let terminator = self.function.terminator(pred).expect("a terminator");
@@ -807,7 +813,7 @@ impl Run<'_> {
         let increment_nsw = !use_subtract && self.is_increment_no_wrap(normalized, true);
 
         let ir_ty = self.ir_ty(expand_ty);
-        let preds = self.function.predecessors(header);
+        let preds = self.function.predecessor_edges(header);
         let operands: Vec<Operand> = preds.iter().flat_map(|&p| [start_v, Operand::Block(p)]).collect();
         let phi = self.function.create_instruction(Opcode::Phi, ir_ty, operands, IrFlags::default(), None);
         let head = self.function.block(header).first().expect("a header");
@@ -815,6 +821,12 @@ impl Run<'_> {
         let pn = self.result_of(phi);
         for (at, &pred) in preds.iter().enumerate() {
             if !l.contains(pred) {
+                continue;
+            }
+            // A second edge from the same block carries the same value.
+            if let Some(first) = preds[..at].iter().position(|&one| one == pred) {
+                let same = self.function.instruction(phi).operands[2 * first];
+                self.function.set_operand(phi, 2 * at, same);
                 continue;
             }
             let insert_pos = match self.x.iv_inc_insert {
