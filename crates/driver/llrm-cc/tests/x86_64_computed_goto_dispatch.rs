@@ -8,9 +8,16 @@
 use std::path::Path;
 use std::process::Command;
 
+/// One directory per call and thread: two tests of this file compile at the
+/// same level in parallel, and a shared `cg{level}-{pid}` let one delete the
+/// other's output (`read_to_string` unwrap, a gate failure of #10774).
+fn scratch_dir(level: &str) -> std::path::PathBuf {
+    Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("cg{level}-{}-{:?}", std::process::id(), std::thread::current().id()))
+}
+
 fn assembly(level: &str) -> String {
     let llc = std::env::var_os("LLRM_LLC").expect("LLRM_LLC is not set: this test needs it and does not skip");
-    let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("cg{level}-{}", std::process::id()));
+    let dir = scratch_dir(level);
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     let asm = dir.join("a.s");
@@ -64,4 +71,13 @@ fn a_dispatch_handler_ties_the_sum_to_pc_without_a_copy() {
             .count();
         assert!(count <= 259, "{count} instructions at {level}: a handler copies pc");
     }
+}
+
+/// Two tests that compile at the same level in parallel must not share a
+/// scratch directory (one `remove_dir_all`ed the other's assembly).
+#[test]
+fn parallel_tests_at_one_level_use_different_scratch_directories() {
+    let here = scratch_dir("-O1");
+    let there = std::thread::spawn(|| scratch_dir("-O1")).join().unwrap();
+    assert_ne!(here, there, "two threads share {}", here.display());
 }
