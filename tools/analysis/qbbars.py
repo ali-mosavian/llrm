@@ -9,6 +9,7 @@ PIN_BIN=os.environ.get('PIN_BIN') or sys.exit('qbbars: set PIN_BIN to the pin bu
 CLANG=os.path.join(PIN_BIN,'clang')
 GCC=os.environ.get('QB_GCC','gcc-15')  # the baselines' gcc (15.2); plain `gcc` is the distro's 13.4
 sys.path.insert(0,os.path.join(os.path.dirname(os.path.abspath(__file__)),'..'))
+import qbrow
 from external_flags import flags as bar_flags  # the one flag set every external bar is built with
 def gcc_major():
     try: return int(subprocess.run([GCC,'-dumpversion'],capture_output=True,text=True).stdout.split('.')[0])
@@ -59,6 +60,7 @@ def one(mod):
     finally: shutil.rmtree(t,ignore_errors=True)
     return f,out
 mods=product_modules()
+qbrow.require_hosted(f'{D}/llrm-cc',tgt,{'LLRM_LLC':f'{D}/llrm-llc'})
 if not mods: sys.exit('qbbars: `make -n -B` named no compile in '+T)
 with ThreadPoolExecutor(6) as ex: res=list(ex.map(one,mods))
 ok=[(n,o) for n,o in res if all(v is not None for v in o.values())]
