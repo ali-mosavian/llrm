@@ -306,7 +306,7 @@ pub struct Tuning {
     /// rule, which the pin applies at -Oz only): the chain is no smaller.
     /// A constant `memset` past the store limit is `rep stos` at `-Os`
     /// (alignment or not), not the library call: the setup is 9-11 B against
-    /// the call's 12-16. DEVIATE REP-OS (owner w9, exit 2026-11-20): the pin
+    /// the call's 12-16. DEVIATE REP-OS (owner w12, exit 2026-12-08): the pin
     /// calls `memset` unless the destination is dword aligned and the size
     /// within 128 bytes.
     pub rep_stos_at_size: bool,

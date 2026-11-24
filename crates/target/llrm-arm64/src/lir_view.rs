@@ -434,6 +434,7 @@ fn view_with(
                 || matches!(
                     op,
                     Op::Imm { .. }
+                        | Op::FrameAddress { .. }
                         | Op::I(Inst::FpMoveImm { .. } | Inst::Adr { .. })
                         // `MOVIv2d_ns`:
                         // `isReMaterializable`, `isAsCheapAsAMove`.
@@ -945,16 +946,16 @@ impl AllocTarget for Arm64 {
     /// the pin makes a trivially rematerializable def again for a copy with no
     /// size guard. The zero register's `mov xd, xzr` and a constant one
     /// `movz`/`movn`/logical immediate makes are each one four-byte
-    /// instruction, the size of the copy they replace. A constant that takes
-    /// several instructions stays a copy (`mul_constants` -Os grew 124 B when
-    /// every constant was made again); its operand here is an identity, so
-    /// the length is carried in the name.
+    /// instruction, the size of the copy they replace, as is a frame object's
+    /// address (`add xd, sp, #imm`, `ADDXri`, cheap as a move; a frame past
+    /// 4 KiB takes a second instruction, unknown before the layout). A constant
+    /// that takes several instructions stays a copy (`mul_constants` -Os
+    /// grew 124 B when every constant was made again); its operand here is
+    /// an identity, so the length is carried in the name.
     fn literal_move_is_copy_sized(literal: &llrm_codegen::model::lir::Insn) -> bool {
-        literal
-            .what
-            .as_ref()
-            .and_then(|what| what.name.as_deref())
-            .is_some_and(|name| Self::is_zero_def(name) || name == ONE_INSN_IMM || name.starts_with("AddSub"))
+        literal.what.as_ref().and_then(|what| what.name.as_deref()).is_some_and(|name| {
+            Self::is_zero_def(name) || name == ONE_INSN_IMM || name == "FrameAddress" || name.starts_with("AddSub")
+        })
     }
 
     fn remat_reads_registers() -> bool {
