@@ -207,6 +207,10 @@ impl CombineHooks for Aarch64Lowering {
         true
     }
 
+    fn fold_and_of_extload(&self) -> bool {
+        true
+    }
+
     fn merge_stores_via_trunc_store(&self) -> bool {
         true
     }

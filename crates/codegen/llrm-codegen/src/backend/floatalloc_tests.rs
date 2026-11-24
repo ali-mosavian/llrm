@@ -678,7 +678,11 @@ fn test_x87_memory_operand_follows_the_selected_cpu_cost() {
     for (key, value) in [("x87_load", 1), ("x87_mul", 1), ("x87_mul_m", 99)] {
         costs.insert(key.to_owned(), value);
     }
-    let slow_memory = cpu::Profile { name: "test-x87".to_owned(), _costs: std::sync::Arc::new(costs.into_iter().collect()), ..base.clone() };
+    let slow_memory = cpu::Profile {
+        name: "test-x87".to_owned(),
+        _costs: std::sync::Arc::new(costs.into_iter().collect()),
+        ..base.clone()
+    };
 
     let result = allocated(&body, None, None, true, &slow_memory).unwrap();
 
@@ -1064,10 +1068,10 @@ fn test_a_reload_before_the_pseudo_that_takes_a_calls_result_leaves_the_result_b
     assert!(names.contains(&"faddp"), "{names:?}");
 }
 
-/// A value that is both the stack input of a block call (an unnamed store, which
-/// consumes it) and live after the call: the allocator put its spill at the
-/// call, behind that store, where the value is gone ("floating stack input is
-/// unavailable": `if (t >= 100) return 0; return frndint(t) + t` at m64, QB
+/// A value that is both the stack input of a block call (an unnamed store,
+/// which consumes it) and live after the call: the allocator put its spill at
+/// the call, behind that store, where the value is gone ("floating stack input
+/// is unavailable": `if (t >= 100) return 0; return frndint(t) + t` at m64, QB
 /// pfpu.c's `fx_exp`). The spill is made ahead of the store.
 #[test]
 fn test_a_spill_of_a_block_calls_stack_input_is_made_before_the_input_consumes_it() {
@@ -1197,4 +1201,30 @@ fn test_a_store_to_memory_between_conversions_still_rounds() {
     let result = switched(&[(0, ".", vec![5]), (5, "cmcmb", vec![5, 9]), (9, "r", vec![])]);
     let loop_words = result.iter().find(|(at, _)| *at == 5).unwrap().1.iter().filter(|name| *name == "fldcw").count();
     assert!(loop_words > 0, "{result:?}");
+}
+
+/// A value read after an inline x87 block that is still on the stack when the
+/// block's inputs are consumed was popped with them, and found missing at its
+/// next read ("floating stack input is unavailable", QB pfpu.c `fx_pow`, six
+/// instructions after the cause). It is refused at the block.
+#[test]
+fn test_a_value_live_after_a_block_call_is_refused_at_the_block() {
+    let cells = _cells([-4, -8, -12, -16, -20], 8);
+    let body = _body(vec![
+        _load(1, &cells[0]),
+        _load(2, &cells[1]),
+        _load(3, &cells[2]),
+        sem(Operation::FloatStore, "", vec![], vec![fl(2), fl(3)]),
+        sem(Operation::Call, "call", vec![], vec![]),
+        sem(Operation::FloatLoad, "", vec![fl(4)], vec![]),
+        _store(&cells[3], 1),
+        _store(&cells[4], 4),
+    ]);
+    let refused = crate::backend::fpstack::converted(
+        &body,
+        &crate::backend::classes::RegisterClasses::of(&llrm_x86_m16::M16),
+        None,
+    )
+    .expect_err("the value on the stack under the inputs is refused");
+    assert!(format!("{refused:?}").contains("live across a boundary"), "{refused:?}");
 }
