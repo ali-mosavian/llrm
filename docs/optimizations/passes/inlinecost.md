@@ -99,6 +99,9 @@ each site's cost and threshold beside the existing decision; with
   arm64 runs the same trial in its own driver (`llrm-arm64/src/driver.rs`,
   `trial::keeps_unhinted`; owner m16-b, exit 2026-12-20): QB -Os array.c
   `arry_esize` copied into four callers, 3,264 -> 2,996 B (gcc 3,036).
+  Its price pays each function's work once, not by call reach as the m32/m64
+  trials do (ARM64-TRIAL-CALL-REACH, owner w9, exit 2026-12-22): the byte wins
+  stay, at a measured clock cost (see the row).
   The same trial reverses the negative-cost yield (`yields_to_negative_cost`,
   `trial::with_kept_negative_calls`, a second stage priced on top of the first):
   `code_byte` (a bounds check and a store, cost below zero) was copied into

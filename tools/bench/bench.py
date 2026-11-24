@@ -123,6 +123,8 @@ BORLAND = {
 }
 STARTUP = Path(__file__).with_name("startup")  # an empty kernel per language: what a toolchain's start-up costs
 IO_SKELETON = Path(__file__).with_name("io_skeleton")  # a Nib program of std.io's file calls and nothing else: what the I/O of a bench's Nib cell costs (io_cost)
+NO_INT64_REFERENCES = ("bcc", "tc", "tcpp")  # Borland's 16-bit C compilers: no 64-bit integer, `long long` is a 32-bit long
+UNMEASURABLE_LONG_LONG = "unmeasurable: reference has no long long (32-bit product overflows)"
 REFERENCES = {"c": ("ow", "bcc", "tc", "tcpp"), "bas": ("bc", "pds71", "vbdos"), "bq16": ("bc", "pds71", "vbdos")}  # the reference compilers per language; the BCs have one level, /O
 # BASIC references: the name in expected.toml -> the toolchain (run_tests.TOOLS) whose BC compiles and whose runtime links.
 BASIC_REFERENCES = {"bc": "qb45", "pds71": "pds71", "vbdos": "vbdos"}
@@ -640,6 +642,14 @@ def with_startup(selected: list[str], timing: bool) -> list[tuple[Path, Variant]
     return todo + [(STARTUP, variant) for variant in variants(STARTUP) if timing]
 
 
+def unmeasurable_reference(reference: str, source: Path) -> str | None:
+    """Why `reference` cannot be a bar for the program at `source` (a program that computes in `long long` is wrong on a compiler without
+    one, whatever it prints), or None."""
+    if reference in NO_INT64_REFERENCES and re.search(r"\blong\s+long\b", source.read_text(errors="replace")):
+        return UNMEASURABLE_LONG_LONG
+    return None
+
+
 def reference_programs(todo: list[tuple[Path, Variant]]) -> list[tuple[Path, Variant]]:
     """`todo` less the programs whose bench.toml says `references = false` (C99 or llrm-only sources the reference compilers cannot build),
     each named on a line: a program left out is announced, not silently absent."""
@@ -661,7 +671,9 @@ def measure_references(selected: list[str], opts: list[str], work: Path, timing:
     stems = [f"R{at:03d}" for at in range(len(todo))]
     jobs, owned, plain, needs = [], [], {}, {}
     def own(key, stem, directory, variant, built, obj=None):
-        if isinstance(built, str):
+        if cause := unmeasurable_reference(key[1], variant.source):
+            out[key] = {"unmeasurable": cause}
+        elif isinstance(built, str):
             out[key] = {"error": built}
         elif directory == STARTUP:
             plain[key] = built[0]

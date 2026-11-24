@@ -1,5 +1,6 @@
 //! The arm64 target. Its descriptions are the files beside this one.
 
+pub mod branchrelax;
 pub mod cc;
 pub mod cfi;
 pub mod cmpzero;

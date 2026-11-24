@@ -97,3 +97,16 @@ def test_programs_whose_corpus_files_share_a_name_and_differ_run_in_folders_of_t
     bench.time_programs(exes, tmp_path / "w", inputs)
     assert all(len(seen) <= 1 for _, _, seen in folders), folders
     assert len(folders) == 2 and sorted(len(jobs) for _, jobs, _ in folders) == [1, 2], "the two cut ones share, the whole one apart"
+
+
+def test_a_reference_with_no_long_long_is_no_bar_for_a_program_that_computes_in_it(tmp_path):
+    """The nbody_fixed and stft_fixed bounds twins multiply in `long long`: bcc, tc and tcpp took it for 32 bits and printed 64 where
+    38421 is wanted, rows the census read as errors of a build rather than as no bar."""
+    source = tmp_path / "bounds.c"
+    source.write_text("static long qmul(long a, long b) { return (long)(((long long)a * b) >> 9); }\n")
+    plain = tmp_path / "plain.c"
+    plain.write_text("static long qmul(long a, long b) { return (a * b) >> 9; }\n")
+    assert bench.unmeasurable_reference("tc", source) == "unmeasurable: reference has no long long (32-bit product overflows)"
+    assert all(bench.unmeasurable_reference(one, source) for one in ("bcc", "tc", "tcpp"))
+    assert bench.unmeasurable_reference("ow", source) is None, "Open Watcom has long long: its bar stands"
+    assert bench.unmeasurable_reference("tc", plain) is None

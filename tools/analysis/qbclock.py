@@ -18,6 +18,7 @@ import sys
 import tempfile
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
+import qbrow  # noqa: E402
 from external_flags import flags as external_flags  # noqa: E402
 
 # The bar compiler: baselines name gcc-15 (15.2); plain `gcc` is the distro's 13.4, which does not inline what 15 does (QB arrays.bas ran 2.6x the cycles).
@@ -75,6 +76,8 @@ def cc(argv, env=os.environ):
 
 
 def build(arch, level, variant, dist, src, out):
+    if variant == "ours":
+        qbrow.require_hosted(os.path.join(dist, "llrm-cc"), "x86_64-linux" if arch == "m64" else "x86_32-linux", {"LLRM_LLC": os.path.join(dist, "llrm-llc")})
     shutil.rmtree(out, ignore_errors=True)
     shutil.copytree(src, out)
     wrapper = os.path.join(os.path.dirname(os.path.abspath(__file__)), "qbcc")
