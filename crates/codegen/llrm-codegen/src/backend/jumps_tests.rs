@@ -2146,7 +2146,7 @@ fn test_a_target_that_does_not_align_at_o1_aligns_no_loop_there() {
     assert_eq!(aligned_blocks(&on), 1, "-O2 aligns");
 }
 
-/// DEVIATE SD545: an aligned loop header takes at most the target's
+/// An aligned loop header takes at most the target's
 /// `loop_max_skip` bytes of padding. jpeg_single -O2 m32 padded 15 bytes of
 /// one-byte nops before a loop it falls into 58% of the time, 216,077 nops
 /// executed (+1.4%).

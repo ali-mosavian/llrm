@@ -366,13 +366,6 @@ impl llrm_target::Target for M64 {
         4
     }
 
-    /// DEVIATE SD545 (owner anyisa, exit 2026-11-20): the pin pads a loop
-    /// header with up to 15 bytes; gcc's `.p2align 4,,10` pads at most 10.
-    /// -O2 m32 `jpeg_single` ran 15 one-byte nops 14,457 times.
-    fn loop_alignment_max_skip(&self) -> u8 {
-        10
-    }
-
     /// Every x86-64 has `nopl` (`FeatureNOPL`): X86AsmBackend uses up to ten
     /// bytes.
     fn max_nop_bytes(&self) -> u8 {
@@ -651,6 +644,14 @@ impl llrm_target::Target for M64 {
 
 #[cfg(test)]
 mod tests {
+    /// A loop header's alignment pad had a 10 byte limit (gcc's `.p2align 4,,10`,
+    /// DEVIATE SD545) where the pin's X86 sets none: it left the header
+    /// misaligned and the layout off the pin's.
+    #[test]
+    fn test_a_loop_header_pad_has_no_byte_limit_as_the_pin() {
+        assert_eq!(llrm_target::Target::loop_alignment_max_skip(&super::M64), 0);
+    }
+
     /// CARRY-SI: carrying the coalescer's slot indexes through the scheduler
     /// moved x86 cells worse at -O1 (2026-11-07), so m64 numbers the function
     /// afresh until it has priced them.
