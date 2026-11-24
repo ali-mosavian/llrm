@@ -342,6 +342,8 @@ pub(crate) struct FrameInputs {
     pub(crate) frame_indices: Vec<i32>,
     /// The frame operands that name each, in the same order.
     uses: Vec<u64>,
+    /// The allocation left `%a6` unused: the frame may take it as its pointer.
+    frame_pointer_free: bool,
 }
 
 impl FrameInputs {
@@ -403,25 +405,36 @@ impl FrameInputs {
                     .count() as u64
             })
             .collect();
-        FrameInputs { fixed, objects, used, has_calls, short, has_var_sized, frame_indices, uses }
+        let frame_pointer_free = !used.contains(&reg::A6);
+        FrameInputs { fixed, objects, used, has_calls, short, has_var_sized, frame_indices, uses, frame_pointer_free }
     }
 
-    /// The laid-out frame for a call area of `max_call_frame` bytes.
+    /// The laid-out frame for a call area of `max_call_frame` bytes. A frame
+    /// whose incoming arguments the stack pointer cannot reach in 16 bits
+    /// takes `%a6` as its pointer when the allocation left it free (the
+    /// pre-allocation rule, [`frame::needs_frame_pointer`], only sees the
+    /// locals' sizes: the spill slots, saved registers and call area still
+    /// to come can push an argument past the reach).
     pub(crate) fn layout(
         &self,
         max_call_frame: i64,
     ) -> frame::Layout {
-        frame::layout(&Function {
-            fixed: self.fixed.len(),
-            objects: self.objects.clone(),
-            saved: self.used.clone(),
-            max_call_frame,
-            stack_align: if self.short { frame::SHIPPED_STACK_ALIGN } else { 0 },
-            adjusts_stack: self.has_calls,
-            has_var_sized: self.has_var_sized,
-            uses: self.uses.clone(),
-            ..Function::default()
-        })
+        let of = |frame_pointer_all: bool| {
+            frame::layout(&Function {
+                fixed: self.fixed.len(),
+                objects: self.objects.clone(),
+                saved: self.used.clone(),
+                max_call_frame,
+                stack_align: if self.short { frame::SHIPPED_STACK_ALIGN } else { 0 },
+                adjusts_stack: self.has_calls,
+                has_var_sized: self.has_var_sized,
+                uses: self.uses.clone(),
+                frame_pointer_all,
+                ..Function::default()
+            })
+        };
+        let layout = of(false);
+        if self.frame_pointer_free && !layout.has_fp && layout.fixed_out_of_reach() { of(true) } else { layout }
     }
 }
 
