@@ -23,7 +23,8 @@ fn trial_builds_of_a_function_share_their_common_stages() {
     assert!(builds >= 8, "{builds} builds: the case no longer has the trials it tests");
     assert!(selections <= 3, "selection ran {selections} times in {builds} builds");
     // 4 for the trials' own options, one more for the LICM trial (LICM is an
-    // early stage)
-    assert!(early <= 5, "the early rewrites ran {early} times in {builds} builds");
+    // early stage), two for the address-add trial (`address_data_uses`: its own
+    // build, and the later trials' builds that follow its choice)
+    assert!(early <= 7, "the early rewrites ran {early} times in {builds} builds");
     assert!(late < builds, "the late rewrites ran {late} times in {builds} builds");
 }
