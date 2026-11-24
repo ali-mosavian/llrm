@@ -50,3 +50,30 @@ fn six_calls_on_a_path_main_runs_a_thousand_times_are_not_kept() {
     let calls = text.lines().filter(|line| line.contains("call") && line.contains("mix")).count();
     assert_eq!(calls, 0, "{calls} calls kept on a hot path (+43% clocks for -147 B):\n{text}");
 }
+
+fn calls_to(
+    text: &str,
+    callee: &str,
+) -> usize {
+    text.lines().filter(|line| line.contains("call") && line.contains(callee)).count()
+}
+
+#[test]
+fn six_loop_calls_inside_the_clock_cap_are_kept_for_bytes() {
+    let text = listing("m32_os_loop_sites_within_cap.c");
+    let calls = calls_to(&text, "lead_zeros");
+    assert_eq!(
+        calls, 6,
+        "the loop's six copies stay inlined (-428 B for +0.0% clocks, INLINEHINT-LOOP-TRIAL):\n{text}"
+    );
+}
+
+#[test]
+fn a_refused_loop_bundle_does_not_put_back_the_cold_one() {
+    let text = listing("m32_os_loop_bundle_refused_keeps_cold.c");
+    let (cold, hot) = (calls_to(&text, "lead_zeros"), calls_to(&text, "mix"));
+    assert!(
+        cold >= 5 && hot == 0,
+        "cold calls {cold} (want the six kept, -295 B), loop calls {hot} (want 0, +79% clocks):\n{text}"
+    );
+}
