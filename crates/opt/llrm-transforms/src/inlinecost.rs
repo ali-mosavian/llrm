@@ -2661,6 +2661,12 @@ impl<'a> Analyzer<'a> {
         {
             return false;
         }
+        // a copy the site folds away to nothing is free: nothing to outline
+        // (QB exec.c: 430 such sites of `hot_size`/`hot_fsize`, the trial
+        // compile +9016 B and a quarter of the trial's compile cost)
+        if tti.opt_size_inline_outline_skips_folded_copies() && self.size_units - self.folded_caller_stores() <= 0 {
+            return false;
+        }
         let name = |id: GlobalId| self.site.module.global(id).name.as_deref().unwrap_or_default().to_owned();
         let site = crate::trial::Site { caller: name(self.site.caller_id), callees: vec![name(self.site.callee_id)] };
         if crate::trial::outlines(&site.caller, &site.callees) {

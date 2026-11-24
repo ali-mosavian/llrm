@@ -1550,6 +1550,15 @@ pub trait Tti {
         false
     }
 
+    /// With `opt_size_inline_outline_trial`: a site whose copy the caller folds
+    /// to nothing is not a candidate, a copy that costs no byte has none to
+    /// save (QB exec.c m64: 430 such sites, the trial compile +9016 B and a
+    /// quarter of the trials' compile cost). False: every accepted cold site
+    /// is.
+    fn opt_size_inline_outline_skips_folded_copies(&self) -> bool {
+        false
+    }
+
     /// Whether a callee the -O1 size bound refused is tried inline as at -Os
     /// (SZ2: the copy stays if the caller comes out smaller), where -O1
     /// prices no byte in clocks. False: the bound's verdict stands.
