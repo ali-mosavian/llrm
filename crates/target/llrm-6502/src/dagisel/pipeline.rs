@@ -139,7 +139,12 @@ pub fn select_block(
     let arch = Mos;
     DagCombiner::new(
         dag,
-        &mut MosCombines { sized, synthesize, call_multiply: super::function::call_multiply_here() },
+        &mut MosCombines {
+            sized,
+            synthesize,
+            call_multiply: super::function::call_multiply_here(),
+            tuned_for_size: super::function::tuned_for_size(),
+        },
         CombineLevel::BeforeLegalizeTypes,
     )
     .with_tli(&tli)

@@ -115,3 +115,50 @@ fn the_check_reports_an_ora_join_and_a_loop() {
         "{problems:?}"
     );
 }
+
+/// A long shifted by 3 to 7 bits at -O2 and -O3 was a loop of word shifts, the
+/// type legalizer's two (`x >> 5` 276 clocks a call, `x << 4` 220); llvm-mos
+/// writes it as one-bit steps over the four bytes, and from 5 bits as a byte
+/// move and `8 - n` steps the other way (`shouldOverCorrect`). No loop, no
+/// runtime routine, and the clocks of the chain.
+#[test]
+fn a_long_shifted_by_three_to_seven_bits_is_a_chain_at_speed_levels() {
+    let mut over = Vec::new();
+    for level in [Level::O2, Level::O3] {
+        for by in 3..=7u32 {
+            for op in ["shl", "lshr"] {
+                let (bytes, body) = bytes_of(op, by, level);
+                let estimate = estimate_of(&body);
+                // one-bit steps over four bytes (20 clocks each): `by` of them
+                // below 5 bits, `8 - by` from 5, and the byte moves around them
+                let steps = if by < 5 { by } else { 8 - by };
+                let limit = u64::from(steps) * 20 + 90;
+                if body.lines().map(str::trim).any(|line| line.starts_with('b') && !line.starts_with("bit")) {
+                    over.push(format!("{op} {by} {level:?}: a loop\n{body}"));
+                }
+                if estimate > limit {
+                    over.push(format!("{op} {by} {level:?}: {estimate} clocks over {limit} ({bytes} B)\n{body}"));
+                }
+            }
+        }
+    }
+    assert!(over.is_empty(), "{}", over.join("\n"));
+}
+
+/// -Os keeps what it had: a long shifted by 3 to 7 bits is a call of the
+/// runtime, not steps (the 81 programs grew 56 to 213 B when 3..7 bits were
+/// unrolled steps there).
+#[test]
+fn a_long_shifted_by_three_to_seven_bits_is_not_steps_at_os() {
+    for by in 3..=7u32 {
+        for op in ["shl", "lshr"] {
+            let (bytes, body) = bytes_of(op, by, Level::Os);
+            assert!(bytes <= 12, "{op} {by} -Os is {bytes} B:\n{body}");
+        }
+    }
+}
+
+/// The estimated clocks of one call of the kernel in `body`.
+fn estimate_of(body: &str) -> u64 {
+    estimate(Cpu::Mos6502, body).unwrap_or_else(|e| panic!("{e}\n{body}")).cycles
+}
