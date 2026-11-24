@@ -136,12 +136,61 @@ pub(crate) fn relaxed_long(opcode: &str) -> Option<&'static str> {
     encoding(&wide).map(|(name, ..)| *name)
 }
 
-/// The next wider form of a branch: 8 -> 16, and 16 -> 32 where `long_branches`.
+/// The next wider form of a branch: 8 -> 16, and 16 -> 32 where
+/// `long_branches`.
 pub(crate) fn relax_step(
     opcode: &str,
     long_branches: bool,
 ) -> Option<&'static str> {
     relaxed(opcode).or_else(|| long_branches.then(|| relaxed_long(opcode)).flatten())
+}
+
+/// The far form of a 16-bit branch where the CPU has no 32-bit one (the
+/// 68000): the same transfer through `jmp`/`jsr (xxx).l`, an absolute 32-bit
+/// address (gas `jbra`, `jbsr`, `jbcc`). A conditional branch becomes the
+/// opposite condition over the jump. `skip` names the label after it. `None`
+/// for anything else, or a target with an addend.
+pub(crate) fn far_branch(
+    inst: &Inst,
+    skip: String,
+) -> Option<Vec<Item>> {
+    let [Operand::Symbol(target, 0)] = &inst.operands[..] else { return None };
+    let jump = |opcode: u8| vec![Item::Bytes(vec![0x4E, opcode]), Item::Table(vec![target.clone()])];
+    let condition = inst.opcode.strip_prefix('B')?.strip_suffix("16")?;
+    match condition {
+        "RA" => Some(jump(0xF9)),
+        "SR" => Some(jump(0xB9)),
+        _ => {
+            let opposite = match condition {
+                "cc" => "Bcs8",
+                "cs" => "Bcc8",
+                "eq" => "Bne8",
+                "ne" => "Beq8",
+                "ge" => "Blt8",
+                "lt" => "Bge8",
+                "gt" => "Ble8",
+                "le" => "Bgt8",
+                "hi" => "Bls8",
+                "ls" => "Bhi8",
+                "mi" => "Bpl8",
+                "pl" => "Bmi8",
+                "vc" => "Bvs8",
+                "vs" => "Bvc8",
+                _ => return None,
+            };
+            let mut items = vec![inst_item(opposite, vec![Operand::Symbol(skip.clone(), 0)])];
+            items.extend(jump(0xF9));
+            items.push(Item::Label(skip));
+            Some(items)
+        }
+    }
+}
+
+fn inst_item(
+    opcode: &'static str,
+    operands: Vec<Operand>,
+) -> Item {
+    Item::Inst(Inst { opcode, operands })
 }
 
 /// A `bra` to a label the items define starts as the 8-bit branch, which the

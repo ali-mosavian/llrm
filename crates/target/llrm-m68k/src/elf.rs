@@ -25,7 +25,7 @@ use llrm_support::hash::HashMap;
 
 use crate::compile::Item;
 use crate::encode::encode;
-use crate::object::{relax_step, relaxed_long};
+use crate::object::{far_branch, relax_step, relaxed_long};
 
 const R_68K_32: u32 = 1;
 const R_68K_16: u32 = 2;
@@ -152,11 +152,19 @@ pub fn object_with_branches(
     let mut items = crate::object::tail_jumps_narrowed(items);
     loop {
         match place(name, &items, exports, variables, long_branches)? {
-            Placed::Wide(wide) => {
-                for at in wide {
+            Placed::Wide(mut wide) => {
+                wide.sort_unstable();
+                wide.dedup();
+                // last first: a far form takes more items than it replaces
+                for at in wide.into_iter().rev() {
                     let Item::Inst(inst) = &mut items[at] else { continue };
-                    inst.opcode =
-                        relax_step(inst.opcode, long_branches).ok_or_else(|| format!("{} cannot be relaxed", inst.opcode))?;
+                    if let Some(next) = relax_step(inst.opcode, long_branches) {
+                        inst.opcode = next;
+                    } else if let Some(far) = far_branch(inst, format!(".Lfar{at}")) {
+                        items.splice(at..=at, far);
+                    } else {
+                        return Err(format!("{} cannot be relaxed", inst.opcode));
+                    }
                 }
             }
             Placed::Done(object) => return Ok(object),
@@ -221,12 +229,16 @@ fn place(
             }
         }
         // a 16-bit branch past +-32 KiB
-        if long_branches
-            && let Item::Inst(inst) = &items[*index]
-            && relaxed_long(inst.opcode).is_some()
-            && fixups.iter().filter(|one| one.size == 2).any(|fixup| {
-                resolved(*start, fixup).is_some_and(|value| i16::try_from(value).is_err())
+        if let Item::Inst(inst) = &items[*index]
+            && (if long_branches {
+                relaxed_long(inst.opcode).is_some()
+            } else {
+                far_branch(inst, String::new()).is_some()
             })
+            && fixups
+                .iter()
+                .filter(|one| one.size == 2)
+                .any(|fixup| resolved(*start, fixup).is_some_and(|value| i16::try_from(value).is_err()))
         {
             wide.push(*index);
         }
@@ -262,7 +274,9 @@ fn place(
     // The globals: one section per role, each variable a symbol in it.
     let mut data_sections: Vec<Section> = Vec::new();
     let mut data_relocs: Vec<(usize, usize, usize, i64, String)> = Vec::new();
-    for (role, section_name) in [(Role::ROData, ".rodata"), (Role::Data, ".data"), (Role::Bss, ".bss"), (Role::InitFunctions, ".init_array")] {
+    for (role, section_name) in
+        [(Role::ROData, ".rodata"), (Role::Data, ".data"), (Role::Bss, ".bss"), (Role::InitFunctions, ".init_array")]
+    {
         let members: Vec<&Variable> = variables.iter().filter(|one| role_of(one) == role).collect();
         if members.is_empty() {
             continue;
