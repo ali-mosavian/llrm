@@ -67,6 +67,12 @@ thread_local! {
     /// size guard binds an `inlinehint` callee as it does any other.
     static HINTED_CALLS_KEPT: Cell<bool> = const { Cell::new(false) };
     static NEGATIVE_CALLS_KEPT: Cell<bool> = const { Cell::new(false) };
+    /// Set while the trial compile of INLINEHINT-LOOP-TRIAL runs: the size
+    /// guard binds a callee at a site in a loop as it does elsewhere.
+    static LOOP_CALLS_KEPT: Cell<bool> = const { Cell::new(false) };
+    /// The callers with a loop-site call that only a yield let the size guard
+    /// pass.
+    static LOOP_YIELDS: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
     static NEGATIVE_YIELDS: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
     /// The callers with a call of an `inlinehint` callee that only the hint's
     /// yield let the size guard pass.
@@ -175,6 +181,40 @@ pub fn with_kept_negative_calls<T>(body: impl FnOnce() -> T) -> T {
     let value = body();
     NEGATIVE_CALLS_KEPT.with(|cell| cell.set(before));
     value
+}
+
+/// DEVIATE INLINEHINT-LOOP-TRIAL (beyond the pin, which has no loop exemption
+/// without a profile; owner x86-m32, exit 2026-12-01): whether the trial
+/// compile that keeps the calls the size guard's yields let through at a site
+/// in a loop is running. A loop site is its own bundle, so a bundle the clock
+/// cap refuses cannot put back the cold sites' bytes (see
+/// [`keeping_hinted_calls`]).
+pub fn keeping_loop_calls() -> bool {
+    LOOP_CALLS_KEPT.with(Cell::get)
+}
+
+/// Runs `body` with those calls kept.
+pub fn with_kept_loop_calls<T>(body: impl FnOnce() -> T) -> T {
+    let before = LOOP_CALLS_KEPT.with(|cell| cell.replace(true));
+    let value = body();
+    LOOP_CALLS_KEPT.with(|cell| cell.set(before));
+    value
+}
+
+/// Notes that a yield let a loop-site call in `function` through the size
+/// guard, which a trial may refuse.
+pub(crate) fn note_loop_yield(function: &str) {
+    LOOP_YIELDS.with(|list| {
+        let mut list = list.borrow_mut();
+        if !list.iter().any(|one| one == function) {
+            list.push(function.to_owned());
+        }
+    });
+}
+
+/// The callers [`note_loop_yield`] saw since the last call.
+pub fn take_loop_yields() -> Vec<String> {
+    LOOP_YIELDS.with(|list| std::mem::take(&mut *list.borrow_mut()))
 }
 
 /// Notes that the negative-cost yield let a call in `function` through the

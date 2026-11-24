@@ -272,39 +272,59 @@ fn lowered(
     // price. The module compiled again with those calls kept is kept where
     // its differing functions are fewer bytes.
     let mut base_kept: Option<Kept> = None;
-    let yielded = !trial::take_hint_yields().is_empty() | !trial::take_negative_yields().is_empty();
-    if small && yielded {
-        let other = trial::with_kept_hinted_calls(|| {
-            trial::with_kept_negative_calls(|| lowered_once(text, cpu, level, None, policy))
-        });
-        if let Ok(other) = other {
-            let other_state = (trial::take(), trial::take_refused(), trial::take_accepted());
-            let _ = (trial::take_hint_yields(), trial::take_negative_yields());
-            let cut = trial::differing(&base, &other);
-            if !cut.is_empty() {
-                let (calls, yields) = (lower(&other, &cut)?, lower(&base, &cut)?);
-                let rest_calls_mulsi3 = || {
-                    let rest: std::collections::BTreeSet<String> = other
-                        .functions()
-                        .filter(|(_, _, function)| !function.is_declaration())
-                        .filter_map(|(_, global, _)| global.name.owned().filter(|name| !cut.contains(name)))
-                        .collect();
-                    lower(&base, &rest).map_or(true, |kept| crate::trial::calls_mulsi3(&kept.items))
-                };
-                let keeps = crate::trial::keeps_fewer_bytes(&calls.items, &yields.items, rest_calls_mulsi3, cpu);
-                if llrm_support::debug::enabled("trial") {
-                    eprintln!(
-                        "trial hint {level:?}: {} functions differ: calls {}",
-                        cut.len(),
-                        if keeps { "kept" } else { "put back" }
-                    );
-                }
-                if keeps {
-                    base = other;
-                    base_kept = Some(calls);
-                    ((noted, units), refused_sites, accepted_sites) = other_state;
-                } else {
-                    base_kept = Some(yields);
+    // INLINEHINT-LOOP-TRIAL: the calls at a loop site are their own trial,
+    // compiled on top of the hint trial where that was kept.
+    let hint_yielded = !trial::take_hint_yields().is_empty() | !trial::take_negative_yields().is_empty();
+    let loop_yielded = !trial::take_loop_yields().is_empty();
+    let mut hint_kept = false;
+    for looped in [false, true] {
+        if small && if looped { loop_yielded } else { hint_yielded } {
+            let other = if looped {
+                trial::with_kept_loop_calls(|| {
+                    if hint_kept {
+                        trial::with_kept_hinted_calls(|| {
+                            trial::with_kept_negative_calls(|| lowered_once(text, cpu, level, None, policy))
+                        })
+                    } else {
+                        lowered_once(text, cpu, level, None, policy)
+                    }
+                })
+            } else {
+                trial::with_kept_hinted_calls(|| {
+                    trial::with_kept_negative_calls(|| lowered_once(text, cpu, level, None, policy))
+                })
+            };
+            if let Ok(other) = other {
+                let other_state = (trial::take(), trial::take_refused(), trial::take_accepted());
+                let _ = (trial::take_hint_yields(), trial::take_negative_yields(), trial::take_loop_yields());
+                let cut = trial::differing(&base, &other);
+                if !cut.is_empty() {
+                    let (calls, yields) = (lower(&other, &cut)?, lower(&base, &cut)?);
+                    let rest_calls_mulsi3 = || {
+                        let rest: std::collections::BTreeSet<String> = other
+                            .functions()
+                            .filter(|(_, _, function)| !function.is_declaration())
+                            .filter_map(|(_, global, _)| global.name.owned().filter(|name| !cut.contains(name)))
+                            .collect();
+                        lower(&base, &rest).map_or(true, |kept| crate::trial::calls_mulsi3(&kept.items))
+                    };
+                    let keeps = crate::trial::keeps_fewer_bytes(&calls.items, &yields.items, rest_calls_mulsi3, cpu);
+                    if llrm_support::debug::enabled("trial") {
+                        eprintln!(
+                            "trial {} {level:?}: {} functions differ: calls {}",
+                            if looped { "loop" } else { "hint" },
+                            cut.len(),
+                            if keeps { "kept" } else { "put back" }
+                        );
+                    }
+                    if keeps {
+                        base = other;
+                        hint_kept |= !looped;
+                        base_kept = Some(calls);
+                        ((noted, units), refused_sites, accepted_sites) = other_state;
+                    } else {
+                        base_kept = Some(yields);
+                    }
                 }
             }
         }
@@ -494,14 +514,17 @@ fn lowered_once(
         std::fs::create_dir_all(dump).map_err(|error| format!("{}: {error}", dump.display()))?;
     }
     let applied = Applied { options, dump: dump.map(Into::into), ..Applied::default() };
-    // The pipeline sees an atomic access as a call it cannot move; then the target's own form: the pin selects a
-    // plain `move` for an atomic load or store of at most 32 bits (M68kInstrAtomics.td).
-    // DEVIATE M68K-ATOMIC-INLINE-FRONTEND (owner w9, review 2027-01-31): see `atomic::generic_accesses_plain`.
+    // The pipeline sees an atomic access as a call it cannot move; then the
+    // target's own form: the pin selects a plain `move` for an atomic load
+    // or store of at most 32 bits (M68kInstrAtomics.td).
+    // DEVIATE M68K-ATOMIC-INLINE-FRONTEND (owner w9, review 2027-01-31): see
+    // `atomic::generic_accesses_plain`.
     program.modules.iter_mut().try_for_each(|module| llrm_mir::atomic::generic_accesses_plain(module, 32))?;
     program.modules.iter_mut().try_for_each(llrm_mir::atomic::hidden)?;
     llrm_transforms::pipeline::applied(&mut program, &applied)?;
-    // DEVIATE M68K-ATOMIC-SYNC: a 68020 expands a read-modify-write to a `cas` loop (`shouldExpandAtomicRMWInIR`,
-    // AtomicExpandPass, not translated): it calls the `__sync_*` routine as a 68000 does. Exit: 2026-12-15, w8.
+    // DEVIATE M68K-ATOMIC-SYNC: a 68020 expands a read-modify-write to a `cas`
+    // loop (`shouldExpandAtomicRMWInIR`, AtomicExpandPass, not translated):
+    // it calls the `__sync_*` routine as a 68000 does. Exit: 2026-12-15, w8.
     program.modules.iter_mut().try_for_each(|module| llrm_mir::atomic::sync_libcalled(module, 32))?;
     program.modules.iter_mut().try_for_each(|module| llrm_mir::atomic::ordered_accesses_plain(module, 32))?;
     program.modules.iter_mut().try_for_each(|module| llrm_mir::atomic::lowered(module, 32, false, false, false))?;

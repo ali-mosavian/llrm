@@ -574,6 +574,7 @@ fn compiled(
         merged: usize,
         hinted: bool,
         negative: bool,
+        looped: bool,
         divides: bool,
     }
     type Built = (Program, Vec<crate::emit::Function>, crate::trial::Price, Notes);
@@ -606,12 +607,18 @@ fn compiled(
                 (_, true) => llrm_transforms::trial::with_more_rotation(|| run(program)),
                 _ => run(program),
             };
-            let go = |program: &mut Program| match hinted {
+            // `hinted`: 1 keeps the hinted calls, 2 those and the negative
+            // ones; bit 4 the calls at a loop site
+            // (INLINEHINT-LOOP-TRIAL).
+            let go = |program: &mut Program| match hinted & 3 {
                 0 => go(program),
                 1 => llrm_transforms::trial::with_kept_hinted_calls(|| go(program)),
                 _ => llrm_transforms::trial::with_kept_hinted_calls(|| {
                     llrm_transforms::trial::with_kept_negative_calls(|| go(program))
                 }),
+            };
+            let go = |program: &mut Program| {
+                if hinted & 4 != 0 { llrm_transforms::trial::with_kept_loop_calls(|| go(program)) } else { go(program) }
             };
             if unmerged { crate::trial::without_merge(|| go(&mut program))? } else { go(&mut program)? }
         } else {
@@ -628,12 +635,14 @@ fn compiled(
             notes.merged = crate::trial::take_merged();
             notes.hinted = !trial::take_hint_yields().is_empty();
             notes.negative = !trial::take_negative_yields().is_empty();
+            notes.looped = !trial::take_loop_yields().is_empty();
             // A module nothing was noted in is compiled once, unpriced: the
             // pricing is a second walk of every function.
             let noted = !(notes.left.is_empty() && notes.rotated.is_empty() && notes.merged == 0)
                 || notes.divides
                 || notes.hinted
-                || notes.negative;
+                || notes.negative
+                || notes.looped;
             if noted || (unrotated, more, unmerged, divided, hinted) != (false, false, false, false, 0) {
                 crate::trial::start();
             }
@@ -662,6 +671,7 @@ fn compiled(
         crate::trial::take_merged(),
         trial::take_hint_yields(),
         trial::take_negative_yields(),
+        trial::take_loop_yields(),
     );
     trial::clear_rotated_loops();
     // Only the compile that is kept writes the stages, where it is made again.
@@ -713,6 +723,14 @@ fn compiled(
         })?
     {
         state.3 = 2;
+    }
+    if notes.looped
+        && hint_trial
+        && try_one(&mut best, (state.0, state.1, state.2, false, state.3 | 4), "keep-loop-calls", &|kept, now| {
+            crate::trial::keeps_unhinted(kept, now, rotation_cap)
+        })?
+    {
+        state.3 |= 4;
     }
     // Last of the trials that trade bytes: it is priced on the smallest object
     // the others made, so a few bytes it adds cannot displace a trial that

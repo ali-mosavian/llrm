@@ -103,6 +103,15 @@ each site's cost and threshold beside the existing decision; with
   `trial::with_kept_negative_calls`, a second stage priced on top of the first):
   `code_byte` (a bounds check and a store, cost below zero) was copied into
   every caller; codegen.c 7,008 -> 6,156 B (gcc 6,832), code.c 1,680 -> 1,380.
+- INLINEHINT-LOOP-TRIAL (beyond the pin, which has no loop exemption without
+  PSI; owner w9, exit 2026-12-01): a site in a loop (`relative_frequency > 1`)
+  takes both yields above, as the speed side's. Where a yield passed a growing
+  call there, the caller is noted separately and the module compiled again with
+  the guard binding loop sites too (`trial::with_kept_loop_calls`,
+  `Dimension::KeepLoopCalls`; arm64 and m68k in their drivers). It is its own
+  bundle under the same clock cap: a refused loop bundle leaves the cold
+  bundle kept. m64 and m68k have no clock cap, so loop sites there decide by
+  bytes alone.
 - SZ1-SITE (owner m68k-b, exit 2026-11-24): the size rule (D11) prices a
   callee's instruction with the call site's constant arguments, not only a
   GEP as `isGEPFree` does (z80 `rotate_small` -O1 922 -> 576 B).

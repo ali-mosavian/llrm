@@ -861,8 +861,8 @@ fn tail(
     // 46,669: `add4`'s `d * 4` was two calls of a 4-instruction shift in a
     // function a loop calls. The rate is the one every size-reducing choice of
     // the target is made at (`alloc::Tuning`).
-    let rate = matches!(request.level, Level::O1 | Level::Os | Level::Oz)
-        .then(|| request.level.tuning().clocks_per_byte);
+    let rate =
+        matches!(request.level, Level::O1 | Level::Os | Level::Oz).then(|| request.level.tuning().clocks_per_byte);
     // at -O1 to -O3 a place is given up by the share of the module's clocks its
     // calls add against the share of its bytes they save (`[share.speed]
     // outline`)
@@ -872,8 +872,8 @@ fn tail(
     // before the transfer of known constants, which that pass makes differ
     // between copies of one run; it then runs on the outlined text, and the
     // smaller module is kept.
-    // `LLRM_6502_OUTLINE_PLAIN=0` drops only this variant, not the outliner (see
-    // `LLRM_6502_NO_OUTLINE`)
+    // `LLRM_6502_OUTLINE_PLAIN=0` drops only this variant, not the outliner
+    // (see `LLRM_6502_NO_OUTLINE`)
     let plain = (outlined
         && crate::copyprop::enabled(std::env::var_os("LLRM_6502_OUTLINE_PLAIN").as_deref())
         && plain_pieces.iter().zip(&pieces).any(|(plain, piece)| plain != piece))
@@ -977,7 +977,6 @@ fn trial_unrolled(
     let mut built = Some(built);
     let own = |program: &mut Option<Program>| if joint { program.clone() } else { program.take() };
     let mut best: Option<Assembled> = None;
-    let mut unrolled = false;
     let mut kept = assembled;
     if !eligible.is_empty() {
         let other = trial::with(limit, || program(text, request))?;
@@ -993,7 +992,7 @@ fn trial_unrolled(
             };
             let tried = tail(other, request, true, false)?;
             let (saved, added) = (priced.clocks - tried.clocks, tried.bytes - priced.bytes);
-            let pays = trial_pays(request.level, saved, added);
+            let pays = trial_pays(request.level, saved, added, eligible.len());
             if debug {
                 eprintln!(
                     "trial unroll: {added:+} bytes, {saved:+} clocks saved: {}",
@@ -1002,15 +1001,16 @@ fn trial_unrolled(
             }
             if pays {
                 best = Some(tried);
-                unrolled = true;
                 kept = Some(priced);
             } else {
                 best = Some(priced);
             }
         }
     }
-    // An unroll the trial kept has taken the loops the pair would unroll.
-    if !joint || unrolled {
+    // An unroll the trial kept is the baseline the pair is priced against: at
+    // -O2 and -O3 it may have grown the code (loop_fusion: +1,701 B kept, the
+    // pair 131 B).
+    if !joint {
         return match best {
             Some(done) => Ok(done),
             None => kept_text(built.take().expect("the program"), kept),
@@ -1054,7 +1054,7 @@ fn trial_unrolled(
     }
     let tried = tail(both, request, true, false)?;
     let (saved, added) = (priced.clocks - tried.clocks, tried.bytes - priced.bytes);
-    let pays = trial_pays(request.level, saved, added);
+    let pays = trial_pays(request.level, saved, added, eligible.len().max(1));
     if debug {
         eprintln!(
             "trial inline+unroll: {added:+} bytes, {saved:+} clocks saved: {}",
@@ -1098,13 +1098,31 @@ fn instructions(program: &Program) -> usize {
 /// fitted.
 const TRIAL_GROWTH_LIMIT: i64 = 16 * 1024;
 
-/// Whether a trial that saved `saved` clocks for `added` bytes is kept: bytes
-/// first at every level (user ruling 2026-11-14), so one that adds none, and
-/// saves no fewer clocks, or one that removes some.
+/// Thousandths of a clock a byte at -O2 and -O3: the judge of those levels
+/// (clocks + 3 * bytes). DEVIATE 6502-UNROLL-RATE (owner x87, exit 2026-12-15;
+/// oversight ruling 2026-11-24, not yet confirmed by the user): the rate was
+/// infinite there, bytes first (ruling 2026-11-14), which kept `dirty`'s
+/// 96-trip store loop (long_double_constant_store -O3 2,490 clk against 979).
+const TRIAL_MILLICLOCKS_PER_BYTE: i64 = 3000;
+
+/// The most a priced trial may add for each function it unrolls in: the pin's
+/// full-unroll threshold (`UnrollThreshold`, 300 instructions at -O3) at two
+/// bytes an instruction. Priced alone the judge's rate kept loop_interchange
+/// +13,418 B for -2.8% clocks and div_constants_short +5,912 B for -1.6%;
+/// the pin's own bound is on size too.
+const TRIAL_BYTES_PER_FUNCTION: i64 = 300 * 2;
+
+/// Whether a trial that saved `saved` clocks for `added` bytes in `functions`
+/// functions is kept. -Os and -O1: bytes first (user ruling 2026-11-14), so one
+/// that adds none, and saves no fewer clocks, or one that removes some. -O2 and
+/// -O3: one that adds bytes is kept too where the clocks it saves repay them at
+/// the judge's rate (`keeps_at_o1`, the rule of every target's priced trial)
+/// and it stays under the pin's size bound.
 pub fn trial_pays(
     level: Level,
     saved: i64,
     added: i64,
+    functions: usize,
 ) -> bool {
     if added > TRIAL_GROWTH_LIMIT {
         return false;
@@ -1112,6 +1130,10 @@ pub fn trial_pays(
     match level {
         // strict: no more bytes and no more clocks (6502-UNROLL-O1)
         Level::O1 => llrm_transforms::loopunrollpass::trial::keeps_at_o1(saved, added, 0),
+        Level::O2 | Level::O3 => {
+            added <= TRIAL_BYTES_PER_FUNCTION * functions.max(1) as i64
+                && llrm_transforms::loopunrollpass::trial::keeps_at_o1(saved, added, TRIAL_MILLICLOCKS_PER_BYTE)
+        }
         _ => added < 0 || (added == 0 && saved >= 0),
     }
 }

@@ -70,6 +70,9 @@ enum Dimension {
     /// DEVIATE INLINEHINT-GROWTH-TRIAL: the -Os size guard binds an
     /// `inlinehint` callee too.
     KeepHintedCalls,
+    /// DEVIATE INLINEHINT-LOOP-TRIAL: the same at a site in a loop, its own
+    /// bundle under the same cap.
+    KeepLoopCalls,
     /// DEVIATE HOT-INLINE-TRIAL: the -Os size bound holds at a locally hot
     /// site too.
     KeepHotCalls,
@@ -85,6 +88,7 @@ struct Noted {
     lookups: usize,
     copied: Vec<String>,
     hinted: Vec<String>,
+    looped: Vec<String>,
     hot: Vec<String>,
 }
 
@@ -100,6 +104,7 @@ impl Noted {
             lookups: trial::take_lookup_tables(),
             copied: trial::take_copy_calls(),
             hinted: trial::take_hint_yields(),
+            looped: trial::take_loop_yields(),
             hot: trial::take_hot_yields(),
         };
         trial::clear_rotated_loops();
@@ -118,6 +123,7 @@ impl Noted {
             Dimension::KeepSwitch => self.lookups > 0,
             Dimension::KeepCopyLoop => !self.copied.is_empty(),
             Dimension::KeepHintedCalls => !self.hinted.is_empty(),
+            Dimension::KeepLoopCalls => !self.looped.is_empty(),
             Dimension::KeepHotCalls => !self.hot.is_empty(),
         }
     }
@@ -145,6 +151,9 @@ impl Dimension {
         }
         if tti.opt_size_inline_guard_yields_to_inlinehint() && !llrm_support::env_flag!("LLRM_NO_INLINEHINT_TRIAL") {
             all.push(Dimension::KeepHintedCalls);
+            if !llrm_support::env_flag!("LLRM_NO_INLINEHINT_LOOP_TRIAL") {
+                all.push(Dimension::KeepLoopCalls);
+            }
         }
         if tti.opt_size_inline_hot_growth_percent().is_some() && !llrm_support::env_flag!("LLRM_NO_HOT_INLINE_TRIAL") {
             all.push(Dimension::KeepHotCalls);
@@ -175,6 +184,7 @@ impl Dimension {
             Dimension::KeepSwitch => trial::with_refused_lookup_tables(body),
             Dimension::KeepCopyLoop => trial::with_kept_copy_loops(body),
             Dimension::KeepHintedCalls => trial::with_kept_hinted_calls(body),
+            Dimension::KeepLoopCalls => trial::with_kept_loop_calls(body),
             Dimension::KeepHotCalls => trial::with_kept_hot_calls(body),
         }
     }
@@ -195,7 +205,11 @@ impl Dimension {
     fn prices_called_work(self) -> bool {
         matches!(
             self,
-            Dimension::KeepLatch | Dimension::KeepSwitch | Dimension::KeepHintedCalls | Dimension::KeepHotCalls
+            Dimension::KeepLatch
+                | Dimension::KeepSwitch
+                | Dimension::KeepHintedCalls
+                | Dimension::KeepLoopCalls
+                | Dimension::KeepHotCalls
         )
     }
 
@@ -240,6 +254,7 @@ impl Dimension {
             Dimension::KeepHintedCalls => {
                 ("keep-hinted-calls", trial::keeps_smaller_at_size(added, saved, base_work, cap))
             }
+            Dimension::KeepLoopCalls => ("keep-loop-calls", trial::keeps_smaller_at_size(added, saved, base_work, cap)),
             Dimension::KeepHotCalls => ("keep-hot-calls", trial::keeps_smaller_at_size(added, saved, base_work, cap)),
             Dimension::Unroll { bytes_strict, .. } => {
                 ("unroll-os", measured && trial::keeps_unroll_at_size(saved, added, noted.unroll.0.len(), bytes_strict))
