@@ -2668,9 +2668,11 @@ impl Tti for X86 {
         a: &LsrCost,
         b: &LsrCost,
     ) -> bool {
+        // DEVIATE LSR-PREFIX: real mode ranks the prefixed steps before the registers.
         let key = |c: &LsrCost| {
             (
                 c.insns,
+                c.wide_steps,
                 c.num_regs,
                 c.add_rec_cost,
                 c.num_iv_muls,
@@ -2681,6 +2683,13 @@ impl Tti for X86 {
             )
         };
         key(a) < key(b)
+    }
+
+    fn lsr_wide_step_cost(
+        &self,
+        ty: Ty,
+    ) -> u32 {
+        u32::from(self.real_mode.is_some() && ty == Ty::Int(32))
     }
 
     /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86TargetTransformInfo.cpp#L7211

@@ -489,6 +489,10 @@ pub struct LsrCost {
     pub insns: u32,
     pub num_regs: u32,
     pub add_rec_cost: u32,
+    /// DEVIATE LSR-PREFIX: the steps of recurrences wider than the target's
+    /// own width, each at `Tti::lsr_wide_step_cost` (the pin's rating has no
+    /// such term).
+    pub wide_steps: u32,
     pub num_iv_muls: u32,
     /// DEVIATE LU17: the target's instructions for the in-line multiplies the
     /// loop as written does to form its induction variables
@@ -3164,6 +3168,19 @@ pub trait Tti {
         } else {
             Cost::INVALID
         }
+    }
+
+    /// DEVIATE LSR-PREFIX (owner w12, exit 2026-12-22): what stepping a
+    /// recurrence of type `ty` costs beyond one add. Real mode steps a 32-bit
+    /// value with an operand-size prefix, a clock the pin's `LSRCost` does not
+    /// see: a 16-bit counter built as a truncation of a wider recurrence
+    /// (grep~bounds -O2, 1049600 clocks, the same instructions) is no longer
+    /// free.
+    fn lsr_wide_step_cost(
+        &self,
+        _ty: Ty,
+    ) -> u32 {
+        0
     }
 
     /// `isLSRCostLess`: registers first, then the add-recurrence cost, the IV

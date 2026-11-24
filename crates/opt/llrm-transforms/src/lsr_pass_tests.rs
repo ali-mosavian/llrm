@@ -2294,3 +2294,18 @@ fn a_header_phi_has_an_input_for_each_edge_of_a_switch() {
     );
     assert!(changed, "{after}");
 }
+
+/// grep~bounds (m16 -O2, `lsr_grep_bounds.ll` is its body before LSR): a 16-bit
+/// counter and a 32-bit position step together. LSR made the counter a
+/// truncation of a second 32-bit recurrence, so each trip stepped
+/// `inc edx` with its operand-size prefix: 1049600 clocks over the corpus
+/// (48626164 against 47576564), the same instructions.
+#[test]
+fn a_narrow_counter_is_not_a_truncation_of_a_wider_recurrence_in_real_mode() {
+    let mut module = parsed(include_str!("lsr_grep_bounds.ll"));
+    let mut manager = llrm_mir::passes::PassManager::default();
+    manager.add(crate::lsr_pass::LoopStrengthReduce { size: false, bytes_strict: false });
+    manager.run_module(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::pin_tuned())).unwrap();
+    let after = printed(&module);
+    assert!(!after.contains("trunc i32"), "the counter stays 16 bits: {after}");
+}
