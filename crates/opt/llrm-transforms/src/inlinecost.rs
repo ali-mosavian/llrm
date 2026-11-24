@@ -2057,9 +2057,10 @@ impl<'a> Analyzer<'a> {
         if !allow_growth {
             self.threshold = 0;
             // DEVIATE LASTCALL-NOGROWTH (gcc `-finline-functions-called-once`,
-            // `Tti::inline_last_call_when_growth_barred`): the pin returns here with
-            // no last-call bonus, so a static function called once before a
-            // noreturn call stays a call; gcc inlines it wherever the call is.
+            // `Tti::inline_last_call_when_growth_barred`): the pin returns here
+            // with no last-call bonus, so a static function called
+            // once before a noreturn call stays a call; gcc inlines
+            // it wherever the call is.
             if self.params.last_call_when_growth_barred
                 && self.params.last_call_to_static
                 && self.site.caller_size == CallerSize::OptSize
@@ -3930,6 +3931,54 @@ pub struct DecideContext<'a> {
     pub tti: Option<&'a dyn llrm_mir::tti::Tti>,
 }
 
+thread_local! {
+    /// Set while the other sites of a callee are being priced, so that their
+    /// own verdicts do not ask the same question back.
+    static PROBING_SITES: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Whether every direct call of `callee_id` but `except` is inlined on its
+/// own verdict (not refused by the bound, the threshold or a caller that
+/// cannot take a copy).
+fn other_sites_inline(
+    module: &Module,
+    layout: &DataLayout,
+    callee_id: GlobalId,
+    except: (GlobalId, InstId),
+    context: &DecideContext,
+) -> bool {
+    let before = PROBING_SITES.with(|flag| flag.replace(true));
+    let mut all = true;
+    'callers: for (at, global) in module.globals.iter().enumerate() {
+        let GlobalKind::Function(other) = &global.kind else { continue };
+        if other.layout().is_empty() {
+            continue;
+        }
+        let other_id = GlobalId(at as u32);
+        let calls: Vec<InstId> = other
+            .walk()
+            .map(|(_, one)| one)
+            .filter(|&one| llrm_mir::memory::callee(&module.context, other, one) == Some(callee_id))
+            .filter(|&one| (other_id, one) != except)
+            .collect();
+        if calls.is_empty() {
+            continue;
+        }
+        let frequencies = caller_frequencies(module, layout, other);
+        for one in calls {
+            let inlined = decide(module, layout, other_id, one, context, &frequencies, None).is_some_and(|decision| {
+                decision.inline && !matches!(decision.cost, InlineCost::Cost { blocked: true, .. })
+            });
+            if !inlined {
+                all = false;
+                break 'callers;
+            }
+        }
+    }
+    PROBING_SITES.with(|flag| flag.set(before));
+    all
+}
+
 /// One call site's verdict.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Decision {
@@ -3961,7 +4010,7 @@ pub fn decide(
         return None;
     }
     let entry_weight = || caller_entry_weight(module, layout, caller_id, context.addressed);
-    let site = Site {
+    let mut site = Site {
         module,
         layout,
         caller,
@@ -3983,7 +4032,21 @@ pub fn decide(
         planned,
         tti: context.tti,
     };
-    let cost = inline_cost(&site, context.params);
+    let mut cost = inline_cost(&site, context.params);
+    // gcc's `estimate_growth`: a private callee dies with its last call, and
+    // the order the sites are met in does not change what is left. A site the
+    // size bound alone refuses is priced as that last call when every other
+    // site is inlined on its own verdict, as it is once they are gone.
+    if matches!(cost, InlineCost::Cost { blocked: true, .. })
+        && site.callee_dies
+        && site.callee_calls >= 2
+        && context.size != CallerSize::Speed
+        && !PROBING_SITES.with(std::cell::Cell::get)
+        && other_sites_inline(module, layout, callee_id, (caller_id, call), context)
+    {
+        site.sole_call_to_local = true;
+        cost = inline_cost(&site, context.params);
+    }
     if llrm_support::debug::enabled("inline") {
         eprintln!(
             "inline: {} -> {}: {} (site frequency {:?})",
