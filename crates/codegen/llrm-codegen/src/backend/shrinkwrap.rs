@@ -379,6 +379,7 @@ fn wrapped_afresh(
         if size {
             let pops = kept.len() + usize::from(with_frame);
             let at = match (uses.is_return(placement.restore), split) {
+                _ if never_leaves(body, placement.restore) => None,
                 (true, []) => None,
                 (true, [one]) if ends_on_edge_into(body, *one, placement.restore) => Some(*one),
                 (false, []) => Some(placement.restore),
@@ -401,7 +402,11 @@ fn wrapped_afresh(
         if !returns && !split.is_empty() {
             continue;
         }
-        let leaves = (!returns).then(|| body.blocks[placement.restore.0 as usize].succ.to_vec());
+        // A Restore no path leaves (it ends in a call that does not return)
+        // has nothing to take back: the pin's epilogues go into return blocks
+        // only, so a frame needed on a cold path alone is set up there.
+        let never_leaves = never_leaves(body, placement.restore);
+        let leaves = (!returns && !never_leaves).then(|| body.blocks[placement.restore.0 as usize].succ.to_vec());
         if leaves.as_ref().is_some_and(|leaves| !leaves_by_one_jump(body, placement.restore, leaves)) {
             continue;
         }
@@ -462,6 +467,8 @@ fn wrapped_afresh(
             (BTreeMap::new(), after)
         } else if returns {
             (BTreeMap::from([(restore, closes)]), BTreeMap::new())
+        } else if never_leaves {
+            (BTreeMap::new(), BTreeMap::new())
         } else {
             (BTreeMap::new(), BTreeMap::from([(restore, closes)]))
         };
@@ -616,6 +623,20 @@ fn ends_on_taken_edge_into(
 
 /// Whether `from` leaves by one jump, or falls out by none, and so can take the
 /// epilogue at its end.
+/// Whether `block` is left by no edge and ends in no return: it ends in a call
+/// that does not come back.
+fn never_leaves(
+    body: &LirBody,
+    block: BlockId,
+) -> bool {
+    body.blocks.get(block.0 as usize).is_some_and(|one| {
+        one.succ.is_empty()
+            && !one.insns.iter().rev().find(|insn| crate::backend::masm::prints(insn)).is_some_and(|insn| {
+                insn.what.as_ref().is_some_and(|what| what.op == ir::Operation::Return)
+            })
+    })
+}
+
 fn leaves_by_one_jump(
     body: &LirBody,
     from: BlockId,
@@ -698,6 +719,11 @@ impl<'a> Uses<'a> {
     ) -> bool {
         let regs = self.body.regs();
         touches_frame(one)
+            // `ShrinkWrap::useOrDefCSROrFI`: a frame setup or destroy pseudo
+            // (`ADJCALLSTACKDOWN`/`UP`, around every call) needs the frame. A
+            // call's alignment pad is the frame's, so it is set up where a
+            // call is.
+            || (self.framed && one.what.as_ref().is_some_and(|what| what.op == ir::Operation::Call))
             || any_named(regs, one, |register| {
                 (self.framed && self.frame_registers.contains(&register)) || self.kept.contains(&register)
             })
