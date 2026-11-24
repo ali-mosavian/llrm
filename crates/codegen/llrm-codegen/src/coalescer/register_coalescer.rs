@@ -627,8 +627,12 @@ fn re_materialize_def(
     }) {
         return false;
     }
-    // DEVIATE C10: in a build for size the copy (2 bytes) becomes the move
-    // (3 to 5) and pays for itself only where the source's own move goes.
+    // DEVIATE C10 (owner: arm64 for frame addresses): in a build for size the
+    // copy (2 bytes) becomes the move (3 to 5) and pays for itself only where
+    // the source's own move goes. The pin has no such guard. A target whose
+    // move is copy-sized (`literal_move_is_copy_sized`: arm64's zero,
+    // one-instruction immediates, add/sub immediates, frame addresses) is
+    // exempt; the others keep the guard until priced per target.
     let alone = lis.operands(src.value).len() <= 2;
     if env.tuned_for_size() && !env.prices_remat() && !alone {
         return false;
