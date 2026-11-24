@@ -66,7 +66,9 @@ fn a_compare_is_not_moved_above_a_step_that_writes_carry() {
         let after = steps
             .iter()
             .any(|step| ops.iter().any(|op| text.contains(&format!("{step}\n  {op} #12\n  beq"))));
-        assert!(before || after, "{level}: the loop's compare is gone:\n{text}");
+        // -O2 unrolls the 12-trip loop where the clocks repay the bytes (no compare left): only the
+        // rolled form has one to look for
+        assert!(level == "-O2" || before || after, "{level}: the loop's compare is gone:\n{text}");
         let stale = ops.iter().any(|op| text.contains(&format!("adc #1\n  {op} #11\n  bcs")));
         assert!(!stale, "{level}: `bcs` reads the step's carry:\n{text}");
     }
