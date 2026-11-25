@@ -246,6 +246,7 @@ mod oracle_env;
 mod os_inline;
 mod os_inline_called_once;
 mod os_inline_calls;
+mod os_inline_memory_call;
 mod os_inline_clocks;
 mod os_size_trial;
 mod pc_calls;
