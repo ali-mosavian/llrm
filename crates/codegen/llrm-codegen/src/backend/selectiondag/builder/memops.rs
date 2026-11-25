@@ -16,6 +16,56 @@ const MOV_EAX: u64 = 5;
 const MOV_RAX_MINUS_ONE: u64 = 7;
 const MOVABS_RAX: u64 = 10;
 
+/// Where a constant fill goes, which sets the bytes of its stores and of the
+/// `lea` of its address (x86-64 encodings).
+#[derive(Clone, Copy)]
+enum StorePlace {
+    /// `[rsp+disp8]`: a SIB byte on every access.
+    Frame,
+    /// `[reg+disp8]`.
+    Register,
+    /// `[rip+disp32]`.
+    Global,
+}
+
+impl StorePlace {
+    /// `mov [m], imm` of `width` bytes.
+    fn immediate_store(
+        self,
+        width: u64,
+    ) -> u64 {
+        let register = match width {
+            1 => 4,
+            2 => 6,
+            4 => 7,
+            _ => 8,
+        };
+        match self {
+            Self::Frame => register + 1,
+            Self::Register => register,
+            Self::Global => register + 3,
+        }
+    }
+
+    /// `movups [m], xmm0`.
+    fn wide_store(self) -> u64 {
+        match self {
+            Self::Frame => 5,
+            Self::Register => 4,
+            Self::Global => 7,
+        }
+    }
+
+    /// `lea rdi, [m]`.
+    fn lea(self) -> u64 {
+        match self {
+            Self::Frame => 5,
+            Self::Register => 4,
+            Self::Global => 7,
+        }
+    }
+}
+
 use llrm_mir::context::ConstantKind;
 use llrm_mir::intrinsics::Intrinsic;
 use llrm_mir::module::{Instruction, Operand, ValueDef};
@@ -845,6 +895,7 @@ impl Builder<'_> {
         opt_size: bool,
         fill: Option<u128>,
         frame: bool,
+        place: StorePlace,
         alignment: u64,
     ) -> bool {
         let zero = fill == Some(0);
@@ -853,7 +904,7 @@ impl Builder<'_> {
             && self.target.dag.pointer.size_in_bits() == 64
             && self.target.target_nodes.is_none()
         {
-            return self.sse_fill_is_longer(length, fill.unwrap_or(0));
+            return self.sse_fill_is_longer(length, fill.unwrap_or(0), alignment, place);
         }
         if opt_size && let Some(costs) = self.target.tti.as_ref().and_then(|tti| tti.0.size_fill()) {
             // `rep stosd` takes whole aligned dwords; a tail or an unaligned
@@ -919,19 +970,17 @@ impl Builder<'_> {
         (stored - FILL_BYTES) as i64 * trade.milliclocks_per_byte >= (fill - stores) * 1000
     }
 
-    /// DEVIATE SD541 (x86-64, tuned for size): a constant fill whose 16-byte
-    /// stores (and the `xorps`, or the pool load of the splat) take more bytes
-    /// than a `rep stosq` fill is the fill. The pin counts stores
-    /// (`MaxStoresPerMemsetOptSize`), so a 128-byte clear is eight `movaps`
-    /// there (pattern_fill -Os +50 B, huffman_decode +12 B over the `rep stosq`
-    /// this port had). The sizes are the encodings at a `[rsp+disp8]` address:
-    /// `xorps` 3, the splat's `movaps` load 7, `movaps` store 5, `mov [m], 0` 4
-    /// (byte), 6 (word), 7 (dword), 8 (qword), and the fill: the value in `rax`
-    /// (`xor eax, eax` 2, `mov rax, -1` 7, `movabs` 10), `lea rdi`, `mov
-    /// ecx` and `rep stosq` 13. Owner m64. Exit 2026-12-22: a store-cost
-    /// hook on the target description, as for SD223. The pin:
-    /// [`getMemset`][memset] tries the stores first, within
-    /// [`MaxStoresPerMemsetOptSize = 8`][limit].
+    /// DEVIATE SD541 (x86-64, tuned for size): a constant fill whose stores
+    /// take more bytes than the `rep stos` fill is the fill. The pin counts
+    /// stores (`MaxStoresPerMemsetOptSize`), so a 128-byte clear is eight
+    /// `movaps` there (+50 B on a pattern fill over the `rep stosq` this port
+    /// had). Both sides are priced at the encodings of the destination
+    /// ([`StorePlace`]): `mov [m], imm` of a byte, word, dword and qword, the
+    /// `movups` store, `xorps` 3 or the splat's pool load 7; the fill is the
+    /// unit `rep_stos` takes (`fill_unit_bytes`) and the `lea` of the address.
+    /// Owner m64. Exit 2026-12-22: a store-cost hook on the target
+    /// description, as for SD223. The pin: [`getMemset`][memset] tries the
+    /// stores first, within [`MaxStoresPerMemsetOptSize = 8`][limit].
     ///
     /// [memset]:
     /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/SelectionDAG.cpp#L10376
@@ -941,13 +990,17 @@ impl Builder<'_> {
         &self,
         length: u64,
         byte: u128,
+        alignment: u64,
+        place: StorePlace,
     ) -> bool {
-        let value = match byte {
-            0 => 2,
-            0xff => 7,
-            _ => 10,
+        // The unit `rep_stos` takes at -Os, and what its fill costs.
+        let block = alignment.min(self.pointer_bytes());
+        let unit = if self.target.tti.as_ref().is_some_and(|tti| tti.0.rep_stos_priced_unit()) {
+            Self::cheapest_fill_unit(block, length, byte as u64 & 255)
+        } else {
+            block
         };
-        let fill = value + 5 + 5 + 3;
+        let fill = Self::fill_unit_bytes(unit, length, byte as u64 & 255) + place.lea();
         let Some(ops) = Self::mem_ops(length, 16, usize::MAX, self.volatile_memory) else { return false };
         let wide = ops.iter().filter(|width| **width == 16).count() as u64;
         let setup = match (wide, byte) {
@@ -955,18 +1008,8 @@ impl Builder<'_> {
             (_, 0) => 3,
             _ => 7,
         };
-        // `mov [m], imm`: byte 4, word 6, dword 7, qword 8 B.
-        let immediates: u64 = ops
-            .iter()
-            .filter(|width| **width != 16)
-            .map(|width| match width {
-                1 => 4,
-                2 => 6,
-                4 => 7,
-                _ => 8,
-            })
-            .sum();
-        setup + wide * 5 + immediates > fill
+        let immediates: u64 = ops.iter().filter(|width| **width != 16).map(|width| place.immediate_store(*width)).sum();
+        setup + wide * place.wide_store() + immediates > fill
     }
 
     /// DEVIATE MEM-OS (`Tuning::size_copy_price`, x86-64 tuned for size):
@@ -1487,6 +1530,11 @@ impl Builder<'_> {
                             opt_size,
                             self.dag.constant(other).map(|byte| byte & 0xff),
                             self.dag.opcode(dst) == ISD::FrameIndex,
+                            match self.dag.opcode(dst) {
+                                ISD::FrameIndex => StorePlace::Frame,
+                                ISD::GlobalAddress | ISD::ExternalSymbol | ISD::ConstantPool => StorePlace::Global,
+                                _ => StorePlace::Register,
+                            },
                             alignment,
                         ) =>
                     {
@@ -2323,29 +2371,37 @@ impl Builder<'_> {
         size: u64,
         byte: u64,
     ) -> u64 {
-        let bytes = |unit: u64| {
-            let value = match (byte, unit) {
-                (0, _) | (_, 1) => XOR_OR_MOV_AL,
-                (_, 2) => MOV_AX,
-                (_, 4) => MOV_EAX,
-                (0xff, _) => MOV_RAX_MINUS_ONE,
-                _ => MOVABS_RAX,
-            };
-            let op = if unit == 1 || unit == 4 { 2 } else { 3 };
-            let left = size % unit;
-            value + 5 + op + left / 4 * 6 + (left % 4 / 2) * 7 + left % 2 * 3
-        };
         // Every unit up to the pin's, the widest on a tie: a `rep stosb` of the
         // same bytes runs the count of a `stosd` four times over.
         let mut best = block;
         let mut unit = block;
         while unit > 1 {
             unit /= 2;
-            if bytes(unit) < bytes(best) {
+            if Self::fill_unit_bytes(unit, size, byte) < Self::fill_unit_bytes(best, size, byte) {
                 best = unit;
             }
         }
         best
+    }
+
+    /// The bytes of a constant `rep stos` of `size` bytes in `unit`-byte
+    /// steps, less the `lea` of the destination: the value, `mov ecx`, the
+    /// string op and the stores of the tail.
+    fn fill_unit_bytes(
+        unit: u64,
+        size: u64,
+        byte: u64,
+    ) -> u64 {
+        let value = match (byte, unit) {
+            (0, _) | (_, 1) => XOR_OR_MOV_AL,
+            (_, 2) => MOV_AX,
+            (_, 4) => MOV_EAX,
+            (0xff, _) => MOV_RAX_MINUS_ONE,
+            _ => MOVABS_RAX,
+        };
+        let op = if unit == 1 || unit == 4 { 2 } else { 3 };
+        let left = size % unit;
+        value + 5 + op + left / 4 * 6 + (left % 4 / 2) * 7 + left % 2 * 3
     }
 
     /// `emitConstantSizeRepstos`.
