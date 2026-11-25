@@ -350,6 +350,9 @@ fn tuning(costs: &llrm_mir::target::OperationCosts) -> llrm_mir::target::Tuning 
         inline_outline_trial_at_size: true,
         inline_outline_trial_max_callees: Some(8),
         inline_outline_trial_clock_cap_percent: Some(2),
+        // DEVIATE OS-INLINE-TRIAL-X86 (owner x87, exit 2027-01-31): the band
+        // is tuned by the QB A/B.
+        inline_refused_trial_band_percent: Some(2),
         // DEVIATE SZ2 (owner x86-m32, exit 2026-11-20): -Os keeps a once-called
         // callee whose copy grows the code (gcc does; the pin copies it).
         inline_size_guard_single_site: true,

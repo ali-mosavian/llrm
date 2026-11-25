@@ -79,6 +79,10 @@ enum Dimension {
     /// DEVIATE OS-OUTLINE-TRIAL: a callee the size bound let inline, that goes
     /// with its calls, stays a call.
     OutlineCalls,
+    /// DEVIATE OS-INLINE-TRIAL-X86: the calls the size bound refused (the pin's
+    /// threshold takes them) are built inlined; the finished code that
+    /// executes less within `band` percent of the module's bytes stays.
+    InlineRefused { band: i64 },
 }
 
 /// What the base compile noted for each dimension.
@@ -96,6 +100,9 @@ struct Noted {
     /// The distinct callees of the cold sites the size bound accepted, which
     /// the trial could keep as calls.
     accepted: usize,
+    /// The sites the size bound refused that the target asks the finished code
+    /// about (`Tti::opt_size_inline_finished_trial`).
+    refused: Vec<trial::Site>,
 }
 
 impl Noted {
@@ -117,6 +124,7 @@ impl Noted {
                 .flat_map(|site| site.callees.iter())
                 .collect::<BTreeSet<_>>()
                 .len(),
+            refused: trial::take_refused(),
         };
         trial::clear_rotated_loops();
         noted
@@ -137,6 +145,7 @@ impl Noted {
             Dimension::KeepLoopCalls => !self.looped.is_empty(),
             Dimension::KeepHotCalls => !self.hot.is_empty(),
             Dimension::OutlineCalls => self.accepted > 0,
+            Dimension::InlineRefused { .. } => !self.refused.is_empty(),
         }
     }
 }
@@ -187,12 +196,18 @@ impl Dimension {
         if tti.opt_size_inline_outline_trial() && !llrm_support::env_flag!("LLRM_NO_OUTLINE_TRIAL") {
             all.push(Dimension::OutlineCalls);
         }
+        if tti.opt_size_inline_finished_trial() && !llrm_support::env_flag!("LLRM_NO_INLINE_REFUSED_TRIAL") {
+            if let Some(band) = tti.opt_size_inline_finished_trial_module_band() {
+                all.push(Dimension::InlineRefused { band });
+            }
+        }
         all
     }
 
     /// Runs `body` with this decision reversed.
     fn compile<T>(
         self,
+        noted: &Noted,
         body: impl FnOnce() -> T,
     ) -> T {
         match self {
@@ -206,6 +221,7 @@ impl Dimension {
             Dimension::KeepLoopCalls => trial::with_kept_loop_calls(body),
             Dimension::KeepHotCalls => trial::with_kept_hot_calls(body),
             Dimension::OutlineCalls => trial::with_outlined_all(body),
+            Dimension::InlineRefused { .. } => trial::with_inlined(&noted.refused, body),
         }
     }
 
@@ -231,6 +247,7 @@ impl Dimension {
                 | Dimension::KeepLoopCalls
                 | Dimension::KeepHotCalls
                 | Dimension::OutlineCalls
+                | Dimension::InlineRefused { .. }
         )
     }
 
@@ -242,6 +259,7 @@ impl Dimension {
         (kept_sizes, kept_work): (Sizes, Option<f64>),
         (other_sizes, other_work): (Sizes, Option<f64>),
         cap: Option<i64>,
+        module_bytes: i64,
     ) -> bool {
         // A bytes-strict unroll trial compares the code alone: the constants a
         // loop's removal frees are data, which a code-size column does
@@ -278,6 +296,10 @@ impl Dimension {
             Dimension::KeepLoopCalls => ("keep-loop-calls", trial::keeps_smaller_at_size(added, saved, base_work, cap)),
             Dimension::KeepHotCalls => ("keep-hot-calls", trial::keeps_smaller_at_size(added, saved, base_work, cap)),
             Dimension::OutlineCalls => ("outline-calls", trial::keeps_smaller_at_size(added, saved, base_work, cap)),
+            Dimension::InlineRefused { band } => (
+                "inline-refused",
+                measured && trial::keeps_inlined_at_size(added, saved, module_bytes, band),
+            ),
             Dimension::Unroll { bytes_strict, .. } => {
                 ("unroll-os", measured && trial::keeps_unroll_at_size(saved, added, noted.unroll.0.len(), bytes_strict))
             }
@@ -295,11 +317,12 @@ impl Dimension {
 /// `body` with every dimension of `all` reversed at once.
 fn compiled_with<T>(
     all: &[Dimension],
+    noted: &Noted,
     body: impl FnOnce() -> T,
 ) -> T {
     match all.split_first() {
         None => body(),
-        Some((one, rest)) => one.compile(|| compiled_with(rest, body)),
+        Some((one, rest)) => one.compile(noted, || compiled_with(rest, noted, body)),
     }
 }
 
@@ -635,15 +658,21 @@ fn compiled_module_at_size(
         .and_then(|tti| tti.opt_size_inline_outline_clock_cap_percent())
         .or(cap);
     let cap_of = |dimension: Dimension| if dimension == Dimension::OutlineCalls { outline_cap } else { cap };
+    let module_bytes = |one: &masm::Module| unpadded(one).map_or(0, |sizes| sizes.total());
     let mut again = options.clone();
     again.dump = None;
     // A dimension that stays, with its variant assembled whole or the program
     // not yet assembled.
     let mut kept: Vec<(Dimension, Result<Variant, Program>)> = Vec::new();
     for dimension in active {
-        let program = dimension.compile(|| optimized_program(module.clone(), &again))?;
+        let program = dimension.compile(&noted, || optimized_program(module.clone(), &again))?;
         let _ = Noted::take();
-        let cut = differing(&base.program.modules[0], &program.modules[0]);
+        let mut cut = differing(&base.program.modules[0], &program.modules[0]);
+        // The callee an inline takes the calls of is unchanged, and its body
+        // is the work the base's calls run: priced without it they read free.
+        if matches!(dimension, Dimension::InlineRefused { .. }) && !cut.is_empty() {
+            cut.extend(noted.refused.iter().flat_map(|site| site.callees.iter().cloned()));
+        }
         if llrm_support::debug::enabled("trial") {
             eprintln!("trial: {} of the functions differ: {cut:?}", cut.len());
         }
@@ -674,7 +703,7 @@ fn compiled_module_at_size(
             let variant = built(program, name, &again)?;
             let pays = matches!(
                 (price(&base.built), price(&variant.built)),
-                (Some(a), Some(b)) if dimension.keeps(&noted, a, b, cap_of(dimension))
+                (Some(a), Some(b)) if dimension.keeps(&noted, a, b, cap_of(dimension), module_bytes(&base.built))
             );
             if pays {
                 kept.push((dimension, Ok(variant)));
@@ -685,7 +714,7 @@ fn compiled_module_at_size(
         let (Some(first), Some(second)) = (each(&base.program), each(&program)) else { continue };
         let pays = matches!(
             (price(&first), price(&second)),
-            (Some(a), Some(b)) if dimension.keeps(&noted, a, b, cap_of(dimension))
+            (Some(a), Some(b)) if dimension.keeps(&noted, a, b, cap_of(dimension), module_bytes(&base.built))
         );
         if pays {
             kept.push((dimension, Err(program)));
@@ -710,7 +739,7 @@ fn compiled_module_at_size(
     let mut without_outline = (first == Dimension::OutlineCalls).then(|| base.clone());
     for (dimension, _) in kept {
         accepted.push(dimension);
-        let program = compiled_with(&accepted, || optimized_program(module.clone(), &again))?;
+        let program = compiled_with(&accepted, &noted, || optimized_program(module.clone(), &again))?;
         let _ = Noted::take();
         let together = built(program, name, &again)?;
         let price = |one: &masm::Module| {
@@ -721,7 +750,7 @@ fn compiled_module_at_size(
         };
         let pays = matches!(
             (price(&chosen.built), price(&together.built)),
-            (Some(a), Some(b)) if dimension.keeps(&noted, a, b, cap_of(dimension))
+            (Some(a), Some(b)) if dimension.keeps(&noted, a, b, cap_of(dimension), module_bytes(&chosen.built))
         );
         if pays {
             if dimension == Dimension::OutlineCalls {
@@ -735,7 +764,7 @@ fn compiled_module_at_size(
     // The stage files written so far are the base compile's: the module the
     // kept decisions made is dumped again.
     if options.dump.is_some() {
-        compiled_with(&accepted, || optimized_program(module.clone(), options))?;
+        compiled_with(&accepted, &noted, || optimized_program(module.clone(), options))?;
     }
     stage_files(options, "", &chosen.built)?;
     let Some(without) = without_outline else { return with_leaf_trial(chosen, name, options, unpadded) };

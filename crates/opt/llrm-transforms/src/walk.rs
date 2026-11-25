@@ -1029,6 +1029,23 @@ impl ProgramPass for Walk {
                                     && tti
                                         .opt_size_inline_finished_trial_band()
                                         .is_none_or(|band| growth * 100 <= kept_bytes * band);
+                                // A site that runs at most once per run of the
+                                // program only adds bytes inlined: where the
+                                // target prices the whole module's finished code
+                                // (`..._finished_trial_module_band`) it is not
+                                // asked about.
+                                let finished = finished
+                                    && (tti.opt_size_inline_finished_trial_module_band().is_none()
+                                        || !calls.iter().all(|one| {
+                                            site_frequencies.get(one).copied().unwrap_or(1.0)
+                                                * llrm_analysis::entryweight::entry_weight(
+                                                    module,
+                                                    &program.layout,
+                                                    id,
+                                                    &addressed,
+                                                )
+                                                <= 1.0
+                                        }));
                                 let site = (by_bytes || finished).then(|| crate::trial::Site {
                                     caller: module.global(id).name.as_deref().unwrap_or_default().to_owned(),
                                     callees: calls

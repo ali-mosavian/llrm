@@ -1597,6 +1597,14 @@ impl Tti for X86 {
         if optsize { self.tuning.lftr_size_budget } else { 4 }
     }
 
+    fn opt_size_inline_finished_trial(&self) -> bool {
+        self.tuning.inline_refused_trial_band_percent.is_some()
+    }
+
+    fn opt_size_inline_finished_trial_module_band(&self) -> Option<i64> {
+        self.tuning.inline_refused_trial_band_percent
+    }
+
     fn opt_size_inline_outline_trial(&self) -> bool {
         self.tuning.inline_outline_trial_at_size
     }

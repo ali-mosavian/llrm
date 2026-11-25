@@ -1521,6 +1521,14 @@ pub trait Tti {
         None
     }
 
+    /// DEVIATE OS-INLINE-TRIAL-X86: the most the finished-code trial may add,
+    /// in percent of the module's bytes, to keep the calls it inlined (the
+    /// verdict's band, where `opt_size_inline_finished_trial_band` filters the
+    /// sites asked). None: the trial is not run by the generic driver.
+    fn opt_size_inline_finished_trial_module_band(&self) -> Option<i64> {
+        None
+    }
+
     /// Whether a run of copies of adjacent cells is `llvm.memcpy` at every
     /// level, where the bytes of the call are fewer (`mergestores`): the
     /// pin's MemCpyOpt forms it, and the size gate is this target's to lift.

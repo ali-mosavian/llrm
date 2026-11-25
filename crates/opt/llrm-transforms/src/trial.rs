@@ -614,6 +614,22 @@ pub fn keeps_smaller_at_size(
     }
 }
 
+/// DEVIATE OS-INLINE-TRIAL-X86: whether the compile that inlines the calls
+/// the -Os size bound refused is kept: the code executes less (`saved` > 0) and
+/// grows by at most `band` percent of the module (`bytes`), or it is no larger
+/// and executes no more.
+pub fn keeps_inlined_at_size(
+    added: i64,
+    saved: i64,
+    bytes: i64,
+    band: i64,
+) -> bool {
+    if added <= 0 {
+        return saved >= 0 && (added < 0 || saved > 0);
+    }
+    saved > 0 && i128::from(added) * 100 <= i128::from(bytes) * i128::from(band)
+}
+
 /// DEVIATE UNROLL-OS-TRIAL: whether the -Os unroll trial is kept: the object is
 /// smaller, or it grows by at most `ROTATION_HOT_BYTES_PER_LOOP` for each
 /// function the trial took and the code runs less. `bytes_strict`

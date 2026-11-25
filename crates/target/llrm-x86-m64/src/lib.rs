@@ -414,6 +414,9 @@ impl llrm_target::Target for M64 {
                             inline_outline_trial_at_size: true,
                             inline_outline_trial_max_callees: Some(8),
                             inline_outline_trial_clock_cap_percent: Some(2),
+                            // DEVIATE OS-INLINE-TRIAL-X86 (owner x87, exit
+                            // 2027-01-31): the band is tuned by the QB A/B.
+                            inline_refused_trial_band_percent: Some(5),
                             // DEVIATE LATE-MEMCPYOPT-SIZE (owner x86-m32-b, exit 2026-12-12): see
                             // Tuning. QB m64 Os -119 B (synth -63, dialog -56), no file worse.
                             late_memcpyopt_at_size: true,
