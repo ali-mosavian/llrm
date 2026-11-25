@@ -314,6 +314,11 @@ fn is_shift(base: &str) -> bool {
     )
 }
 
+/// Whether the mnemonic's symbol operand is a code target.
+fn takes_target(base: &str) -> bool {
+    matches!(base, "bra" | "bsr" | "jmp" | "jsr") || condition_branch(base) || base.starts_with("db")
+}
+
 fn condition_branch(base: &str) -> bool {
     matches!(
         base,
@@ -520,6 +525,14 @@ fn priced(
         // the address of a symbol is absolute short in four bytes, long in six
         if let Some(one @ Operand::Target) = operands.first_mut() {
             *one = Operand::Mode(if bytes == 4 { Mode::AbsW } else { Mode::AbsL }, 0);
+        }
+    } else if !takes_target(base) {
+        // a symbol where data is read or written is a 32-bit relocated
+        // absolute address, not a branch target
+        for one in &mut operands {
+            if *one == Operand::Target {
+                *one = Operand::Mode(Mode::AbsL, 0);
+            }
         }
     }
     if base == "movem" {
