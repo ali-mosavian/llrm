@@ -124,3 +124,71 @@ def test_code_in_any_executable_section_is_counted():
     split = build('.text\nf: ret\n.section .text.unlikely,"ax",@progbits\ng: .zero 16\n.section .myhot,"ax",@progbits\nh: .zero 32\n.section .data.tbl,"aw",@progbits\nd: .zero 64\n')
     assert ns['text'](split) - ns['text'](plain) == 48, (ns['text'](split), ns['text'](plain))
     assert ns['whole'](split) - ns['whole'](plain) == 48 + 64
+
+
+def run_arch(tmp_path, arch, gcc_name, with_clang=True, env_extra=None):
+    """qbbars on one module with every compiler a logging stub; returns (stdout, stderr, logged compile lines)."""
+    tree, dist, pin, log = tmp_path / 'tree', tmp_path / 'dist', tmp_path / 'pin', tmp_path / 'log'
+    (tree / 'src/core').mkdir(parents=True, exist_ok=True); dist.mkdir(exist_ok=True); pin.mkdir(exist_ok=True)
+    (tree / 'src/core/a.c').write_text('int a(int x){return x*3+1;}'); log.write_text('')
+    spy = f'#!/bin/sh\ncase " $* " in *" -c "*) echo "$0 $*" >> {log};; esac\n' + GCC.replace('exec gcc', f'exec {shutil.which("gcc")}')
+    stub = stub_make(tmp_path, [('src/core/a.c', '')])
+    (tmp_path / 'bin' / gcc_name).write_text(spy)
+    (dist / 'llrm-cc').write_text(spy); (pin / 'clang').write_text(spy)
+    for p in (dist / 'llrm-cc', pin / 'clang', tmp_path / 'bin' / gcc_name): p.chmod(0o755)
+    env = dict(os.environ, QB_TREE=str(tree), QB_SCRATCH=str(tmp_path), PATH=stub, **(env_extra or {}))
+    if with_clang: env['PIN_BIN'] = str(pin)
+    else: env.pop('PIN_BIN', None)
+    r = subprocess.run(['python3', os.path.join(os.path.dirname(__file__), 'qbbars.py'), arch, 'Os', str(dist)], capture_output=True, text=True, env=env, cwd=tree)
+    return r.stdout, r.stderr, log.read_text().splitlines()
+
+
+def test_arm64_bars_are_the_arm64_compilers_with_the_arm64_flags(tmp_path):
+    """The arm64 table row: aarch64 gcc, clang told its target, no x86 words (-m64, -fcf-protection) and PAC/BTI off."""
+    out, err, lines = run_arch(tmp_path, 'arm64', 'aarch64-linux-gnu-gcc-15', env_extra={'LLRM_ARM64_SYSROOT': '/sys/root'})
+    assert len(lines) == 3, (lines, err)
+    ours, gcc, clang = lines
+    assert 'aarch64-linux-gnu-gcc-15' in gcc and '--target=aarch64-linux-gnu' in clang.split() and '--target=aarch64-linux-gnu' not in gcc.split()
+    assert '/sys/root/usr/aarch64-linux-gnu/include' in clang.split() and '/sys/root/usr/aarch64-linux-gnu/include' not in ours
+    for line in lines:
+        w = line.split()
+        assert '-mbranch-protection=none' in w and '-fPIE' in w, line
+        assert not {'-m64', '-m32', '-fcf-protection=none', '-march=i486'} & set(w), line
+
+
+def test_arm64_needs_its_glibc_root_not_a_guessed_path(tmp_path):
+    """QB is hosted: arm64 builds on the arm64-glibc row, whose headers come from $LLRM_ARM64_SYSROOT. Unset must say so (the freestanding row once measured QB against the host's x86 headers)."""
+    out, err, lines = run_arch(tmp_path, 'arm64', 'aarch64-linux-gnu-gcc-15', env_extra={'LLRM_ARM64_SYSROOT': ''})
+    assert 'LLRM_ARM64_SYSROOT' in err and not lines, err
+
+
+def test_m68k_is_a_gcc_only_bar_at_the_named_cpu_with_soft_float(tmp_path):
+    """m68k: no clang column (no pin clang is needed, PIN_BIN unset is fine); gcc gets -m<cpu> -msoft-float (gcc's 68020 default is the FPU, which ours does not use: a 332 B low bar); ours is told the target."""
+    for cpu in ('68000', '68020'):
+        out, err, lines = run_arch(tmp_path, 'm68k-' + cpu, 'm68k-linux-gnu-gcc', with_clang=False)
+        assert len(lines) == 2, (lines, err)
+        ours, gcc = lines
+        assert f'-m{cpu}' in gcc.split() and '-msoft-float' in gcc.split() and '-std=gnu2x' in gcc.split(), gcc
+        assert '-msoft-float' not in ours.split() and 'm68k-linux-gnu-gcc' not in ours
+        assert 'total .text ours' in out and 'clang' not in out, out
+
+
+def test_an_unknown_arch_lists_the_known_ones(tmp_path):
+    out, err, _ = run_arch(tmp_path, 'riscv', 'gcc-15')
+    assert 'm64' in err and 'arm64' in err and 'm68k-68020' in err, err
+
+
+def test_the_report_has_no_clang_column_for_a_gcc_only_arch_and_ranks_by_gcc():
+    """report() over fake per-module sizes: m68k has gcc alone, so `best` is gcc and a module larger than it is worse."""
+    ns2 = {'__name__': 'qbbars_under_test', '__file__': os.path.join(os.path.dirname(__file__), 'qbbars.py')}
+    import sys as _s
+    old = _s.argv; _s.argv = ['qbbars.py', 'm68k-68020', 'Os', '.']
+    os.environ.setdefault('QB_TREE', '.')
+    try: exec(compile(src, 'qbbars.py', 'exec'), ns2)
+    finally: _s.argv = old
+    res = [('big.c', {'ours': 120, 'ours_whole': 130, 'gcc': 100, 'gcc_whole': 105}), ('small.c', {'ours': 50, 'ours_whole': 50, 'gcc': 60, 'gcc_whole': 60})]
+    lines = ns2['report'](res)
+    assert lines[0].startswith('m68k-68020 -Os: 2/2 files with all two')
+    assert 'total whole ours 180 gcc 165 sum(best) 165' in lines[2], lines
+    assert lines[3].startswith('  +25 whole (  +20 text) big.c ours 120/130 gcc 100/105') and 'clang' not in ' '.join(lines)
+    assert lines[-1] == 'worse 1 of 2 sum worse 25', lines
