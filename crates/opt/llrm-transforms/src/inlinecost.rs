@@ -2339,8 +2339,7 @@ impl<'a> Analyzer<'a> {
             return size;
         }
         let view = self.size_view();
-        if view.is_none()
-            && self.site.caller_size != CallerSize::Speed
+        if self.site.caller_size != CallerSize::Speed
             && let Some(units) = memory_expansion_units(
                 self.context,
                 &self.site.module.globals,
@@ -2352,7 +2351,7 @@ impl<'a> Analyzer<'a> {
                     Simple::Int(_, bits) => u64::try_from(bits).ok(),
                     _ => None,
                 },
-                true,
+                Some(UnknownLength::Guard),
             )
         {
             return units;
@@ -3059,6 +3058,16 @@ impl<'a> Analyzer<'a> {
     }
 }
 
+/// Which count prices a `memcpy`, `memmove` or `memset` of unknown length that
+/// stays a call.
+#[derive(Clone, Copy)]
+pub(crate) enum UnknownLength {
+    /// The -Os size guard (`Tti::size_caller_memory_call_units`).
+    Guard,
+    /// The SZ2 trial's body sizes (`Tti::size_trial_memory_call_units`).
+    Trial,
+}
+
 /// D11-MEM: the loads and stores a constant-length `memcpy`, `memmove` or
 /// `memset` at `inst` becomes (`length_at`: its length, constant at the call
 /// site where the arguments fix it), or the call it stays, in the units of the
@@ -3075,7 +3084,7 @@ pub(crate) fn memory_expansion_units(
     tti: &dyn llrm_mir::tti::Tti,
     layout: &llrm_mir::datalayout::DataLayout,
     length_at: &dyn Fn(Operand) -> Option<u64>,
-    unknown_length: bool,
+    unknown_length: Option<UnknownLength>,
 ) -> Option<i64> {
     let operation = function.instruction(inst);
     if !matches!(operation.opcode, Opcode::Call(_)) {
@@ -3107,7 +3116,11 @@ pub(crate) fn memory_expansion_units(
                     )
                 ),
             );
-        if unknown_length && !local { tti.size_caller_memory_call_units() } else { None }
+        match unknown_length {
+            Some(UnknownLength::Guard) if !local => tti.size_caller_memory_call_units(),
+            Some(UnknownLength::Trial) if !local => tti.size_trial_memory_call_units(),
+            _ => None,
+        }
     })
 }
 
