@@ -572,36 +572,29 @@ impl Formula {
         usize::from(self.scaled_reg.is_some()) + self.base_regs.len()
     }
 
-    /// `Formula::getType`: meaningless except for the bit size.
+    /// `Formula::getType`: meaningless except for the bit size. llvm-mos keeps
+    /// the formula's type through `GenerateZExts`, so with a register narrowed
+    /// it is the widest register's: the type the sum is done in must hold
+    /// every register and the address (a byte index beside a word pointer is a
+    /// word sum, not a byte one). A pointer is taken over an integer of the
+    /// same width.
     pub fn ty(
         &self,
         se: &ScalarEvolution,
         cx: &Cx,
     ) -> Option<Ty> {
-        // llvm-mos keeps the formula's type through `GenerateZExts`: with a
-        // register narrowed, the widest integer register is the original.
-        let widest = self
-            .base_regs
-            .iter()
-            .chain(&self.scaled_reg)
-            .filter_map(|&reg| match se.type_of(reg) {
-                Ty::Int(bits) => Some(bits),
-                Ty::Ptr(_) => None,
-            })
-            .max();
-        let all_ints = self.base_regs.iter().chain(&self.scaled_reg).all(|&reg| matches!(se.type_of(reg), Ty::Int(_)));
-        if let (true, Some(bits)) = (all_ints, widest) {
-            Some(Ty::Int(bits))
-        } else if let Some(&first) = self.base_regs.first() {
-            Some(se.type_of(first))
-        } else if let Some(scaled) = self.scaled_reg {
-            Some(se.type_of(scaled))
-        } else {
-            self.symbol.map(|symbol| match symbol {
-                Symbol::Global(global) => Ty::Ptr(cx.globals[global.0 as usize].address_space),
-                Symbol::Frame(value) => Ty::Ptr(frame_address_space(cx, value)),
-            })
+        let symbol = self.symbol.map(|symbol| match symbol {
+            Symbol::Global(global) => Ty::Ptr(cx.globals[global.0 as usize].address_space),
+            Symbol::Frame(value) => Ty::Ptr(frame_address_space(cx, value)),
+        });
+        let mut widest: Option<(u32, Ty)> = None;
+        for ty in self.base_regs.iter().chain(&self.scaled_reg).map(|&reg| se.type_of(reg)).chain(symbol) {
+            let bits = se.get_type_size_in_bits(cx, ty);
+            if widest.is_none_or(|(most, held)| bits > most || (bits == most && ty.is_pointer() && !held.is_pointer())) {
+                widest = Some((bits, ty));
+            }
         }
+        widest.map(|(_, ty)| ty)
     }
 
     /// `Formula::deleteBaseReg`: the register at `at` is swapped with the last

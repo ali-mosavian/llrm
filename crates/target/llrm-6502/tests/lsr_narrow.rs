@@ -51,3 +51,70 @@ fn a_counter_value_that_needs_a_word_keeps_it() {
     let body = &text[text.find("fill:").expect("fill")..];
     assert!(body.contains("adc #0"), "the word step is gone:\n{body}");
 }
+
+/// An insertion-sort nest over a local array: the pointer base `a + 2 * gap`
+/// and a byte index both reach one address use, so the formula sums a word
+/// pointer and a byte register. The sum was done in the byte type
+/// (`Formula::ty` took the first register's) and panicked in debug with
+/// "SCEVAddExpr operand types don't match!" (bench/shellsort at every level);
+/// a scale of such a formula multiplied a byte register by a word constant
+/// ("SCEVMulExpr operand types don't match!").
+#[test]
+fn a_byte_index_beside_a_word_pointer_is_summed_as_a_word() {
+    let ir = format!(
+        "target datalayout = \"{}\"
+define i16 @sort() {{
+entry:
+  %a = alloca [64 x i16], align 1
+  br label %gaps
+gaps:
+  %gap = phi i16 [ %half, %gapend ], [ 32, %entry ]
+  %start = trunc nuw nsw i16 %gap to i8
+  %twice = shl nuw nsw i16 %gap, 1
+  %row = getelementptr i8, ptr %a, i16 %twice
+  br label %outer
+outer:
+  %o = phi i8 [ %o.next, %place ], [ 0, %gaps ]
+  %i = phi i8 [ %start, %gaps ], [ %i.next, %place ]
+  %iw = zext nneg i8 %i to i16
+  %ow = zext i8 %o to i16
+  %p = getelementptr i8, ptr %row, i16 %ow
+  %value = load i16, ptr %p, align 2
+  br label %inner
+inner:
+  %at = phi i16 [ %prev, %shift ], [ %iw, %outer ]
+  %prev = sub nuw i16 %at, %gap
+  %q = getelementptr inbounds nuw [2 x i8], ptr %a, i16 %prev
+  %pv = load i16, ptr %q, align 2
+  %gt = icmp ugt i16 %pv, %value
+  br i1 %gt, label %shift, label %place
+shift:
+  %r = getelementptr inbounds nuw [2 x i8], ptr %a, i16 %at
+  store i16 %pv, ptr %r, align 2
+  %below = icmp ult i16 %prev, %gap
+  br i1 %below, label %place, label %inner
+place:
+  %where = phi i16 [ %prev, %shift ], [ %at, %inner ]
+  %s = getelementptr inbounds nuw [2 x i8], ptr %a, i16 %where
+  store i16 %value, ptr %s, align 2
+  %i.next = add nuw nsw i8 %i, 1
+  %done = icmp eq i8 %i.next, 64
+  %o.next = add nuw nsw i8 %o, 2
+  br i1 %done, label %gapend, label %outer
+gapend:
+  %half = lshr i16 %gap, 1
+  %zero = icmp eq i16 %half, 0
+  br i1 %zero, label %exit, label %gaps
+exit:
+  %e = getelementptr inbounds nuw i8, ptr %a, i16 6
+  %v = load i16, ptr %e, align 2
+  ret i16 %v
+}}
+",
+        datalayout()
+    );
+    for level in [Level::O1, Level::O2, Level::Os] {
+        let text = assembly(&ir, &Request::new(level)).unwrap_or_else(|e| panic!("{level:?}: {e}"));
+        assert!(text.contains("sort:"), "{level:?}:\n{text}");
+    }
+}
