@@ -183,7 +183,10 @@ pub fn constrained(
             CONSTANTS_WORKED.with(|n| n.set(n.get() + 1));
             let defined: BTreeSet<u32> =
                 body.blocks.iter().flat_map(|block| &block.insns).flat_map(|one| one.defines.iter().copied()).collect();
-            crate::backend::bodyfacts::_constants(body, &defined)
+            // Whatever else reads the value wider: each copy is judged at its
+            // own width below (`reMaterializeDef` remakes every copy by
+            // itself).
+            crate::backend::bodyfacts::_literals(body, &defined, true)
         });
         match constants.get(&value) {
             // Not a qword symbol address: the pin rematerialises a copy to a
@@ -1246,6 +1249,42 @@ mod tests {
                 .expect("a copy into rdx");
             assert_eq!(what(&copy).sources, vec![imm(wanted, 8)], "mov {written}");
             assert!(copy.uses.is_empty(), "the copy reads no register: {:?}", copy.uses);
+        }
+    }
+
+    /// A zero read by a call as `i32 0` and as `ptr null` was copied from its
+    /// register at the dword read (`mov esi, r15d`, three bytes, a callee-saved
+    /// register held across the loop) because the qword read made `_constants`
+    /// drop the value: synth.c-shaped `voices` 327 B, 263 B with each read
+    /// remade at its own width. The pin remakes every copy.
+    #[test]
+    fn test_a_constant_read_at_two_widths_is_remade_at_each() {
+        let constant = _insn(semantics(Operation::Move, "mov", vec![held(1, 4)], vec![imm(0, 4)]), &[1], &[], 0x100);
+        let mut wide = _insn(
+            semantics(Operation::Divide, "div", vec![held(2, 8), held(3, 8)], vec![held(1, 8), held(4, 8), held(5, 8)]),
+            &[2, 3],
+            &[1, 4, 5],
+            0x108,
+        );
+        wide.requires = vec![(Held { value: 1, width: 8, offset: 0 }, RegId::RDX)];
+        let mut narrow = _insn(
+            semantics(Operation::Binary, "shl", vec![held(9, 4)], vec![held(9, 4), held(1, 4)]),
+            &[9],
+            &[9, 1],
+            0x110,
+        );
+        narrow.requires = vec![(Held { value: 1, width: 4, offset: 0 }, RegId::RCX)];
+        let mut body = _body(vec![constant, wide, narrow]);
+        body.bits = 64;
+        let (done, pins) = constrained(&body, None, &crate::backend::classes::RegisterClasses::m16());
+        for (register, wanted) in [(RegId::RDX, imm(0, 8)), (RegId::RCX, imm(0, 4))] {
+            let copy = done
+                .insns()
+                .into_iter()
+                .find(|one| !one.defines.is_empty() && pins.get(&one.defines[0]) == Some(&register))
+                .expect("a copy into the required register");
+            assert_eq!(what(&copy).sources, vec![wanted], "{register:?}");
+            assert!(copy.uses.is_empty(), "{register:?} reads no register: {:?}", copy.uses);
         }
     }
 

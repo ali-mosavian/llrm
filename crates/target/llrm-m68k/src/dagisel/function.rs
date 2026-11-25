@@ -38,6 +38,8 @@ pub fn tuning() -> llrm_mir::target::Tuning {
     llrm_mir::target::Tuning {
         max_stores_per_memset: 8,
         max_stores_per_memset_opt_size: 4,
+        // QB, 68020: no function over it at -Os, one at -O1 (`voice`)
+        trial_insts_max: Some(5000),
         ..llrm_mir::target::Tuning::PIN
     }
 }
