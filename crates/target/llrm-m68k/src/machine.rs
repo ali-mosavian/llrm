@@ -262,6 +262,18 @@ fn size_letter(bits: u32) -> Option<char> {
 }
 
 impl Tti for M68k {
+    /// The -O1 bar of `Tuning::inline_threshold_o1`; -O2 and -O3 keep the
+    /// pass's own.
+    fn inline_threshold_at_level(
+        &self,
+        level: u8,
+    ) -> Option<i64> {
+        match level {
+            1 => crate::dagisel::function::tuning().inline_threshold_o1,
+            _ => None,
+        }
+    }
+
     /// The pin's M68k has no FP register class: `FADD` is not legal on `float`
     /// or `double`, so `getFPOpCost` is `TCC_Expensive` (every float
     /// operation is a soft-float call).
