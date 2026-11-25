@@ -7,7 +7,7 @@
 //! a call that returns nothing) under the same return attributes.
 
 use llrm_lir::registers::RegId;
-use llrm_mir::module::{Function, InstId, Operand, ValueDef};
+use llrm_mir::module::{Function, InstId, Module, Operand, ValueDef};
 use llrm_mir::opcode::{Attribute, BinaryOp, Opcode, Tail};
 
 use super::super::super::isel::{Convention, Parameter};
@@ -20,7 +20,7 @@ impl Builder<'_> {
         &self,
         inst: InstId,
     ) -> bool {
-        tail_position_with(self.function, inst, self.is_mem_intrinsic_call(inst))
+        tail_position_with(self.module, self.function, inst, self.is_mem_intrinsic_call(inst))
     }
 
     /// A call of `llvm.memcpy`, `llvm.memmove` or `llvm.memset`: its library
@@ -223,15 +223,35 @@ impl Builder<'_> {
 
 /// `isInTailCallPosition` over `function`.
 pub fn tail_position(
+    module: &Module,
     function: &Function,
     inst: InstId,
 ) -> bool {
-    tail_position_with(function, inst, false)
+    tail_position_with(module, function, inst, false)
+}
+
+/// `llvm.lifetime.end`, `llvm.assume` and
+/// `llvm.experimental.noalias.scope.decl`: `isInTailCallPosition` lets these
+/// stand between the call and the `ret`.
+fn is_marker_call(
+    module: &Module,
+    function: &Function,
+    inst: InstId,
+) -> bool {
+    use llrm_mir::context::ConstantKind;
+    use llrm_mir::intrinsics::Intrinsic;
+    let Some(Operand::Constant(callee)) = function.instruction(inst).operands.last() else { return false };
+    let ConstantKind::Global(global) = module.context.get(*callee).kind else { return false };
+    matches!(
+        module.global(global).intrinsic(),
+        Some(Intrinsic::LifetimeEnd | Intrinsic::Assume | Intrinsic::NoAliasScopeDecl)
+    )
 }
 
 /// `isInTailCallPosition` with `ReturnsFirstArg` allowed: a `ret` of the
 /// call's first argument counts as returning its value.
 fn tail_position_with(
+    module: &Module,
     function: &Function,
     inst: InstId,
     first_argument_returned: bool,
@@ -264,22 +284,23 @@ fn tail_position_with(
             break;
         }
         let one = function.instruction(between);
-        let harmless = match &one.opcode {
-            Opcode::Binary(op) => !matches!(
-                op,
-                BinaryOp::UDiv | BinaryOp::SDiv | BinaryOp::URem | BinaryOp::SRem
-            ),
-            Opcode::Cast(_)
-            | Opcode::GetElementPtr { .. }
-            | Opcode::ICmp(_)
-            | Opcode::FCmp(_)
-            | Opcode::Select
-            | Opcode::Freeze
-            | Opcode::ExtractValue(_)
-            | Opcode::InsertValue(_)
-            | Opcode::FNeg => true,
-            _ => false,
-        };
+        let harmless = is_marker_call(module, function, between)
+            || match &one.opcode {
+                Opcode::Binary(op) => !matches!(
+                    op,
+                    BinaryOp::UDiv | BinaryOp::SDiv | BinaryOp::URem | BinaryOp::SRem
+                ),
+                Opcode::Cast(_)
+                | Opcode::GetElementPtr { .. }
+                | Opcode::ICmp(_)
+                | Opcode::FCmp(_)
+                | Opcode::Select
+                | Opcode::Freeze
+                | Opcode::ExtractValue(_)
+                | Opcode::InsertValue(_)
+                | Opcode::FNeg => true,
+                _ => false,
+            };
         if !harmless {
             return false;
         }
@@ -338,6 +359,18 @@ mod tests {
         );
     }
 
+    /// `lifetime.end` of a local between the call and the `ret` (what a call
+    /// that fills a local leaves): `isInTailCallPosition` skips it. It was a
+    /// store-like barrier, so `strg_sub`-shaped functions ended `call; pop;
+    /// ret` where the pin jumps.
+    #[test]
+    fn a_lifetime_end_between_the_call_and_the_return_does_not_stop_it() {
+        let text = format!(
+            "{HEAD}declare void @llvm.lifetime.end.p0(i64, ptr)\ndefine i32 @f(i32 %a) {{\n  %s = alloca i32\n  %r = tail call i32 @g(i32 %a)\n  call void @llvm.lifetime.end.p0(i64 4, ptr %s)\n  ret i32 %r\n}}\n"
+        );
+        assert_eq!(count(&text), 1);
+    }
+
     /// Without the `tail` marker (`tailcallelim` sets it), a call is a call.
     #[test]
     fn an_unmarked_call_is_not() {
@@ -367,7 +400,7 @@ mod tests {
         let (_, _, function) =
             module.functions().find(|(_, g, f)| !f.is_declaration() && g.name.as_deref() == Some("f")).unwrap();
         let call = function.iter_block(function.entry().unwrap()).next().unwrap();
-        assert!(super::tail_position(function, call));
+        assert!(super::tail_position(&module, function, call));
     }
 
     /// The return must hand back the call's value, not another.

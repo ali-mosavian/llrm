@@ -1516,7 +1516,11 @@ impl Fast<'_> {
                 // `tail` that `FastISel::lowerCall` found in tail position
                 // (`isInTailCallPosition`).
                 Opcode::Call(_)
-                    if llrm_codegen::backend::selectiondag::builder::tail_position(self.function, insts[at - 1]) =>
+                    if llrm_codegen::backend::selectiondag::builder::tail_position(
+                        self.module,
+                        self.function,
+                        insts[at - 1],
+                    ) =>
                 {
                     return None;
                 }
