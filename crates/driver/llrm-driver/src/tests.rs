@@ -6684,8 +6684,8 @@ fn the_no_midend_switch_leaves_the_module_to_the_backend_as_given() {
 /// x86-m32 -O3 makes no ipa-cp clone unless asked, as the pin: they gave
 /// QuickrBasic's host build +2.5% bytes and tests/run/c +1.6% compile
 /// instructions for 0.59% fewer instructions retired (IPACP-O3 ended
-/// 2026-11-26). `-fipa-cp-clone` still clones `place(q, 0, n)` for its first
-/// row (queens: 154,235 clk without, 73,196 with).
+/// 2026-11-26). `-fipa-cp-clone` still clones a recursive function for the
+/// constant row of its first call.
 #[test]
 fn a_recursion_called_with_a_constant_row_is_cloned_at_o3_only_when_asked() {
     let text = include_str!("tests_data/queens_place.ll");
