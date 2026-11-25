@@ -1306,6 +1306,11 @@ impl FunctionPass for LoopRotate {
         unit: &mut Unit,
         analyses: &mut Analyses,
     ) -> PreservedAnalyses {
+        // `FunctionToLoopPassAdaptor`'s `LoopCanonicalizationFPM`: the loops
+        // reach the pass in simplified, LCSSA form; the rotation takes the
+        // new header to have the old one as its only predecessor.
+        let canonical = crate::loopsimplify::simplified(unit.function);
+        let closed = crate::lcssa::closed(unit.context, unit.layout, unit.function).unwrap_or(false);
         let outer = std::rc::Rc::clone(analyses.outer());
         let tti = target_tti(outer.target());
         let options = Options {
@@ -1335,7 +1340,7 @@ impl FunctionPass for LoopRotate {
             scev: Default::default(),
             dom: Default::default(),
         };
-        if rotate_loops(&mut run) { PreservedAnalyses::none() } else { PreservedAnalyses::all() }
+        if rotate_loops(&mut run) || canonical || closed { PreservedAnalyses::none() } else { PreservedAnalyses::all() }
     }
 }
 

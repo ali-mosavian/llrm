@@ -979,3 +979,67 @@ fn test_a_scope_follows_the_loop_to_its_new_header() {
     assert_ne!(after, before, "the rotation left the header where it was");
     assert!(crate::loopfilter::allows(after[0]), "the scope stayed on the old header");
 }
+
+/// The inner loop's header is entered from the outer header, which also leaves
+/// the nest: no preheader of its own. `LoopRotate` run as a slot rotated the
+/// outer loop with that header as the new one, which has two predecessors:
+/// `%p` took the value of its own increment (`%p = add %p, 80`, dominating
+/// nothing), and the next InstCombine spun on it until the 40 GB limit (QB
+/// `session.c` -O1 at a lowered inline bar). LLVM's loop pass adaptor runs
+/// LoopSimplify and LCSSA before the loop passes (`LoopCanonicalizationFPM`).
+#[test]
+fn test_a_slot_rotates_a_nest_whose_inner_header_has_no_preheader_without_breaking_ssa() {
+    let mut module = parsed(
+        "define i32 @f(ptr %q, i32 %n) {
+entry:
+  br label %outer
+
+outer:
+  %acc = phi i32 [ 0, %entry ], [ %acc2, %olatch ]
+  %i = phi i32 [ %n, %entry ], [ %j, %olatch ]
+  %c = icmp sgt i32 %i, 80
+  br i1 %c, label %inner, label %exit
+
+inner:
+  %p = phi i32 [ %i, %outer ], [ %p2, %ilatch ]
+  %z = zext i32 %p to i64
+  %a = getelementptr i8, ptr %q, i64 %z
+  %v = load i8, ptr %a
+  %w = icmp eq i8 %v, 11
+  br i1 %w, label %after, label %ilatch
+
+ilatch:
+  %p2 = add i32 %p, 80
+  %e = icmp eq i32 %p, 0
+  br i1 %e, label %exit, label %inner
+
+after:
+  %neg = icmp slt i32 %p, 0
+  br i1 %neg, label %exit, label %olatch
+
+olatch:
+  %acc2 = add i32 %acc, 8
+  %j = add i32 %p, 80
+  br label %outer
+
+exit:
+  %r = phi i32 [ %acc, %outer ], [ %acc, %ilatch ], [ %acc, %after ]
+  ret i32 %r
+}
+",
+    );
+    let out = crate::testing::managed(
+        &mut module,
+        super::LoopRotate { duplicate_headers: true, size: false, check_exit_count: true, free_guard: false },
+    );
+    for line in out.lines() {
+        let Some((result, rest)) = line.trim().split_once(" = ") else { continue };
+        if rest.starts_with("phi") {
+            continue;
+        }
+        assert!(
+            !rest.split(|c: char| !c.is_alphanumeric() && c != '%' && c != '.').any(|word| word == result),
+            "`{result}` uses itself:\n{out}"
+        );
+    }
+}
