@@ -477,6 +477,9 @@ def cmd_bars(a):
 # ---- ours and the matrix ---------------------------------------------------------------------------------------------------------
 
 def cmd_ours(a):
+    if not a.rtlib:
+        sys.exit("prog_bars.py ours: --rtlib is required (the product runtime archive, `tools/6502/mkrt.py CC OUT.lib`). Without it the "
+                 "runtime's scratch cells are absolute BSS instead of zero-page equates and every runtime-heavy program reads slower than the product.")
     levels = a.levels.split(",") if a.levels else LEVELS
     names = a.progs.split(",") if a.progs else [x.strip() for x in (HERE / "pass82.txt").read_text().splitlines() if x.strip()]
     Path(a.out).mkdir(parents=True, exist_ok=True)
