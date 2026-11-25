@@ -2474,11 +2474,8 @@ fn fold_fp_to_int_checked(
         return None;
     }
     let value = value.trunc();
-    let (low, high) = if signed {
-        (-(2f64.powi(width as i32 - 1)), 2f64.powi(width as i32 - 1))
-    } else {
-        (0.0, 2f64.powi(width as i32))
-    };
+    let (low, high) =
+        if signed { (-(2f64.powi(width as i32 - 1)), 2f64.powi(width as i32 - 1)) } else { (0.0, 2f64.powi(width as i32)) };
     let members = if value.is_finite() && low <= value && value < high {
         vec![int(context, width, (value as i128 as u128) & mask(width)), int(context, 1, 1)]
     } else {
