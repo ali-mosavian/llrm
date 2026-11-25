@@ -386,3 +386,72 @@ x:
         assert_eq!(in_data, 0, "{cpu:?}: a pointer step in a data register:\n{asm}");
     }
 }
+
+/// Two steps of one pointer in one block, each a copy of it before an add
+/// whose result a byte load addresses.
+fn two_steps(function_with: impl FnOnce(&mut llrm_m68k::mfunc::MFunction)) -> usize {
+    use llrm_m68k::addrarith::address_adds;
+    use llrm_m68k::mfunc::{Block, Class, Inst, Kind, MFunction, Operand, Reg};
+    let virt = Reg::Virt;
+    let step = |d: u32, x: u32, k: i64| {
+        Inst::new(Kind::Op("ADDQ32di"), vec![Operand::Def(virt(d)), Operand::Use(virt(x)), Operand::Imm(k)])
+    };
+    let load = |from: u32| {
+        let mut load = Inst::new(
+            Kind::Op("MOV8dp"),
+            vec![Operand::Def(Reg::Phys(llrm_m68k::reg::D0)), Operand::Imm(0), Operand::Use(virt(from))],
+        );
+        load.may_load = true;
+        load
+    };
+    let copy = |d: u32, from: Reg| Inst::new(Kind::Copy, vec![Operand::Def(virt(d)), Operand::Use(from)]);
+    let insts = vec![
+        copy(0, Reg::Phys(llrm_m68k::reg::A0)),
+        copy(1, virt(0)),
+        step(2, 1, 1),
+        load(2),
+        copy(3, virt(0)),
+        step(4, 3, 2),
+        load(4),
+    ];
+    let mut function = MFunction::new("f");
+    function.classes = vec![Class::Xr32; 5];
+    function.blocks.push(Block { id: 0, insts, phis: vec![] });
+    function_with(&mut function);
+    address_adds(&mut function, Cpu::M68000, true, false, false)
+}
+
+/// Each step read the pointer through the other's data-class copy, so
+/// neither was an address add (QB `decl_step`: 136 B, gcc 112).
+#[test]
+fn two_steps_of_one_pointer_are_both_address_adds() {
+    assert_eq!(two_steps(|_| {}), 2);
+}
+
+/// A value stepped in a loop that nothing addresses is not a pointer: the
+/// steps' copies reach no address, so the add stays in a data register.
+#[test]
+fn a_value_that_only_steps_itself_stays_in_a_data_register() {
+    use llrm_m68k::addrarith::address_adds;
+    use llrm_m68k::mfunc::{Block, Class, Inst, Kind, MFunction, Operand, Phi, Reg};
+    let virt = Reg::Virt;
+    let mut add = Inst::new(Kind::Op("ADDQ32di"), vec![Operand::Def(virt(2)), Operand::Use(virt(1)), Operand::Imm(1)]);
+    add.sets_flags = true;
+    let mut function = MFunction::new("f");
+    function.classes = vec![Class::Xr32; 4];
+    function.blocks.push(Block {
+        id: 0,
+        insts: vec![Inst::new(Kind::Copy, vec![Operand::Def(virt(3)), Operand::Use(Reg::Phys(llrm_m68k::reg::D0))])],
+        phis: vec![],
+    });
+    function
+        .blocks
+        .push(
+            Block {
+                id: 1,
+                insts: vec![Inst::new(Kind::Copy, vec![Operand::Def(virt(1)), Operand::Use(virt(0))]), add],
+                phis: vec![Phi { result: virt(0), incoming: vec![(0, virt(3)), (1, virt(2))] }],
+            },
+        );
+    assert_eq!(address_adds(&mut function, Cpu::M68000, true, false, false), 0);
+}

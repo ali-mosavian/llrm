@@ -59,12 +59,12 @@ enum Use {
     /// A copy into this register.
     Copy(u32),
     Phi(u32),
-    /// A copy into the input of a pointer step (`x = copy y; d = x + k`):
-    /// the step is an address add of its own, so the copy costs `y` nothing in
-    /// a data register. Without it the steps of one pointer, each a data copy
-    /// of `y` to the others, kept each other in data registers (gcc
+    /// A copy into the input `x` of a pointer step (`x = copy y; d = x + k`),
+    /// with its result `d`: the copy costs `y` nothing in a data register if
+    /// `d` reaches addresses. Without it the steps of one pointer, each a data
+    /// copy of `y` to the others, kept each other in data registers (gcc
     /// `regclass` takes the class of a pointer family by its uses' costs).
-    Step(u32),
+    Step(u32, u32),
     /// An operand the instruction's description gives an address register.
     Address,
     /// An operand of either class (a store's source, a compare's other side):
@@ -85,12 +85,14 @@ fn uses_by_register(
     let mut all: Vec<Vec<Use>> = (0..function.classes.len()).map(|_| Vec::new()).collect();
     let mut deferred: Vec<(usize, usize, Vec<u32>)> = Vec::new();
     let mut copy_of: Vec<Option<u32>> = vec![None; function.classes.len()];
-    let mut steps: HashSet<u32> = HashSet::default();
+    let mut steps: llrm_support::hash::HashMap<u32, u32> = Default::default();
     for inst in function.blocks.iter().flat_map(|block| &block.insts) {
-        if let (Kind::Op("ADD32di" | "ADDQ32di" | "SUB32di" | "SUBQ32di"), [_, Operand::Use(Reg::Virt(x)), Operand::Imm(_)]) =
-            (&inst.kind, &inst.operands[..])
+        if let (
+            Kind::Op("ADD32di" | "ADDQ32di" | "SUB32di" | "SUBQ32di"),
+            [Operand::Def(Reg::Virt(d)), Operand::Use(Reg::Virt(x)), Operand::Imm(_)],
+        ) = (&inst.kind, &inst.operands[..])
         {
-            steps.insert(*x);
+            steps.insert(*x, *d);
         }
     }
     for block in &function.blocks {
@@ -114,7 +116,9 @@ fn uses_by_register(
                 if let Operand::Use(Reg::Virt(v)) = operand {
                     let slot = all[*v as usize].len();
                     all[*v as usize].push(match (&inst.kind, &inst.operands[..]) {
-                        (Kind::Copy, [Operand::Def(Reg::Virt(dst)), _]) if steps.contains(dst) => Use::Step(*dst),
+                        (Kind::Copy, [Operand::Def(Reg::Virt(dst)), _]) if let Some(result) = steps.get(dst) => {
+                            Use::Step(*dst, *result)
+                        }
                         (Kind::Copy, [Operand::Def(Reg::Virt(dst)), _]) => Use::Copy(*dst),
                         // a pointer returned or passed in an address register
                         (Kind::Copy, [Operand::Def(Reg::Phys(to)), _]) if wide && is_address(*to) => Use::Address,
@@ -184,6 +188,32 @@ fn pointer_like(
 
 /// Whether everything `v` reaches, through copies and phis, ends in an address
 /// register; a copy into `skip` is the caller's own and does not count.
+/// Marks a walk that crossed a [`Use::Step`].
+const STEPPED: u32 = u32::MAX;
+
+/// [`reaches_addresses_only`], and where it crossed a step, with an address
+/// use somewhere on it: steps of a counter that only feed each other reach
+/// nothing.
+fn reaches_addresses(
+    function: &MFunction,
+    uses: &[Vec<Use>],
+    v: u32,
+    skip: Option<u32>,
+) -> bool {
+    let mut seen = HashSet::default();
+    reaches_addresses_only(function, uses, v, skip, &mut seen)
+        && (!seen.contains(&STEPPED)
+            || seen.iter().any(|one| {
+                uses.get(*one as usize).is_some_and(|own| {
+                    own.iter().any(|u| match u {
+                        Use::Address | Use::Either => true,
+                        Use::Copy(to) | Use::Phi(to) => function.classes[*to as usize] == Class::Ar32,
+                        _ => false,
+                    })
+                })
+            }))
+}
+
 fn reaches_addresses_only(
     function: &MFunction,
     uses: &[Vec<Use>],
@@ -203,7 +233,13 @@ fn reaches_addresses_only(
                 Class::Xr32 => reaches_addresses_only(function, uses, *to, skip, seen),
                 _ => false,
             },
-            Use::Address | Use::Either | Use::Step(_) => true,
+            Use::Address | Use::Either => true,
+            // the step's own result decides; the walk is marked so that the
+            // caller asks for one real address use among everything it crossed
+            Use::Step(_, result) => {
+                seen.insert(STEPPED);
+                reaches_addresses_only(function, uses, *result, skip, seen)
+            }
             Use::Other => false,
         })
 }
@@ -318,7 +354,7 @@ fn address_copy(
             |one| match one {
                 Use::Other | Use::Address | Use::Either => true,
                 Use::Copy(to) => function.classes[*to as usize] == Class::Ar32,
-                Use::Phi(_) | Use::Step(_) => false,
+                Use::Phi(_) | Use::Step(..) => false,
             },
         );
     // only in the wide run of a size build, which the trial keeps where it is
@@ -329,7 +365,7 @@ fn address_copy(
     }
     match function.classes[y as usize] {
         Class::Ar32 => {}
-        Class::Xr32 if reaches_addresses_only(function, uses, y, Some(x), &mut HashSet::default()) => {}
+        Class::Xr32 if reaches_addresses(function, uses, y, Some(x)) => {}
         _ => return None,
     }
     Some((copy, base))
@@ -406,9 +442,7 @@ fn rewrite_one(
         return None;
     };
     let (copy, base) = address_copy(function, uses, b, at, x, wide && size)?;
-    if !codes_unread(&function.blocks[b].insts, at)
-        || !reaches_addresses_only(function, uses, d, Some(x), &mut HashSet::default())
-    {
+    if !codes_unread(&function.blocks[b].insts, at) || !reaches_addresses(function, uses, d, Some(x)) {
         return None;
     }
     // the form, priced on the CPU's selection class so that the allocation
@@ -557,7 +591,7 @@ fn rewrite_indexed(
     let (copy, base, x, index) = [(first, second), (second, first)].into_iter().find_map(|(x, index)| {
         address_copy(function, uses, b, at, x, wide && size).map(|(copy, base)| (copy, base, x, index))
     })?;
-    if !codes_unread(insts, at) || !reaches_addresses_only(function, uses, d, Some(x), &mut HashSet::default()) {
+    if !codes_unread(insts, at) || !reaches_addresses(function, uses, d, Some(x)) {
         return None;
     }
     let desc = local::desc(local::code_of("LEA32f")?)?;
