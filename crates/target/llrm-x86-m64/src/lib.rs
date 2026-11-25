@@ -488,6 +488,16 @@ impl llrm_target::Target for M64 {
                             // `mov; shl; sub` (x * 31). select_of_constants -Os was +1519 B
                             // against the old selector.
                             imul_at_size: true,
+                            // DEVIATE INLINE-BARS-M64 (owner llrm-target-x86-m64-b, exit 2026-12-20): see
+                            // `Tuning::inline_threshold_o1`. gcc's -O1 and -O2 inline less than the pin's 225: QB m64
+                            // text was over the best of gcc and clang by 43390 B (O1, 94 of 126 modules) and
+                            // 28798 B (O2, 76). Rule: the smallest DefaultThreshold at which no bench program newly
+                            // exceeds the best bar in instructions (the strict levels keep both axes at or under
+                            // it). O1 112: +4210 B, 78 cells, instructions 0.806 of best; O2 150: +4865 B, 59 cells,
+                            // 0.947. `strings` bounds both: O1 100 puts it 1.5% and O2 125 and 138 put it 4.8% over
+                            // best (its string calls are what the bar admits), though the bytes reach the bar there.
+                            inline_threshold_o1: Some(112),
+                            inline_threshold_o2: Some(150),
                             rep_stos_at_size: true,
                             rep_stos_at_size_max: u64::MAX,
                             // DEVIATE REP-STOS-UNIT (owner llrm-target-x86-m64, exit 2026-11-30): see
@@ -704,6 +714,30 @@ mod tests {
         };
         let tti = (M64.cost_model())(&prices).tti().expect("m64 states its cost model");
         assert_eq!(tti.recursive_inlining_depth(), Some((2, 2)));
+    }
+
+    /// The inline bar was the pin's 225 at -O1 and -O2, 94 and 76 of the 126 QB
+    /// modules over the best of gcc and clang in text (+43057 B and +28798 B).
+    #[test]
+    fn test_m64_inlines_below_the_pins_bar_at_o1_and_o2_only() {
+        let layout = M64.layout();
+        let prices = llrm_target::CpuPrices {
+            costs: Vec::new(),
+            prefix: 1,
+            address_stall: 0,
+            registers: 6,
+            call_registers: 3,
+            float_registers: 0,
+            address_forms: Vec::new(),
+            operations: OperationCosts::default(),
+            spaces: layout.spaces.roles,
+            private: None,
+            calling: None,
+            foreign: llrm_target::Foreign::none(),
+            ports: M64.flat_ports(),
+        };
+        let tti = (M64.cost_model())(&prices).tti().expect("m64 states its cost model");
+        assert_eq!([1, 2, 3].map(|level| tti.inline_threshold_at_level(level)), [Some(112), Some(150), None]);
     }
 
     /// The m64 sheet had a cache line and no line fill, so no byte rate was
