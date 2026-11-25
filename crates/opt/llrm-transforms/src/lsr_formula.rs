@@ -583,14 +583,19 @@ impl Formula {
         se: &ScalarEvolution,
         cx: &Cx,
     ) -> Option<Ty> {
-        let symbol = self.symbol.map(|symbol| match symbol {
-            Symbol::Global(global) => Ty::Ptr(cx.globals[global.0 as usize].address_space),
-            Symbol::Frame(value) => Ty::Ptr(frame_address_space(cx, value)),
-        });
+        let symbol = self
+            .symbol
+            .map(
+                |symbol| match symbol {
+                    Symbol::Global(global) => Ty::Ptr(cx.globals[global.0 as usize].address_space),
+                    Symbol::Frame(value) => Ty::Ptr(frame_address_space(cx, value)),
+                },
+            );
         let mut widest: Option<(u32, Ty)> = None;
         for ty in self.base_regs.iter().chain(&self.scaled_reg).map(|&reg| se.type_of(reg)).chain(symbol) {
             let bits = se.get_type_size_in_bits(cx, ty);
-            if widest.is_none_or(|(most, held)| bits > most || (bits == most && ty.is_pointer() && !held.is_pointer())) {
+            if widest.is_none_or(|(most, held)| bits > most || (bits == most && ty.is_pointer() && !held.is_pointer()))
+            {
                 widest = Some((bits, ty));
             }
         }
