@@ -435,10 +435,9 @@ fn tuning(costs: &llrm_mir::target::OperationCosts) -> llrm_mir::target::Tuning 
         // first and depth 8 lost to -O2 on fib, frames and rectwo. Owner
         // x86-m32, exit 2026-11-20.
         recursive_tre_first: (false, false),
-        // DEVIATE IPACP-O3 (owner x86-m32-c, exit 2026-12-20): queens -O3
-        // 160324 -> 79692 clk (gcc 94851, which has `-fipa-cp-clone` on
-        // at -O3).
-        ipa_cp_clones_at_speed: true,
+        // No ipa-cp clones at -O3, as the pin: they cost +2.5% bytes and +1.6%
+        // compile for 0.59% fewer instructions (IPACP-O3 ended 2026-11-26).
+        // `-fipa-cp-clone` asks for them.
         // DEVIATE IPACP-DEPTH (owner x86-m32-b, exit 2026-11-24): gcc's depth.
         ipa_cp_max_clones: 8,
         // DEVIATE LSR-SPILL-PRICE (owner x86-m32-b, exit 2026-11-24): two
@@ -931,8 +930,9 @@ impl llrm_target::Target for M32 {
 
 #[cfg(test)]
 mod tests {
-    /// m32's inline bars are 125 at -O1 and -O2 and the pin's at -O3: gcc's -O1 and -O2 inline less than the
-    /// pin's 225 (QB m32 text +111028 B and +6828 B over the best bar).
+    /// m32's inline bars are 125 at -O1 and -O2 and the pin's at -O3: gcc's -O1
+    /// and -O2 inline less than the pin's 225 (QB m32 text +111028 B and
+    /// +6828 B over the best bar).
     #[test]
     fn test_m32_inlines_below_the_pins_bar_at_o1_and_o2_only() {
         use llrm_mir::tti::Tti;
@@ -961,13 +961,14 @@ mod tests {
     /// QuickrBasic `repl.c` -O2: ipa-cp cloned `read_file` eight times (a
     /// recursion whose chain benefit compounds, 3e12 for 40 clocks a call):
     /// 16,336 B against 10,738 B with `-fno-ipa-cp-clone`, gcc 6,025. gcc and
-    /// the pin make no clone at -O2; -O3 clones as gcc does.
+    /// the pin make no clone at -O2, and the m32 makes none at -O3 either
+    /// (IPACP-O3 ended 2026-11-26).
     #[test]
-    fn test_m32_makes_no_ipa_cp_clones_at_o2() {
+    fn test_m32_makes_no_ipa_cp_clones_at_o2_or_o3() {
         use llrm_mir::tti::Tti;
         let tuning = super::tuning(&llrm_mir::target::OperationCosts::default());
         let tti = llrm_x86::tti::X86::of_cpu("i486").unwrap().with_tuning(tuning);
-        assert!(tti.ipa_cp_clones_at_speed(), "-O3 clones");
+        assert!(!tti.ipa_cp_clones_at_speed(), "-O3 does not");
         assert!(!tti.ipa_cp_clones_at_o2(), "-O2 does not");
     }
 

@@ -442,10 +442,12 @@ fn a_zero_test_of_a_negated_value_reads_the_negs_carry() {
     assert_eq!(tests, 0, "the carry of `neg` answers `n == 0`\n{listing}");
 }
 
-/// A copy or fill of a length known at run time is the `memcpy`/`memset` call at every level and
-/// in or out of a loop, as the pin has it (`X86SelectionDAGInfo::EmitTargetCodeForMemcpy` and `...Memset`
-/// return no node for a non-constant size). m32 -Os had it as `rep movsb`/`stosb` outside loops
-/// (MEM-OS-REP): QB `arry_fill` ran 65.2M cycles against the call's 47.3M.
+/// A copy or fill of a length known at run time is the `memcpy`/`memset` call
+/// at every level and in or out of a loop, as the pin has it
+/// (`X86SelectionDAGInfo::EmitTargetCodeForMemcpy` and `...Memset`
+/// return no node for a non-constant size). m32 -Os had it as `rep
+/// movsb`/`stosb` outside loops (MEM-OS-REP): QB `arry_fill` ran 65.2M cycles
+/// against the call's 47.3M.
 #[test]
 fn a_variable_copy_or_fill_at_m32_os_is_a_call_in_a_loop_or_not() {
     let ir = |target: &str, ty: &str, body: &str, attrs: &str| {
@@ -6654,13 +6656,13 @@ fn the_no_midend_switch_leaves_the_module_to_the_backend_as_given() {
     assert!(given.contains("[esp"), "the slot was promoted though the mid-end was off: {given}");
 }
 
-/// x86-m32 queens -O3: `place(q, 0, n)` was never cloned for its first row
-/// (ipa-cp clones were off at -O3, as the pin has none; gcc's `-fipa-cp-clone`
-/// is on there), so `safe` stayed a rolled loop over a symbolic row: 160,324
-/// clk against gcc's 94,851. With the clones the rows are constants: 79,692
-/// clk.
+/// x86-m32 -O3 makes no ipa-cp clone unless asked, as the pin: they gave
+/// QuickrBasic's host build +2.5% bytes and tests/run/c +1.6% compile
+/// instructions for 0.59% fewer instructions retired (IPACP-O3 ended
+/// 2026-11-26). `-fipa-cp-clone` still clones `place(q, 0, n)` for its first
+/// row (queens: 154,235 clk without, 73,196 with).
 #[test]
-fn a_recursion_called_with_a_constant_row_is_cloned_for_it_at_o3() {
+fn a_recursion_called_with_a_constant_row_is_cloned_at_o3_only_when_asked() {
     let text = include_str!("tests_data/queens_place.ll");
     let lines = |extra: &[&str]| {
         let mut arguments = vec!["-m32", "-O3", "-march=i486"];
@@ -6668,8 +6670,9 @@ fn a_recursion_called_with_a_constant_row_is_cloned_for_it_at_o3() {
         let (built, _) = compiled(&flags(&arguments), text, "queens").unwrap();
         llrm_codegen::backend::masm::text(&built).unwrap().lines().count()
     };
-    let (default, without) = (lines(&[]), lines(&["-fno-ipa-cp-clone"]));
-    assert!(default > 2 * without, "-O3 made no clones: {default} lines against {without} without clones");
+    let (default, without, asked) = (lines(&[]), lines(&["-fno-ipa-cp-clone"]), lines(&["-fipa-cp-clone"]));
+    assert_eq!(default, without, "-O3 cloned by default: {default} lines against {without} without clones");
+    assert!(asked > 2 * without, "-fipa-cp-clone made no clones: {asked} lines against {without}");
 }
 
 /// x86-m32 recchop -O3: `chop(0, 64)` halves its range, so neither `lo = 0` nor
