@@ -16,8 +16,8 @@
 //!   the one left operand all of them share). The new operation goes at the top
 //!   of the phi's block, after the phis.
 //! - Two or more incoming values that are the same binary operator or compare
-//!   of two variables, each with one user, where one operand is the same in
-//!   all of them, become the operation applied to that operand and a phi of the
+//!   of two variables, each with one user, where one operand is the same in all
+//!   of them, become the operation applied to that operand and a phi of the
 //!   other (`foldPHIArgBinOpIntoPHI`).
 //! - Two or more incoming values that are simple loads with one user each and
 //!   no memory write after them in their block
@@ -49,9 +49,9 @@
 //! constant right operand, the intersection of the binary operators' flags.
 //!
 //! DEVIATE 1: the rest of `visitPHINode` is not translated: the
-//! `insertvalue`/`extractvalue` forms of `foldPHIArgOpIntoPHI`, `foldPHIArgIntToPtrToPHI`, the pointer-cast phi,
-//! `foldIntegerTypedPHI`, `SliceUpIllegalIntegerPHI`, and
-//! `foldDependentIVs`. Exit: later slices.
+//! `insertvalue`/`extractvalue` forms of `foldPHIArgOpIntoPHI`,
+//! `foldPHIArgIntToPtrToPHI`, the pointer-cast phi, `foldIntegerTypedPHI`,
+//! `SliceUpIllegalIntegerPHI`, and `foldDependentIVs`. Exit: later slices.
 //!
 //! DEVIATE 2: no check that the block's terminator is an EH pad, which MIR
 //! cannot have a phi before; no debug locations.
@@ -595,9 +595,10 @@ impl Combiner<'_> {
         Some(Operand::Value(self.function.instruction(new).result.expect("a value")))
     }
 
-    /// `foldPHIArgBinOpIntoPHI`: `phi [op a, b], [op a, c]` is `op a, phi [b, c]`;
-    /// a phi is made for each operand that differs, none when both do (the
-    /// pin does not trade one phi for two: register pressure in a loop header).
+    /// `foldPHIArgBinOpIntoPHI`: `phi [op a, b], [op a, c]` is `op a, phi [b,
+    /// c]`; a phi is made for each operand that differs, none when both do
+    /// (the pin does not trade one phi for two: register pressure in a loop
+    /// header).
     fn fold_phi_arg_bin_op_into_phi(
         &mut self,
         phi: InstId,
