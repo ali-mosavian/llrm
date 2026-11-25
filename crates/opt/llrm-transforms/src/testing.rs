@@ -203,6 +203,8 @@ pub struct Tuned {
     pub split_paths: bool,
     /// `Tti::avoids_cold_outer_addrec_expansion`.
     pub cold_outer_chrec: bool,
+    /// `Tti::eliminates_accumulator_through_join` answers no.
+    pub keeps_joined_recursion: bool,
 }
 
 use llrm_mir::tti;
@@ -235,6 +237,8 @@ pub struct Flagged {
     pub ext_loads_free: bool,
     pub split_paths: bool,
     pub cold_outer_chrec: bool,
+    /// `Tti::eliminates_accumulator_through_join` answers no.
+    pub keeps_joined_recursion: bool,
 }
 
 impl llrm_mir::tti::Tti for Flagged {
@@ -243,6 +247,10 @@ impl llrm_mir::tti::Tti for Flagged {
         ty: tti::Ty,
     ) -> bool {
         self.soft_float && matches!(ty, tti::Ty::Double | tti::Ty::Float)
+    }
+
+    fn eliminates_accumulator_through_join(&self) -> bool {
+        !self.keeps_joined_recursion
     }
 
     fn second_ipsccp(&self) -> bool {
@@ -498,6 +506,7 @@ impl llrm_mir::target::Machine for Tuned {
             || self.ext_loads_free
             || self.split_paths
             || self.cold_outer_chrec
+            || self.keeps_joined_recursion
             || self.skip_partial_at_size)
             .then(|| {
                 std::rc::Rc::new(Flagged {
@@ -522,6 +531,7 @@ impl llrm_mir::target::Machine for Tuned {
                     ext_loads_free: self.ext_loads_free,
                     split_paths: self.split_paths,
                     cold_outer_chrec: self.cold_outer_chrec,
+                    keeps_joined_recursion: self.keeps_joined_recursion,
                 }) as _
             })
     }

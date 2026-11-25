@@ -196,6 +196,7 @@ pub struct Changed {
 pub fn cloned(
     module: &mut Module,
     layout: &DataLayout,
+    target: &std::rc::Rc<dyn llrm_mir::target::Machine>,
     procedures: &[GlobalId],
     private: &BTreeSet<GlobalId>,
     costs: &OperationCosts,
@@ -251,7 +252,7 @@ pub fn cloned(
     let mut tails: BTreeMap<GlobalId, IdSet<InstId>> = BTreeMap::new();
     for &(name, _) in groups.keys().collect::<BTreeSet<_>>() {
         if recursive.contains(&name) {
-            tails.entry(name).or_insert_with(|| crate::tailcallelim::eliminated_self_calls(module, layout, name));
+            tails.entry(name).or_insert_with(|| crate::tailcallelim::eliminated_self_calls(module, layout, target, name));
         }
     }
     for ((name, known), sites) in groups {

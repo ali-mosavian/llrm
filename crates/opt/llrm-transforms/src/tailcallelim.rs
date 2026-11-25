@@ -54,8 +54,11 @@
 //!     s` is a loop; the pin keeps the recursion. Only where the copied
 //!     operation reads the call's result and has no other use. Per target
 //!     (`Tti::eliminates_accumulator_through_join`): on where GCC is in the
-//!     bar (m68k, x86, arm64, 6502, z80); off for wasm, whose bar is the pin
-//!     alone (`recursive_stack_args` O2 388 B against 165, 2026-11-22).
+//!     bar (m68k, x86, arm64, 6502); off for wasm, whose bar is the pin
+//!     alone (`recursive_stack_args` O2 388 B against 165, 2026-11-22), and
+//!     for z80, where the loop's frame copies cost more than the call's pushes
+//!     (`recursive_stack_args` Os 634 B against 374). The early elimination
+//!     before ipa-cp (TRE-IPA) asks the same hook of the program's target.
 //!
 //! # Example
 //! `sumto(n, x) = n == 0 ? x : sumto(n - 1, x + n)` becomes a loop that
@@ -186,6 +189,7 @@ fn eliminate(
 pub fn eliminated_self_calls(
     module: &mut llrm_mir::module::Module,
     layout: &DataLayout,
+    target: &std::rc::Rc<dyn llrm_mir::target::Machine>,
     name: GlobalId,
 ) -> IdSet<InstId> {
     let Some(body) = module.global(name).function() else { return Default::default() };
@@ -195,7 +199,7 @@ pub fn eliminated_self_calls(
         return Default::default();
     }
     let mut copy = body.clone();
-    let outer = Outer::of(module, None);
+    let outer = Outer::of(module, Some(target.clone()));
     let mut declared = Declared::of(module);
     eliminate(&mut module.context, layout, &mut copy, &mut declared, &outer, Some(name));
     let after = own(&module.context, &copy);
@@ -228,6 +232,7 @@ fn self_calls(
 pub fn eliminate_linear_recursion(
     module: &mut llrm_mir::module::Module,
     layout: &DataLayout,
+    target: &std::rc::Rc<dyn llrm_mir::target::Machine>,
     name: GlobalId,
 ) -> bool {
     let Some(body) = module.global(name).function() else { return false };
@@ -235,7 +240,7 @@ pub fn eliminate_linear_recursion(
         return false;
     }
     let mut copy = body.clone();
-    let outer = Outer::of(module, None);
+    let outer = Outer::of(module, Some(target.clone()));
     let mut declared = Declared::of(module);
     if eliminate(&mut module.context, layout, &mut copy, &mut declared, &outer, Some(name)) != Outcome::Looped
         || !self_calls(&module.context, &copy, name).is_empty()

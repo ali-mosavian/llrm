@@ -5,7 +5,7 @@
 use llrm_analysis::testing::DOS;
 
 use super::TailCallElim;
-use crate::testing::{managed, parsed, results};
+use crate::testing::{Tuned, managed, parsed, results};
 
 /// `text` through the pass: its printed form, run as before on `inputs`.
 fn eliminated(
@@ -534,6 +534,26 @@ fn a_call_result_added_after_a_join_is_a_loop() {
     let after = eliminated(JOINED, JOINED_INPUTS);
     assert_eq!(calls(&after), 0, "{after}");
     assert!(after.contains("tailrecurse"), "{after}");
+}
+
+/// The early elimination (`eliminate_linear_recursion`, before ipa-cp) built its
+/// pass state with no target, so a target that keeps the joined recursion
+/// (`Tti::eliminates_accumulator_through_join` false) still got the loop: z80
+/// `recursive_stack_args` -Os ran 634 B / 8,539 T against 374 B / 6,271 T for
+/// the recursion, SDCC's 331 B / 7,302 T.
+#[test]
+fn the_early_elimination_asks_the_target_for_the_joined_recursion() {
+    let loops = |keeps: bool| {
+        let mut module = parsed(&format!("{DOS}{JOINED}"));
+        let target = std::rc::Rc::new(Tuned { keeps_joined_recursion: keeps, ..Default::default() });
+        llrm_mir::program::Program::lend(&mut module, target, |program| {
+            let id = program.modules[0].named("f").unwrap();
+            crate::tailcallelim::eliminate_linear_recursion(&mut program.modules[0], &program.layout, &program.target, id)
+        })
+        .expect("the program runs")
+    };
+    assert!(loops(false), "a target that takes the join makes the loop");
+    assert!(!loops(true), "a target that keeps the recursion keeps the call");
 }
 
 /// The join stays for the arm that has no call, and is copied only once: a join

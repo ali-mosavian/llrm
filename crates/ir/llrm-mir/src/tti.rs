@@ -1472,8 +1472,9 @@ pub trait Tti {
     /// Whether a recursive call whose result joins a phi, one associative
     /// operation and the `ret` is turned into an accumulator loop
     /// (TCE-ACC-PHI, `tailcallelim`). The pin does not; GCC's
-    /// `pass_tail_recursion` does, so a target with GCC in its bar keeps it and
-    /// one measured against the pin alone (wasm) does not.
+    /// `pass_tail_recursion` does, so a target with GCC in its bar keeps it, and
+    /// one measured against the pin alone (wasm) or whose loop costs more than
+    /// the call (z80, loop-carried state past its registers) does not.
     fn eliminates_accumulator_through_join(&self) -> bool {
         true
     }

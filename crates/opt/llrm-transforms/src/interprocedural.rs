@@ -800,6 +800,7 @@ pub fn optimized_with<E: From<String>>(
                 crate::ipacp::cloned(
                     module,
                     &program.layout,
+                    &program.target,
                     &procedures[at],
                     &private[at],
                     costs,

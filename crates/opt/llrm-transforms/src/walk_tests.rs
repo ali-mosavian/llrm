@@ -2906,7 +2906,7 @@ fn priced_depth(
                 .find(|(_, global, _)| global.name.as_deref() == Some(name))
                 .map(|(id, _, _)| id)
                 .unwrap();
-            let frequencies = crate::walk::self_calls(module, &program.layout, id, false).expect("a tree");
+            let frequencies = crate::walk::self_calls(module, &program.layout, &program.target, id, false).expect("a tree");
             let tti = program.target.tti().expect("a cost model");
             depth = crate::walk::priced_copy_depth(
                 module,
@@ -3350,7 +3350,7 @@ fn is_tree(
                 .find(|(_, global, _)| global.name.as_deref() == Some(name))
                 .map(|(id, _, _)| id)
                 .unwrap();
-            tree = crate::walk::self_calls(module, &program.layout, id, false).is_some();
+            tree = crate::walk::self_calls(module, &program.layout, &program.target, id, false).is_some();
             Ok::<(), String>(())
         },
     )

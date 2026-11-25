@@ -111,7 +111,7 @@ impl ProgramPass for ModuleIpo {
         if self.tail_recursion {
             for at in 0..count {
                 for &id in &private[at] {
-                    if crate::tailcallelim::eliminate_linear_recursion(&mut program.modules[at], &program.layout, id) {
+                    if crate::tailcallelim::eliminate_linear_recursion(&mut program.modules[at], &program.layout, &program.target, id) {
                         modules[at].changed(id);
                         changed = true;
                     }
@@ -154,6 +154,7 @@ impl ProgramPass for ModuleIpo {
                     crate::ipacp::cloned(
                         module,
                         &program.layout,
+                        &program.target,
                         &procedures[at],
                         &private[at],
                         &costs,
@@ -476,7 +477,7 @@ impl ProgramPass for Walk {
                         // a body within the callee cap
                         // waits: one above it gets no
                         // copies, so its elimination stays at the pin's slot.
-                        let tree = self_calls(module, &program.layout, id, self.inline.single);
+                        let tree = self_calls(module, &program.layout, &program.target, id, self.inline.single);
                         if llrm_support::debug::enabled("recursion")
                             && let (Some(tti), true) = (tti.as_deref(), tree.is_some())
                         {
@@ -1256,10 +1257,11 @@ impl ProgramPass for Walk {
 pub(crate) fn self_calls(
     module: &mut Module,
     layout: &llrm_mir::datalayout::DataLayout,
+    target: &std::rc::Rc<dyn llrm_mir::target::Machine>,
     id: GlobalId,
     for_size: bool,
 ) -> Option<llrm_support::hash::SparseIdMap<llrm_mir::module::InstId, f64>> {
-    self_calls_from(module, layout, id, for_size, 2)
+    self_calls_from(module, layout, target, id, for_size, 2)
 }
 
 /// `self_calls` with `fewest` distinct self calls: one for a body whose
@@ -1267,6 +1269,7 @@ pub(crate) fn self_calls(
 pub(crate) fn self_calls_from(
     module: &mut Module,
     layout: &llrm_mir::datalayout::DataLayout,
+    target: &std::rc::Rc<dyn llrm_mir::target::Machine>,
     id: GlobalId,
     for_size: bool,
     fewest: usize,
@@ -1305,7 +1308,7 @@ pub(crate) fn self_calls_from(
     // `f(n - 1) + n`: +3.7% clocks copied); one it cannot (`1 + f(n - 1) +
     // pad[0]`, a frame) is copied. After a tail-call elimination made before
     // the copies (`fewest` 1) the loop's own call is not a recursion either.
-    if linear && (fewest != 2 || !crate::tailcallelim::eliminated_self_calls(module, layout, id).is_empty()) {
+    if linear && (fewest != 2 || !crate::tailcallelim::eliminated_self_calls(module, layout, target, id).is_empty()) {
         return None;
     }
     Some(frequencies)
@@ -1548,7 +1551,7 @@ impl SelfInline {
                     (self.simplify)(module, &mut modules[at], id, "tre-first.");
                 }
                 let frequencies =
-                    self_calls_from(module, &program.layout, id, self.for_size, if tre_first { 1 } else { 2 }).filter(
+                    self_calls_from(module, &program.layout, &program.target, id, self.for_size, if tre_first { 1 } else { 2 }).filter(
                         |_| {
                             let bar = edge_growth_bar(program.target.tti().as_deref(), self.o3);
                             let body = module.global(id).function().expect("a marked function");

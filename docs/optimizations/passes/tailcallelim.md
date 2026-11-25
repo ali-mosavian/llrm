@@ -59,8 +59,11 @@ DEVIATE (anything MIR or Rust lacks):
     s` is a loop; the pin keeps the recursion. Only where the copied
     operation reads the call's result and has no other use. Per target
     (`Tti::eliminates_accumulator_through_join`): on where GCC is in the
-    bar (m68k, x86, arm64, 6502, z80); off for wasm, whose bar is the pin
-    alone (`recursive_stack_args` O2 388 B against 165, 2026-11-22).
+    bar (m68k, x86, arm64, 6502); off for wasm, whose bar is the pin
+    alone (`recursive_stack_args` O2 388 B against 165, 2026-11-22), and
+    for z80, where the loop's frame copies cost more than the call's pushes
+    (`recursive_stack_args` Os 634 B against 374). The early elimination
+    before ipa-cp (TRE-IPA) asks the same hook of the program's target.
 
 ## Example
 `sumto(n, x) = n == 0 ? x : sumto(n - 1, x + n)` becomes a loop that
