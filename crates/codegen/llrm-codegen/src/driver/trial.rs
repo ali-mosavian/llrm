@@ -515,10 +515,12 @@ fn leaf_fold_trial(options: &Options) -> bool {
     options.cpu().is_ok_and(|cpu| cpu.size) && options.arch.leaf_fold_at_size()
 }
 
-/// Whether a function of `module` is over `Tuning::trial_insts_max`: the -Os
-/// dimensions re-run the mid-end over the whole module, so a module with a
-/// function this large is built once (the size bound m68k's backend trials
-/// have, read on the module's own IR).
+/// Whether a function of `module` is over `Tuning::trial_insts_max` (read
+/// through `Tti::trial_insts_max`, as the arm64 and m68k caps are). Those cap
+/// one function's own trial builds; an -Os dimension here re-runs the mid-end
+/// over the whole module, so the bound is module-wide: any function over it
+/// leaves the module no -Os dimension, and it is built once. Read on the
+/// module's own IR.
 fn over_trial_cap(
     module: &llrm_mir::module::Module,
     options: &Options,

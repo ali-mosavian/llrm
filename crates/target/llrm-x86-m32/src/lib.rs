@@ -121,10 +121,10 @@ fn tuning(costs: &llrm_mir::target::OperationCosts) -> llrm_mir::target::Tuning 
         // DEVIATE TRIAL-CAP-M32 (owner llrm-target-x86-m32, exit 2026-12-20):
         // the pin builds once. A module with a function of more than
         // `TRIAL_INSTS_MAX` IR instructions takes no -Os trial: each re-runs
-        // the mid-end over all of it (d_faces -Os: 4.3x the compile time,
-        // 5,215 B against 5,111 B). 208 files of tests/run/c and QB -Os: only
-        // d_faces and d_faces_norefresh change, +0.087% bytes; 5000 and
-        // 10000 change nothing.
+        // the mid-end over all of it (such a module: 4.3x the compile time,
+        // +2% bytes). 208 files of tests/run/c and QB at -Os: two modules
+        // change, +0.087% bytes in all; caps of 5000 and 10000 change
+        // nothing.
         trial_insts_max: Some(TRIAL_INSTS_MAX),
         inline_threshold_o2: Some(125),
         // DEVIATE MEMSET-PATTERN-SPEED (owner w10, exit 2026-11-24): fill_nest

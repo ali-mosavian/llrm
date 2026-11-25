@@ -6588,8 +6588,8 @@ fn the_os_trials_compile_each_dimension_against_the_base_once() {
     assert!(selections <= 6, "{selections} selections of two functions: more than three compiles");
 }
 
-/// TRIAL-CAP-M32: d_faces -Os (a 2,000+ instruction function beside a rotated
-/// loop) ran the -Os trials, each a mid-end over the whole module: 4.3x the
+/// TRIAL-CAP-M32: -Os on a module with a 2,000+ instruction function beside a rotated loop
+/// ran the -Os trials, each a mid-end over the whole module: 4.3x the
 /// compile time of the one build. A module with a function over
 /// `TRIAL_INSTS_MAX` is built once: fewer selections than the same module with
 /// a small second function.
