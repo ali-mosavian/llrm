@@ -758,23 +758,47 @@ pub fn object_flagged(
     let backend = Options { code_model: model, ..default_backend(level) };
     let lowered = lowered(text, cpu, level, dump, policy, backend)?;
     let module = lowered.module;
-    let backend = Options { code_model: model_of(&module, model)?, ..backend };
-    let mut items = Vec::new();
-    let mut exports = llrm_support::hash::HashMap::default();
-    for (function_name, one) in function_items(&module, cpu, backend, lowered.kept.as_ref())? {
-        let global = module.global(module.named(&function_name).ok_or("a function with no global")?);
-        exports.insert(function_name, llrm_mir::image::Export::of(global.linkage));
-        items.extend(one);
-    }
+    let long_branches = cpu.at_least(Cpu::M68020);
     let layout =
         llrm_mir::datalayout::DataLayout::parse(module.datalayout.as_deref().ok_or("a module with no datalayout")?)?;
-    let variables = crate::data::with_constructors(llrm_mir::image::variables_with_blocks(
+    let variables = llrm_mir::image::variables_with_blocks(
         &module,
         &layout,
         &|name| crate::data::symbol(name),
         Some(&llrm_codegen::backend::blockaddress::symbol),
-    )?)?;
-    crate::elf::relocatable_with_branches(name, &items, &exports, &variables, cpu.at_least(Cpu::M68020))
+    )?;
+    let data_bytes = variables.iter().map(|one| one.bytes.len()).sum();
+    let variables = crate::data::with_constructors(variables)?;
+    let build = |settled: CodeModel| -> Result<llrm_object::Object, String> {
+        let backend = Options { code_model: settled, ..backend };
+        let mut items = Vec::new();
+        let mut exports = llrm_support::hash::HashMap::default();
+        for (function_name, one) in function_items(&module, cpu, backend, lowered.kept.as_ref())? {
+            let global = module.global(module.named(&function_name).ok_or("a function with no global")?);
+            exports.insert(function_name, llrm_mir::image::Export::of(global.linkage));
+            items.extend(one);
+        }
+        crate::elf::object_with_branches(name, &items, &exports, &variables, long_branches)
+    };
+    let mut settled = model.resolved(data_bytes);
+    let mut object = build(settled)?;
+    // Auto assumes the globals sit within a 16-bit displacement of the code
+    // that names them, and the code is in front of them: the module's `.text`
+    // counts with its data. Known only once compiled, so a module whose text
+    // and data together pass the reach is built again with absolute data.
+    if model == CodeModel::Auto
+        && settled == CodeModel::Small
+        && text_bytes(&object) + data_bytes > CodeModel::SMALL_REACH
+    {
+        settled = CodeModel::Medium;
+        object = build(settled)?;
+    }
+    crate::elf::write(&object).map_err(|error| error.0)
+}
+
+/// The bytes of `.text` of `object`.
+fn text_bytes(object: &llrm_object::Object) -> usize {
+    object.sections.iter().filter(|section| section.name == ".text").map(|section| section.image.len()).sum()
 }
 
 /// The compare routines of the platform's C library, by their IR names:
