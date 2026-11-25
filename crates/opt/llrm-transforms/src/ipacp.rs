@@ -252,7 +252,9 @@ pub fn cloned(
     let mut tails: BTreeMap<GlobalId, IdSet<InstId>> = BTreeMap::new();
     for &(name, _) in groups.keys().collect::<BTreeSet<_>>() {
         if recursive.contains(&name) {
-            tails.entry(name).or_insert_with(|| crate::tailcallelim::eliminated_self_calls(module, layout, target, name));
+            tails
+                .entry(name)
+                .or_insert_with(|| crate::tailcallelim::eliminated_self_calls(module, layout, target, name));
         }
     }
     for ((name, known), sites) in groups {

@@ -536,8 +536,8 @@ fn a_call_result_added_after_a_join_is_a_loop() {
     assert!(after.contains("tailrecurse"), "{after}");
 }
 
-/// The early elimination (`eliminate_linear_recursion`, before ipa-cp) built its
-/// pass state with no target, so a target that keeps the joined recursion
+/// The early elimination (`eliminate_linear_recursion`, before ipa-cp) built
+/// its pass state with no target, so a target that keeps the joined recursion
 /// (`Tti::eliminates_accumulator_through_join` false) still got the loop: z80
 /// `recursive_stack_args` -Os ran 634 B / 8,539 T against 374 B / 6,271 T for
 /// the recursion, SDCC's 331 B / 7,302 T.
@@ -548,7 +548,12 @@ fn the_early_elimination_asks_the_target_for_the_joined_recursion() {
         let target = std::rc::Rc::new(Tuned { keeps_joined_recursion: keeps, ..Default::default() });
         llrm_mir::program::Program::lend(&mut module, target, |program| {
             let id = program.modules[0].named("f").unwrap();
-            crate::tailcallelim::eliminate_linear_recursion(&mut program.modules[0], &program.layout, &program.target, id)
+            crate::tailcallelim::eliminate_linear_recursion(
+                &mut program.modules[0],
+                &program.layout,
+                &program.target,
+                id,
+            )
         })
         .expect("the program runs")
     };
