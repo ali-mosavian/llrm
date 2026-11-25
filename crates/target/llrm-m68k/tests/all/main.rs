@@ -184,6 +184,7 @@ mod large_frame_reach;
 mod last_call_cold;
 mod latch_flags;
 mod lea_add;
+mod live_out_info;
 mod lftr_budget;
 mod lftr_cpu;
 mod lftr_one_op;
