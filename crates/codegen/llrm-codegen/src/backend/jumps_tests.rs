@@ -2249,6 +2249,42 @@ fn visits_threading_passages(cases: i64) -> usize {
     super::branchfold::VISITS.with(|one| one.get())
 }
 
+/// A dispatch replicated into every handler (`exec.c`: 250 handlers each ending
+/// in a jump through the same table) asks `hasSameSuccessors` of each pair, and
+/// each test scanned the successor list for every successor: `lir jumps` 16.3 G
+/// of 24.2 G. The pin keeps the successors in a set: one probe each, so a test
+/// costs the successors it has, not their square.
+#[test]
+fn placing_replicated_dispatch_tests_each_handler_pair_in_linear_probes() {
+    let probes = |handlers: i64| {
+        let ids: Vec<i64> = (0..handlers).map(|one| 100 + 10 * one).collect();
+        let mut blocks = vec![block(1, vec![_jump(1, ids[0])], vec![ids[0]])];
+        for &at in &ids {
+            let others: Vec<i64> = ids.iter().copied().filter(|&one| one != at).collect();
+            let table = Semantics {
+                name: Some("jmp".into()),
+                sources: vec![bx()],
+                indirect: true,
+                table: others.clone(),
+                ..Semantics::new(Operation::Jump)
+            };
+            let dispatch = Arc::new(Insn::new(at + 1, Some((at + 1, at + 1)), Some(table), Vec::new(), Vec::new()));
+            blocks.push(block(at, vec![_move(at, imm(at)), dispatch], others));
+        }
+        super::placement::SUCCESSOR_PROBES.with(|one| one.set((0, 0)));
+        let mut dispatch = body("f", 1, blocks.into_iter().collect());
+        dispatch.address_symbols =
+            Arc::new(ids.iter().map(|&at| (at, format!("L{at}"))).collect::<std::collections::BTreeMap<_, _>>());
+        _placed(&dispatch, false, true, Some(8), None, 0).unwrap();
+        super::placement::SUCCESSOR_PROBES.with(|one| one.get())
+    };
+    for handlers in [24, 96] {
+        let (calls, probes) = probes(handlers);
+        assert!(calls > 0, "premise: the dispatch is asked");
+        assert!(probes <= calls * (handlers as usize + 1), "{probes} probes in {calls} tests at {handlers} handlers");
+    }
+}
+
 /// A table jump to one passage in several entries freed the passage once for
 /// each, and its edge to the exit was taken off the count each time: the
 /// count wrapped, the exit was thought unentered and removed while a block
