@@ -160,6 +160,9 @@ pub enum Address {
     /// The frame object a `LEA32p` (the instruction at this index) addressed:
     /// the displacement is known only when the push is placed.
     Frame(usize),
+    /// The PC-relative symbol address a `LEA32q` (the instruction at this
+    /// index) made.
+    Symbol(usize),
 }
 
 /// One call sequence with a plan to make: where it is, how big, and the two
@@ -302,6 +305,14 @@ pub fn address_push(
         opcode: crate::dagisel::pea::DISPLACED,
         operands: vec![mc::Operand::Imm(offset), mc::Operand::Reg(base)],
     }
+}
+
+/// `pea (symbol,%pc)`.
+pub fn symbol_push(
+    name: &str,
+    addend: i64,
+) -> mc::Inst {
+    mc::Inst { opcode: crate::dagisel::pea::PC_RELATIVE, operands: vec![mc::Operand::Symbol(name.to_owned(), addend)] }
 }
 
 /// The push that reads what the load `load` reads: `move.l (4,%a0), %d1` is
@@ -620,19 +631,56 @@ fn frame_address_of(
     src: llrm_lir::registers::RegId,
     reach: bool,
 ) -> Option<usize> {
+    reach
+        .then(|| {
+            lea_pushed(insts, assignment, blocks, store, src, |lea| {
+                matches!(
+                    (lea.kind, &lea.operands[..]),
+                    (Kind::Op("LEA32p"), [Operand::Def(_), Operand::Imm(_), Operand::Frame(_)])
+                )
+            })
+        })
+        .flatten()
+}
+
+/// The `lea (d,%pc), An` of a symbol that is the value of store `store` and
+/// nothing else reads: `pea (d,%pc)` pushes the same address in 4 bytes.
+fn symbol_address_of(
+    insts: &[&Inst],
+    assignment: &Assignment,
+    blocks: &[usize],
+    store: usize,
+    src: llrm_lir::registers::RegId,
+) -> Option<usize> {
+    lea_pushed(insts, assignment, blocks, store, src, |lea| {
+        matches!(
+            (lea.kind, &lea.operands[..]),
+            (Kind::Op("LEA32q"), [Operand::Def(_), Operand::Symbol(..)])
+        )
+    })
+}
+
+/// The `lea` (one `accepts`) whose address register is the value of store
+/// `store` and nothing else reads.
+fn lea_pushed(
+    insts: &[&Inst],
+    assignment: &Assignment,
+    blocks: &[usize],
+    store: usize,
+    src: llrm_lir::registers::RegId,
+    accepts: impl Fn(&Inst) -> bool,
+) -> Option<usize> {
     let root = REGISTER_INFO.root(src);
-    if !reach || ![reg::D0, reg::D1, reg::A0, reg::A1].iter().any(|scratch| REGISTER_INFO.root(*scratch) == root) {
+    if ![reg::D0, reg::D1, reg::A0, reg::A1].iter().any(|scratch| REGISTER_INFO.root(*scratch) == root) {
         return None;
     }
     let lea = (0..store)
         .rev()
         .take_while(|&i| blocks[i] == blocks[store] && !insts[i].call && insts[i].kind != Kind::Op("ADJCALLSTACKUP"))
         .find(|&i| defines(insts[i], src, assignment))?;
-    let (Kind::Op("LEA32p"), [Operand::Def(_), Operand::Imm(_), Operand::Frame(_)]) =
-        (insts[lea].kind, &insts[lea].operands[..])
-    else {
+    if !accepts(insts[lea]) {
         return None;
-    };
+    }
     // the push can wait for the call: nothing may touch the register between
     let touched = insts[lea + 1..store]
         .iter()
@@ -769,6 +817,10 @@ fn sequences(
                         frame_address_of(insts, assignment, blocks, store, src, frame_reach)
                             .map(|lea| (vec![lea], Address::Frame(lea)))
                     })
+                    .or_else(|| {
+                        symbol_address_of(insts, assignment, blocks, store, src)
+                            .map(|lea| (vec![lea], Address::Symbol(lea)))
+                    })
                 else {
                     continue;
                 };
@@ -787,11 +839,15 @@ fn sequences(
                     );
                 // a frame displacement is priced as 16 bits: `frame_reach` says
                 // it is
-                let (base, offset) = match address {
-                    Address::Register(base, offset) => (base, offset),
-                    Address::Frame(_) => (reg::SP, 0),
+                let pea_inst = match address {
+                    Address::Register(base, offset) => address_push(base, offset),
+                    Address::Frame(_) => address_push(reg::SP, 0),
+                    Address::Symbol(lea) => {
+                        let Some(Operand::Symbol(name, addend)) = insts[lea].operands.get(1) else { continue };
+                        symbol_push(name, *addend)
+                    }
                 };
-                if let (Some(made), Ok(pea)) = (made, cost(&address_push(base, offset), cpu))
+                if let (Some(made), Ok(pea)) = (made, cost(&pea_inst, cpu))
                     && cheaper(pea, add(made, pushed), price, cpu)
                 {
                     addressed.insert(store, (producers, address, made, pea));

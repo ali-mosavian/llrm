@@ -41,7 +41,9 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
         }
         // Fold sign-extension masks using an arithmetic shift.
         let tli = self.tli?;
-        let bits = vt.size_in_bits();
+        // The sign bit and the shift amounts are the lane's:
+        // `getScalarSizeInBits`.
+        let bits = if vt.is_vector() { vt.element().size_in_bits() } else { vt.size_in_bits() };
         let mask = super::fold::mask(bits);
         if tli.types.is_type_legal(vt) && matches!(vt, EVT::Simple(_)) {
             let expand = |op| tli.operation_action(op, vt) == super::actions::Action::Expand;
