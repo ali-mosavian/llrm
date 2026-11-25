@@ -210,11 +210,39 @@ pub struct Threshold {
     /// -O3 where it states bounds, else off); DEVIATE (recursion),
     /// docs/architecture/recursion-rows.md.
     pub recursive: Option<bool>,
+    /// The pass runs at -O1: the level a target's per-level bar is read for,
+    /// whatever the target's deviations (`speed_rate_at_o1`) do to the rest.
+    pub at_o1: bool,
 }
 
 impl Threshold {
     pub fn new(limit: i64) -> Self {
-        Self { limit, single: false, min_size: false, last: true, cp_clone: None, cp_hint_clones: true, cp_peel_limited: false, cp_max_clones: crate::ipacp::DEFAULT_MAX_CLONES, recursive: None }
+        Self {
+            limit,
+            single: false,
+            min_size: false,
+            last: true,
+            cp_clone: None,
+            cp_hint_clones: true,
+            cp_peel_limited: false,
+            cp_max_clones: crate::ipacp::DEFAULT_MAX_CLONES,
+            recursive: None,
+            at_o1: false,
+        }
+    }
+
+    /// The -O level (1, 2, 3) of a speed caller, the pin's
+    /// `getInlineParamsFromOptLevel` argument; none for a size caller.
+    pub fn level(self) -> Option<u8> {
+        if self.caller_size() != crate::inlinecost::CallerSize::Speed {
+            None
+        } else if self.at_o1 {
+            Some(1)
+        } else if self.limit >= 250 {
+            Some(3)
+        } else {
+            Some(2)
+        }
     }
 
     /// Nothing inlines, the last call of a function included.
