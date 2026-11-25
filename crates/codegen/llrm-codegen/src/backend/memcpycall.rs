@@ -54,11 +54,18 @@ pub(crate) fn stored_bytes(length: i64) -> i64 {
 /// memory operation covering `size` bytes, the widest being `i32`; `None` past
 /// `limit` operations. A last operation wider than the bytes left overlaps the
 /// one before it.
+///
+/// DEVIATE MEMCPY-EXACT-TAIL (owner x87, exit 2026-12-31): the pin overlaps
+/// only where the next narrower type cannot cover the rest (`NewVTSize <
+/// Size`); with `exact_tail` it also overlaps where that type covers it
+/// exactly (6 bytes: `i32` at 0 and 2, not `i32` and `i16`), so a later load
+/// straddling the split still forwards from one store.
 pub(crate) fn inline_widths(
     size: u64,
     widest: u64,
     limit: usize,
     volatile: bool,
+    exact_tail: bool,
 ) -> Option<Vec<u64>> {
     let (mut left, mut width) = (size, widest);
     let mut ops = Vec::new();
@@ -66,7 +73,7 @@ pub(crate) fn inline_widths(
         let mut taken = width;
         while taken > left {
             let narrower = width / 2;
-            if !ops.is_empty() && !volatile && narrower < left {
+            if !ops.is_empty() && !volatile && (narrower < left || (exact_tail && narrower == left && narrower > 1)) {
                 // a misaligned access is fast on x86: overlap the previous
                 // bytes
                 taken = left;
@@ -221,7 +228,7 @@ fn calls(
         let at_size =
             llrm_mir::memory::has(&function.attrs, "optsize") || llrm_mir::memory::has(&function.attrs, "minsize");
         let limit = if at_size { 4 } else { 8 };
-        if u64::try_from(bytes).is_ok_and(|bytes| inline_widths(bytes, widest, limit, volatile).is_some()) {
+        if u64::try_from(bytes).is_ok_and(|bytes| inline_widths(bytes, widest, limit, volatile, false).is_some()) {
             return false;
         }
         // DEVIATE REP-MOVS-SPEED (`Tuning::rep_movs_at_speed_max`): at speed,

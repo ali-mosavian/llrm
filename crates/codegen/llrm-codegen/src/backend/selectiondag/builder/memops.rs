@@ -603,8 +603,8 @@ impl Builder<'_> {
     ) -> u64 {
         let tuning = &self.target.tuning;
         let limit = if opt_size { tuning.max_stores_per_memcpy_opt_size } else { tuning.max_stores_per_memcpy };
-        let Some(first) = Self::mem_ops(size, self.widest_mem_op_sse(size, false), limit, self.volatile_memory)
-            .and_then(|ops| ops.first().copied())
+        let Some(first) =
+            self.copy_ops(size, self.widest_mem_op_sse(size, false), limit).and_then(|ops| ops.first().copied())
         else {
             return align;
         };
@@ -623,7 +623,19 @@ impl Builder<'_> {
         limit: usize,
         volatile: bool,
     ) -> Option<Vec<u64>> {
-        inline_widths(size, widest, limit, volatile)
+        inline_widths(size, widest, limit, volatile, false)
+    }
+
+    /// [`Self::mem_ops`] of a copy, whose tail overlaps where the target says
+    /// so (`Tti::overlapping_copy_tail`).
+    fn copy_ops(
+        &self,
+        size: u64,
+        widest: u64,
+        limit: usize,
+    ) -> Option<Vec<u64>> {
+        let exact = self.target.tti.as_ref().is_some_and(|tti| tti.0.overlapping_copy_tail());
+        inline_widths(size, widest, limit, self.volatile_memory, exact)
     }
 
     /// The address space an access through `ptr` is in: a far pointer's
@@ -659,12 +671,15 @@ impl Builder<'_> {
     ) -> Result<Option<SDValue>, Refused> {
         let slice = if self.volatile_memory { None } else { self.constant_slice(src) };
         let widest = self.widest_mem_op_sse(size, slice.is_some());
-        let Some(ops) = Self::mem_ops(size, widest, limit, self.volatile_memory) else { return Ok(None) };
+        let Some(ops) = self.copy_ops(size, widest, limit) else { return Ok(None) };
         let (mut src_off, mut dst_off, mut left) = (0u64, 0u64, size);
         let mut chains = Vec::new();
         let mut order = chain;
+        let mut last_store = None;
+        let ordered_tail = self.target.tti.as_ref().is_some_and(|tti| tti.0.overlapping_copy_tail());
         for width in ops {
-            if width > left {
+            let overlapped = width > left;
+            if overlapped {
                 src_off -= width - left;
                 dst_off -= width - left;
             }
@@ -739,7 +754,16 @@ impl Builder<'_> {
                 space: self.space_of(dst),
                 ordering: None,
             };
-            let store = self.dag.get_store(order, value, to, info);
+            // DEVIATE MEMCPY-EXACT-TAIL: an overlapping tail is stored after
+            // the piece it overlaps, so a load of the pair reads
+            // the tail from one store (the pin leaves the two
+            // stores unordered).
+            let chain_in = match (overlapped && ordered_tail, last_store) {
+                (true, Some(previous)) => previous,
+                _ => order,
+            };
+            let store = self.dag.get_store(chain_in, value, to, info);
+            last_store = Some(store);
             if self.target.ordered_copies {
                 order = store;
             }
