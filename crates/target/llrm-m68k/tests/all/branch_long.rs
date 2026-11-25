@@ -3,7 +3,8 @@
 //! writer refused it ("a value of 40004 does not fit its 2-byte field"), which
 //! QB `synth.c` (55,890 B) hit before #10723 shrank it. The 68000 has no
 //! 32-bit branch; the pin's `fixupNeedsRelaxationAdvanced` is unreachable
-//! there, and here too the object stays refused.
+//! there: the branch becomes `jmp (xxx).l` under the opposite condition
+//! (`far_branch`), where it used to be refused.
 
 use llrm_m68k::compile::Item;
 use llrm_m68k::driver::{self, Level, cpu_of};
@@ -30,9 +31,11 @@ fn a_branch_over_32_kib_takes_the_32_bit_form_on_the_68020() {
 }
 
 #[test]
-fn the_68000_keeps_refusing_a_branch_over_32_kib() {
-    let error = relocatable_with_branches("far", &far_branch(), &HashMap::default(), &[], false).unwrap_err();
-    assert!(error.contains("does not fit"), "{error}");
+fn a_branch_over_32_kib_is_a_jump_under_the_opposite_condition_on_the_68000() {
+    let object = relocatable_with_branches("far", &far_branch(), &HashMap::default(), &[], false).expect("relaxes");
+    // `beq.s` over the jump (0x6706), then `jmp (xxx).l` (0x4ef9)
+    let found = object.windows(4).any(|window| window == [0x67, 0x06, 0x4e, 0xf9]);
+    assert!(found, "no beq.s over jmp.l in the object");
 }
 
 #[test]
