@@ -49,12 +49,12 @@ fn a_cheap_divide_by_a_power_of_two_is_still_a_shift() {
 #[test]
 fn an_exact_divide_by_a_constant_is_a_multiply_where_divides_are_cheap() {
     let build = |exact_div_inverse: bool, exact: bool| {
-        let tli = TargetLowering::x86_16(Features::default(), MVT::I16);
+        let tli = TargetLowering::x86_32(Features::default(), MVT::I32);
         let mut dag = SelectionDAG::new(DagConfig { int_div_cheap: true, exact_div_inverse, ..DagConfig::default() });
-        let x = dag.get_register(EVT::I16, 5);
-        let divisor = dag.get_constant(36, EVT::I16);
+        let x = dag.get_register(EVT::I32, 5);
+        let divisor = dag.get_constant(36, EVT::I32);
         let flags = if exact { SDNodeFlags::EXACT } else { SDNodeFlags::default() };
-        let divide = dag.get_node_flags(ISD::SDiv, EVT::I16, &[x, divisor], flags);
+        let divide = dag.get_node_flags(ISD::SDiv, EVT::I32, &[x, divisor], flags);
         dag.set_root(divide);
         DagCombiner::new(&mut dag, &mut NoCombines, CombineLevel::BeforeLegalizeTypes).with_tli(&tli).run();
         let root = dag.get_root();

@@ -195,10 +195,11 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
         // bytes than the divide's `mov`, `cdq`, `div` (a pointer difference of
         // 36-byte elements: `sar`, `imul` 9 B against 8) and a multiply for the
         // divide's ~40 clocks on a 486. gcc and clang (-Os) make it. Needs a
-        // legal multiply.
+        // legal multiply; 32 bits and wider (the 16-bit sequence is unmeasured).
         if config.exact_div_inverse
             && self.dag.node(node).flags.0 & SDNodeFlags::EXACT.0 != 0
             && !vt.is_vector()
+            && vt.size_in_bits() >= 32
             && self.dag.constant(n1).is_some_and(|c| c > 1)
             && self.tli.is_some_and(|tli| tli.is_operation_legal_or_custom(ISD::Mul, vt))
         {
