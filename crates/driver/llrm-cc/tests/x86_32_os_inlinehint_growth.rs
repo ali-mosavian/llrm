@@ -37,11 +37,14 @@ fn a_hinted_callee_that_grows_the_object_stays_one_copy_at_os() {
     );
 }
 
+/// The six calls cost 46 clocks of 193 (+24%, past the 2% cap that put the
+/// copies back) and save 295 B: a clock for every six bytes. INLINE-HINT-RATE
+/// keeps the calls where the work added is at most a clock a byte saved.
 #[test]
-fn entries_that_each_run_once_do_not_keep_the_calls_for_bytes() {
+fn entries_that_each_run_once_keep_the_calls_for_bytes() {
     let text = listing("m32_os_inlinehint_growth_lib.c");
     let calls = text.lines().filter(|line| line.contains("call") && line.contains("lead_zeros")).count();
-    assert_eq!(calls, 0, "six calls kept (+46 clocks of 193) past the 2% clock cap:\n{text}");
+    assert_eq!(calls, 6, "the six copies were kept (-295 B for +46 clocks):\n{text}");
 }
 
 #[test]
