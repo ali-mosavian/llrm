@@ -282,7 +282,7 @@ fn test_a_block_with_an_immediate_constraint_runs() {
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
-    for level in ["-O1", "-O2", "-Os"] {
+    for level in ["-O0", "-O1", "-O2", "-Os"] {
         let object = dir.join(format!("imm{level}.o"));
         let built = Command::new(env!("CARGO_BIN_EXE_llrm-cc-bin"))
             .env("LLRM_CC_TARGET", "x86_64-linux")
