@@ -17,7 +17,9 @@
 
 use llrm_codegen::backend::registerinfo::RegId;
 use llrm_codegen::backend::selectiondag::SelectionDAG;
-use llrm_codegen::backend::selectiondag::dag_target::{DagTarget, Phases, Select, select_units};
+use llrm_codegen::backend::selectiondag::dag_target::{DagTarget, FrameObjects, Phases, Select, select_units};
+use llrm_codegen::backend::selectiondag::function_lowering::FunctionLoweringInfo;
+use llrm_codegen::backend::selectiondag::live_out;
 use llrm_codegen::backend::selectiondag::dagisel_adapter::PinRegisters;
 use llrm_codegen::backend::selectiondag::isd::ISD;
 use llrm_codegen::backend::selectiondag::mvt::EVT;
@@ -231,6 +233,7 @@ pub fn select_block(
         Default::default(),
         &[],
         &mut Temporaries::new(0),
+        None,
     )
 }
 
@@ -292,6 +295,7 @@ pub fn select_block_with(
     mul: super::mulprice::Chain,
     libcalls: &[crate::libcalls::Kind],
     frame: &mut Temporaries,
+    live: Option<&mut FunctionLoweringInfo>,
 ) -> Result<Vec<Unit>, Refusal> {
     let tli = lowering_for(cpu, carry_chain, libcalls, price == crate::timing::Price::Size);
     let mut lowering = M68kLowering {
@@ -312,6 +316,7 @@ pub fn select_block_with(
         lowering: &mut lowering,
         chooser: M68kChooser { selector: &selector, hooks: M68kHooks::new(cpu, false), free_any_extend: short },
         short,
+        live,
     };
     select_units(dag, &mut target, &M68kSched { source_order }, frame).map_err(|why| match why {
         llrm_codegen::backend::selectiondag::dag_select::Refusal::Legalize(why) => Refusal::Legalize(why),
@@ -324,6 +329,9 @@ struct M68kTarget<'a> {
     lowering: &'a mut M68kLowering,
     chooser: M68kChooser<'a>,
     short: bool,
+    /// What the blocks before this one said of the registers they copied out
+    /// (`FunctionLoweringInfo::LiveOutRegInfo`).
+    live: Option<&'a mut FunctionLoweringInfo>,
 }
 
 struct M68kChooser<'a> {
@@ -354,6 +362,28 @@ impl DagTarget for M68kTarget<'_> {
 
     fn phases(&mut self) -> Phases<'_, M68kLowering> {
         Phases { tli: self.tli, lowering: &mut *self.lowering, arch: Some(&M68k), opt_none: false }
+    }
+
+    /// `getCopyFromRegs`: a register the earlier blocks said something about
+    /// is read back asserted.
+    fn prepare(
+        &mut self,
+        dag: &mut SelectionDAG,
+    ) {
+        if let Some(live) = &self.live {
+            live_out::assert_live_out_copies(dag, live);
+        }
+    }
+
+    /// `ComputeLiveOutVRegInfo`, after the last combine.
+    fn preprocess(
+        &mut self,
+        dag: &mut SelectionDAG,
+        _temporaries: &mut dyn FrameObjects,
+    ) {
+        if let Some(live) = &mut self.live {
+            live_out::compute_live_out_vreg_info(dag, live);
+        }
     }
 
     fn selection(&mut self) -> (&dyn PinRegisters, &mut dyn Select) {
