@@ -133,6 +133,6 @@ fn test_accesses_around_an_asm_block_are_not_paired_across_it() {
             Command::new("aarch64-linux-gnu-gcc").arg("-static").arg("-o").arg(&program).arg(&object).output().unwrap();
         assert!(linked.status.success(), "{level}: {}", String::from_utf8_lossy(&linked.stderr));
         let ran = Command::new("qemu-aarch64").arg(&program).output().unwrap();
-        assert_eq!(String::from_utf8_lossy(&ran.stdout), "111 6 5\n", "{level}");
+        assert_eq!(String::from_utf8_lossy(&ran.stdout), "111 6 5 7\n", "{level}");
     }
 }

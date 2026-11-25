@@ -14,9 +14,15 @@ __attribute__((noinline)) void stores(long *p, long v) {
   p[1] = v;
 }
 
+/* A tied input (`+r`): 3 + 4 was not 7 at -O0. */
+__attribute__((noinline)) int add1(int x, int y) {
+  __asm__("add %w0, %w0, %w1" : "+r"(x) : "r"(y));
+  return x;
+}
+
 int main(void) {
   long t[2] = {10, 100}, s[2] = {0, 0};
   stores(s, 5);
-  printf("%ld %ld %ld\n", between(t), s[0], s[1]);
+  printf("%ld %ld %ld %d\n", between(t), s[0], s[1], add1(3, 4));
   return 0;
 }
