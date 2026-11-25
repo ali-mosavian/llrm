@@ -2973,6 +2973,19 @@ pub trait Tti {
         to: Ty,
     ) -> bool;
 
+    /// `isZExtFree`: whether widening `from` to `to` by zeros costs no
+    /// instruction. Beyond the pin's loop strength reduction (llvm-mos's
+    /// `GenerateZExts` reads it): a register of an illegal width whose range
+    /// fits a narrower legal integer is kept narrow and extended at its use.
+    /// False: no formula is narrowed.
+    fn is_zext_free(
+        &self,
+        _from: Ty,
+        _to: Ty,
+    ) -> bool {
+        false
+    }
+
     /// `hasDivRemOp(iN, IsSigned)`: whether the target has one divide that
     /// makes the quotient and the remainder. The base class has none.
     fn has_div_rem_op(

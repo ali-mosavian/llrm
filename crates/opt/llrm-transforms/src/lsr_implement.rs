@@ -237,6 +237,20 @@ impl Implement<'_, '_> {
         self.se.get_unknown(&cx, v)
     }
 
+    /// llvm-mos `SE.getNoopOrZeroExtend(.., IntTy)`: an operand narrowed by
+    /// `GenerateZExts` is widened to the type the sum is done in.
+    fn widened(
+        &mut self,
+        s: Scev,
+        to: Ty,
+    ) -> Scev {
+        let cx = self.env.cx(&*self.context, &*self.function);
+        match (self.se.type_of(s), to) {
+            (Ty::Int(from), Ty::Int(wide)) if from < wide => self.se.get_noop_or_zero_extend(&cx, s, to),
+            _ => s,
+        }
+    }
+
     fn add(
         &mut self,
         ops: &[Scev],
@@ -538,6 +552,7 @@ impl Implement<'_, '_> {
             }
             let v = self.expand_register(reg, ip);
             let u = self.unknown(v);
+            let u = self.widened(u, int_ty);
             ops.push(u);
         }
 
@@ -554,6 +569,7 @@ impl Implement<'_, '_> {
                 if f.scale == 1 {
                     let v = self.expand_register(scaled_s, ip);
                     let u = self.unknown(v);
+                    let u = self.widened(u, int_ty);
                     ops.push(u);
                 } else {
                     // A negated scale is folded by putting the register in the
@@ -575,6 +591,7 @@ impl Implement<'_, '_> {
                 }
                 let v = self.expand_register(scaled_s, ip);
                 let mut s = self.unknown(v);
+                s = self.widened(s, int_ty);
                 if f.scale != 1 {
                     let cx = self.env.cx(&*self.context, &*self.function);
                     let c = self.se.get_constant_of_type(&cx, self.se.type_of(s), i128::from(f.scale));
