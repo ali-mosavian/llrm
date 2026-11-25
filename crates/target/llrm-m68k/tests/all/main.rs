@@ -3,7 +3,9 @@
 //! `tests/support` and the fixtures stay where they are.
 
 mod any_extend_shared;
+mod far_branch;
 mod far_tail_call;
+mod frame_reach_error;
 mod index_far_displacement;
 mod stack_coloring;
 mod stacksave_vla_loop;

@@ -8,7 +8,7 @@ fn price(
     bytes: i64,
     work: f64,
 ) -> Price {
-    Price { bytes, work, laid_out: work, divides: 0.0 }
+    Price { bytes, work, laid_out: work, divides: 0.0, weighted: work }
 }
 
 /// sfm16_dbg -Os (bench): `sf_clz32` inlined at six sites made the object 400 B

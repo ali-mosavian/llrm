@@ -2,16 +2,22 @@
 //!
 //! # How it works
 //! [`cheaper`] prices both builds on the CPU: bytes as they are, clocks
-//! weighted by loop depth (a backward branch to a label makes the lines
-//! between that can reach it a loop; each nesting multiplies by ten), then asks
-//! the level's [`Price`] whether the first beats the second. A price the tables
-//! cannot give keeps the second (the build without the optional pass).
+//! weighted by the control-flow graph of the items (the share of runs reaching
+//! each, times ten per natural loop it is in, at most three), then asks the
+//! level's [`Price`] whether the first beats the second. The weights do not
+//! depend on the order the blocks are laid out in. A price the tables cannot
+//! give keeps the second (the build without the optional pass).
 //!
 //! A pass whose price needs the allocation (the moves an address register
 //! costs) is decided here, by building the function both ways, instead of
 //! guessing before allocation.
 
 use std::collections::HashMap;
+
+use llrm_mir::blocklist::BlockList;
+use llrm_mir::cycleinfo::{CycleInfo, FlowGraph};
+use llrm_mir::domtree::DomGraph;
+use llrm_mir::module::BlockId;
 
 use crate::compile::Item;
 use crate::dagisel::hooks::Cpu;
@@ -44,7 +50,8 @@ fn ending(
         ("RTS", _) => Some(Ending::Return),
         (name, Some(to)) if name.starts_with("BRA") => Some(Ending::Jump(to)),
         (name, Some(to)) if name.starts_with('B') && !name.starts_with("BSR") => Some(Ending::Branch(to)),
-        // `dbf` is the loop's back edge: left out, its loop is not weighted by depth and looks ten times cheaper
+        // `dbf` is the loop's back edge: left out, its loop is not weighted by
+        // depth and looks ten times cheaper
         (name, Some(to)) if name.starts_with("DBF") => Some(Ending::Branch(to)),
         _ => None,
     }
@@ -138,43 +145,6 @@ fn mulsi3_registers(items: &[Item]) -> Vec<llrm_lir::registers::RegId> {
     loaded_registers(items, "__mulsi3")
 }
 
-/// The items of the loop headed at `header` whose back edges are at `latches`:
-/// those in the span that can reach a back edge without leaving it. The exit
-/// path laid out between two back edges (a `bra` to the code after the loop)
-/// is in the span but runs once per call, not once per trip.
-fn loop_members(
-    ends: &[Option<Ending>],
-    header: usize,
-    latches: &[usize],
-) -> Vec<bool> {
-    let last = latches.iter().copied().max().unwrap_or(header);
-    let mut member = vec![false; ends.len()];
-    for &latch in latches {
-        member[latch] = true;
-    }
-    loop {
-        let mut changed = false;
-        for at in (header..=last).rev() {
-            if member[at] {
-                continue;
-            }
-            let (first, second) = match ends[at] {
-                Some(Ending::Return) => (None, None),
-                Some(Ending::Jump(to)) => (Some(to), None),
-                Some(Ending::Branch(to)) => (Some(to), Some(at + 1)),
-                _ => (Some(at + 1), None),
-            };
-            if [first, second].into_iter().flatten().any(|next| (header..=last).contains(&next) && member[next]) {
-                member[at] = true;
-                changed = true;
-            }
-        }
-        if !changed {
-            return member;
-        }
-    }
-}
-
 fn labels_of(items: &[Item]) -> HashMap<&str, usize> {
     items
         .iter()
@@ -183,59 +153,195 @@ fn labels_of(items: &[Item]) -> HashMap<&str, usize> {
         .collect()
 }
 
-/// For each item of `items`, the share of runs that reach it (thousandths, a
-/// two-way branch splits evenly) and the loops it sits in, three at most.
-fn run_weights(items: &[Item]) -> Vec<(u64, usize)> {
-    let labels = labels_of(items);
-    // header -> its back edges: several to one label are one loop
-    let mut loops: HashMap<usize, Vec<usize>> = HashMap::new();
-    let mut ends_of: Vec<Option<Ending>> = Vec::with_capacity(items.len());
-    // the share of runs reaching each item, along forward edges only, in
-    // thousandths
-    let mut share = vec![0u64; items.len() + 1];
-    share[0] = 1000;
-    for (at, item) in items.iter().enumerate() {
-        let Item::Inst(inst) = item else {
-            // a label or a line mark passes the share on
-            share[at + 1] += share[at];
-            ends_of.push(None);
-            continue;
+/// The blocks of `items` and how each ends: a block starts at the first item,
+/// at a label, and after a branch, jump or return. Returns the block of each
+/// item and, per block, the ending of its last item with targets as blocks.
+fn blocks_of(
+    items: &[Item],
+    ends: &[Option<Ending>],
+) -> (Vec<usize>, Vec<Option<Ending>>) {
+    let mut block_of = Vec::with_capacity(items.len());
+    let mut count = 0usize;
+    let mut open = false;
+    for (item, end) in items.iter().zip(ends) {
+        if !open || matches!(item, Item::Label(_)) {
+            if open {
+                count += 1;
+            }
+            open = true;
+        }
+        block_of.push(count);
+        if end.is_some() {
+            count += 1;
+            open = false;
+        }
+    }
+    let blocks = if open { count + 1 } else { count };
+    let mut block_ends = vec![None; blocks];
+    for (at, end) in ends.iter().enumerate() {
+        let to_block = |to: usize| block_of.get(to).copied().unwrap_or(usize::MAX);
+        block_ends[block_of[at]] = match end {
+            Some(Ending::Jump(to)) => Some(Ending::Jump(to_block(*to))),
+            Some(Ending::Branch(to)) => Some(Ending::Branch(to_block(*to))),
+            other => *other,
         };
-        let ends = ending(inst, &labels);
-        ends_of.push(ends);
-        let (jump, branch) = match ends {
-            Some(Ending::Jump(to)) => (Some(to), None),
-            Some(Ending::Branch(to)) => (None, Some(to)),
-            _ => (None, None),
+    }
+    (block_of, block_ends)
+}
+
+/// The blocks as a graph: its edges are where control goes next. The loops and
+/// the shares read off this graph do not depend on the order the blocks are
+/// laid out in.
+struct ItemGraph {
+    nodes: Vec<BlockId>,
+    succs: Vec<BlockList>,
+    preds: Vec<BlockList>,
+}
+
+impl ItemGraph {
+    fn of(ends: &[Option<Ending>]) -> Self {
+        let n = ends.len();
+        let mut succs = vec![BlockList::new(); n];
+        let mut preds = vec![BlockList::new(); n];
+        let mut edge = |from: usize, to: usize| {
+            if to < n && !succs[from].contains(&BlockId(to as u32)) {
+                succs[from].push(BlockId(to as u32));
+                preds[to].push(BlockId(from as u32));
+            }
         };
-        for to in jump.into_iter().chain(branch) {
-            if to <= at {
-                loops.entry(to).or_default().push(at);
+        for (at, end) in ends.iter().enumerate() {
+            match end {
+                Some(Ending::Return) => {}
+                Some(Ending::Jump(to)) => edge(at, *to),
+                Some(Ending::Branch(to)) => {
+                    edge(at, *to);
+                    edge(at, at + 1);
+                }
+                _ => edge(at, at + 1),
             }
         }
-        match ends {
-            Some(Ending::Return) => {}
-            Some(Ending::Jump(to)) => {
-                if to > at {
+        ItemGraph { nodes: (0..n as u32).map(BlockId).collect(), succs, preds }
+    }
+}
+
+impl DomGraph for ItemGraph {
+    fn entry(&self) -> Option<BlockId> {
+        (!self.nodes.is_empty()).then_some(BlockId(0))
+    }
+
+    fn max_number(&self) -> usize {
+        self.nodes.len()
+    }
+
+    fn nodes(&self) -> &[BlockId] {
+        &self.nodes
+    }
+
+    fn successors(
+        &self,
+        block: BlockId,
+    ) -> BlockList {
+        self.succs[block.0 as usize].clone()
+    }
+
+    fn predecessors(
+        &self,
+        block: BlockId,
+    ) -> BlockList {
+        self.preds[block.0 as usize].clone()
+    }
+}
+
+impl FlowGraph for ItemGraph {}
+
+/// For each item of `items`, the share of runs that reach it (thousandths, a
+/// two-way branch splits evenly) and the loops it sits in, three at most.
+///
+/// Translation: the loops are `MachineCycleInfo`'s cycles of the item graph
+/// (the pin's `MachineLoopInfo` for a reducible graph), not the layout span
+/// between a backward branch and its label; the share flows along the edges
+/// that are not a cycle's back edge, in reverse postorder, so the same graph
+/// laid out in another block order has the same weights.
+fn run_weights(items: &[Item]) -> Vec<(u64, usize)> {
+    let labels = labels_of(items);
+    let ends: Vec<Option<Ending>> = items
+        .iter()
+        .map(|item| match item {
+            Item::Inst(inst) => ending(inst, &labels),
+            _ => None,
+        })
+        .collect();
+    let (block_of, ends) = blocks_of(items, &ends);
+    let graph = ItemGraph::of(&ends);
+    let cycles = CycleInfo::compute(&graph);
+    let n = ends.len();
+    // an edge into the header of a cycle that holds its source is that cycle's
+    // back edge
+    let is_back = |from: usize, to: usize| {
+        let cycle = cycles.get_cycle(BlockId(to as u32));
+        cycle.is_valid()
+            && cycles.get_header(cycle) == BlockId(to as u32)
+            && cycles.contains(cycle, BlockId(from as u32))
+    };
+    let forward = |at: usize| -> Vec<usize> {
+        graph.succs[at].iter().map(|one| one.0 as usize).filter(|&to| !is_back(at, to)).collect()
+    };
+    // reverse postorder of the graph without its back edges, from the entry
+    let mut order = Vec::with_capacity(n);
+    let mut seen = vec![false; n];
+    if n > 0 {
+        let mut stack = vec![(0usize, forward(0), 0usize)];
+        seen[0] = true;
+        while let Some((node, next, at)) = stack.last_mut() {
+            if let Some(&to) = next.get(*at) {
+                *at += 1;
+                if !seen[to] {
+                    seen[to] = true;
+                    let edges = forward(to);
+                    stack.push((to, edges, 0));
+                }
+            } else {
+                order.push(*node);
+                stack.pop();
+            }
+        }
+    }
+    order.reverse();
+    // Whether control can leave the function from an item without taking a back
+    // edge: a branch whose one way only goes round the loop again sends its
+    // share the other way, however the blocks are laid out (a loop's exit
+    // test is a forward branch past a `bra` back, or a backward branch over
+    // the exit).
+    let mut leaves = vec![false; n];
+    for &at in order.iter().rev() {
+        let next = forward(at);
+        leaves[at] = graph.succs[at].is_empty() || next.iter().any(|&to| leaves[to]);
+    }
+    let mut share = vec![0u64; n];
+    if n > 0 {
+        share[0] = 1000;
+    }
+    for &at in &order {
+        let mut next = forward(at);
+        if matches!(ends[at], Some(Ending::Branch(_))) {
+            let leaving: Vec<usize> = next.iter().copied().filter(|&to| leaves[to]).collect();
+            if !leaving.is_empty() {
+                next = leaving;
+            }
+        }
+        match (&ends[at], next.as_slice()) {
+            (Some(Ending::Branch(_)), [first, second]) => {
+                share[*first] += share[at] / 2;
+                share[*second] += share[at] - share[at] / 2;
+            }
+            (_, edges) => {
+                for &to in edges {
                     share[to] += share[at];
                 }
             }
-            Some(Ending::Branch(to)) => {
-                if to > at {
-                    share[to] += share[at] / 2;
-                    share[at + 1] += share[at] - share[at] / 2;
-                } else {
-                    share[at + 1] += share[at];
-                }
-            }
-            _ => share[at + 1] += share[at],
         }
     }
-    let members: Vec<Vec<bool>> =
-        loops.iter().map(|(&header, latches)| loop_members(&ends_of, header, latches)).collect();
-    (0..items.len())
-        .map(|at| (share[at], members.iter().filter(|member| member[at]).count().min(3)))
-        .collect()
+    block_of.iter().map(|&at| (share[at], (cycles.get_cycle_depth(BlockId(at as u32)) as usize).min(3))).collect()
 }
 
 /// Bytes, and clocks of `items` on `cpu` weighted by how often each runs: an
@@ -611,18 +717,24 @@ pub fn cheaper(
 
 #[cfg(test)]
 mod ending_tests {
-    use super::{Ending, ending};
-    use crate::mc;
     use std::collections::HashMap;
 
-    /// A counted loop ending in `dbf` was priced as one pass: the unroll trial (loop_interchange 68020 -O1) read
-    /// it ten times cheaper than the `bne` loop it replaced, and kept an unrolled nest 586 B larger and slower.
+    use super::{Ending, ending};
+    use crate::mc;
+
+    /// A counted loop ending in `dbf` was priced as one pass: the unroll trial
+    /// (loop_interchange 68020 -O1) read it ten times cheaper than the
+    /// `bne` loop it replaced, and kept an unrolled nest 586 B larger and
+    /// slower.
     #[test]
     fn a_dbf_loop_ends_in_a_branch_back_to_its_label() {
         let labels: HashMap<&str, usize> = [(".L1", 0)].into_iter().collect();
         let dbf = mc::Inst {
             opcode: "DBF16dl",
-            operands: vec![mc::Operand::Reg(llrm_lir::registers::RegId::from(crate::reg::D0)), mc::Operand::Symbol(".L1".into(), 0)],
+            operands: vec![
+                mc::Operand::Reg(llrm_lir::registers::RegId::from(crate::reg::D0)),
+                mc::Operand::Symbol(".L1".into(), 0),
+            ],
         };
         assert!(matches!(ending(&dbf, &labels), Some(Ending::Branch(0))));
     }
@@ -630,11 +742,12 @@ mod ending_tests {
 
 #[cfg(test)]
 mod call_weight_tests {
+    use llrm_lir::registers::RegId;
+
     use super::price_of_functions;
     use crate::compile::Item;
     use crate::dagisel::hooks::Cpu;
     use crate::mc;
-    use llrm_lir::registers::RegId;
 
     fn inst(
         opcode: &'static str,
@@ -643,10 +756,12 @@ mod call_weight_tests {
         Item::Inst(mc::Inst { opcode, operands })
     }
 
-    /// `long_shift_by_bits` -Os 68000: 28 calls of `put64` went through the register the call-target hoist
-    /// loaded (`lea put64, %a4; jsr (%a4)`), which the trial did not count as calls, so `put64` was priced
-    /// as run once: the kept-call build looked cheaper than the inline (48,758 clk against 51,452) while
-    /// it ran 4,156 clk slower. A callee is priced once for each call, hoisted or not.
+    /// `long_shift_by_bits` -Os 68000: 28 calls of `put64` went through the
+    /// register the call-target hoist loaded (`lea put64, %a4; jsr (%a4)`),
+    /// which the trial did not count as calls, so `put64` was priced as run
+    /// once: the kept-call build looked cheaper than the inline (48,758 clk
+    /// against 51,452) while it ran 4,156 clk slower. A callee is priced
+    /// once for each call, hoisted or not.
     #[test]
     fn a_callee_reached_through_a_hoisted_register_is_priced_once_per_call() {
         let a4 = RegId::from(crate::reg::A4);
@@ -661,8 +776,9 @@ mod call_weight_tests {
         assert_eq!(both, main_clocks + 4 * put_clocks, "put64 is priced once, not once per call");
     }
 
-    /// The same call sat in a loop: the callee ran once per pass, ten to the loop depth, and was priced
-    /// as run once for the one call instruction (`put64` in `long_shift_by_bits`' loops).
+    /// The same call sat in a loop: the callee ran once per pass, ten to the
+    /// loop depth, and was priced as run once for the one call instruction
+    /// (`put64` in `long_shift_by_bits`' loops).
     #[test]
     fn a_call_in_a_loop_prices_its_callee_once_per_pass() {
         let body = || vec![inst("CALLb", vec![mc::Operand::Symbol("report".into(), 0)]), inst("RTS", vec![])];
@@ -677,5 +793,71 @@ mod call_weight_tests {
         let (_, put_clocks) = price(&[("put64".into(), body())]);
         let (_, both) = price(&[("main".into(), main), ("put64".into(), body())]);
         assert_eq!(both, main_clocks + 10 * put_clocks, "put64 is priced for one run, not one per pass");
+    }
+}
+
+#[cfg(test)]
+mod weights {
+    use super::*;
+
+    fn inst(
+        opcode: &'static str,
+        target: Option<&str>,
+    ) -> Item {
+        Item::Inst(mc::Inst {
+            opcode,
+            operands: target.map(|name| vec![mc::Operand::Symbol(name.to_owned(), 0)]).unwrap_or_default(),
+        })
+    }
+
+    fn label(name: &str) -> Item {
+        Item::Label(name.to_owned())
+    }
+
+    /// The run weights of the first instruction named `opcode`.
+    fn weight(
+        items: &[Item],
+        opcode: &str,
+    ) -> (u64, usize) {
+        let at = items.iter().position(|item| matches!(item, Item::Inst(one) if one.opcode == opcode)).expect(opcode);
+        run_weights(items)[at]
+    }
+
+    /// The CFG was one node per instruction: +1.0% compile instructions on
+    /// QB comp.c at -O1 for the same weights. A straight run is one block.
+    #[test]
+    fn a_straight_run_of_instructions_is_one_block() {
+        let mut items = vec![label("H")];
+        items.extend((0..50).map(|_| inst("NOP", None)));
+        items.extend([inst("Bne16", Some("H")), inst("RTS", None)]);
+        let ends: Vec<_> = {
+            let labels = labels_of(&items);
+            items.iter().map(|item| if let Item::Inst(one) = item { ending(one, &labels) } else { None }).collect()
+        };
+        let (block_of, block_ends) = blocks_of(&items, &ends);
+        assert_eq!(block_ends.len(), 2, "loop body and exit");
+        assert_eq!(block_of[0], block_of[50]);
+        assert_ne!(block_of[51], block_of[52]);
+    }
+
+    /// One loop, its exit test laid out two ways: a backward branch over the
+    /// exit, and a forward branch past a `bra` back. The graph is the same;
+    /// the exit's share of the runs was 1000 and 500, and `price_of` priced
+    /// a function by the order of its blocks.
+    #[test]
+    fn the_same_loop_in_two_block_orders_has_the_same_weights() {
+        let rotated = [label("H"), inst("NOP", None), inst("Bne16", Some("H")), inst("RTS", None)];
+        let exit_first = [
+            label("H"),
+            inst("NOP", None),
+            inst("Beq16", Some("X")),
+            inst("BRA16", Some("H")),
+            label("X"),
+            inst("RTS", None),
+        ];
+        for items in [&rotated[..], &exit_first[..]] {
+            assert_eq!(weight(items, "NOP"), (1000, 1), "the body runs every trip");
+            assert_eq!(weight(items, "RTS"), (1000, 0), "the exit runs once a call");
+        }
     }
 }

@@ -19,6 +19,8 @@ HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent
 sys.path.insert(0, str(HERE))
 
+import external_flags  # noqa: E402  (used by gcc_command and by the link of both columns)
+
 
 def sources_stamp(root):
     """The stamp `crates/target/llrm-m68k/build.rs` bakes into `cycles` (`cycles --stamp`): FNV-1a 64 over the relative path and text of every file under the crate's `src` and `examples`, in path order. A binary whose stamp differs was built from other sources."""
@@ -104,6 +106,11 @@ def price(cycles, exe, cpu, gcc_root):
     return parse_clocks(run.stdout)
 
 
+def columns(ours_only):
+    """The compilers measured: ours alone for a base-against-head run of ours."""
+    return ("ours",) if ours_only else ("ours", "gcc")
+
+
 def same_output(runs):
     """Whether the two columns' runs printed and exited alike. A pair that differs ran different programs (a gcc exe that stops early prices a handful of instructions): its clocks are not compared."""
     return len(runs) == 2 and runs[0] == runs[1]
@@ -123,8 +130,6 @@ def gcc_command(gcc, gcc_root, cpu, level, path, obj, pcrel, flags=()):
     `flags` are the program's own `// flags:` in gcc's spelling (ValueError for one gcc cannot take): ours was built with `-fno-inline-functions`
     and gcc without, so licm_graph_callee_footprint priced 188244 against 77282 clocks, gcc having inlined the call the program is about.
     Hosted, as ours is since #10561: `-ffreestanding` kept gcc from forming memset/memcpy calls, so ours called the harness stub where gcc inlined its fills."""
-    import external_flags
-
     return [gcc, f"-B{gcc_root}/usr/lib/gcc-cross/m68k-linux-gnu/15/", f"-B{gcc_root}/usr/m68k-linux-gnu/bin/",
             "-nostdlib", "-w", *external_flags.gcc_float("m68k"), *external_flags.flags("none", (), 15), *(["-mpcrel"] if pcrel else []), f"-mcpu={cpu}", f"-{level}",
             *external_flags.GCC_DIALECT, *external_flags.gcc_source_defines(Path(path).read_text() if Path(path).is_file() else ""), *external_flags.gcc_program_flags(flags), *(["-isystem", os.environ["M68K_GCC_HEADERS"]] if os.environ.get("M68K_GCC_HEADERS") else []), "-isystem", str(ROOT / "runtime/shared/posix"), "-c", str(path), "-o", str(obj)]
@@ -142,6 +147,7 @@ def main():
     ap.add_argument("--jobs", type=int, default=6)
     ap.add_argument("--gcc-pcrel", action="store_true", help="gcc -mpcrel: ours's data model")
     ap.add_argument("--libs-only", action="store_true", help="bytes and library bytes only: no link, no run, no clocks (a card's lib columns without its hours of qemu)")
+    ap.add_argument("--ours-only", action="store_true", help="no gcc column: base against head of the compiler on programs gcc cannot build (soft float, input data)")
     ap.add_argument("files", nargs="+")
     args = ap.parse_args()
     gcc_root = os.environ["GCC_M68K"]
@@ -159,7 +165,7 @@ def main():
             for level in args.levels.split(","):
                 cells, runs, libs = {}, {}, {}
                 with tempfile.TemporaryDirectory() as tmp:
-                    for side in ("ours", "gcc"):
+                    for side in columns(args.ours_only):
                         obj, exe = Path(tmp) / f"{side}.o", Path(tmp) / f"{side}.exe"
                         if side == "ours":
                             env = {**os.environ, **llrmbin.cc_environment(), "LLRM_CC_TARGET": f"m68k-{cpu}"}
@@ -193,7 +199,7 @@ def main():
                         library = library_bytes(args.cc, gcc_root, cpu, level, obj)
                         libs[side] = "" if library is None else str(library)
                         cells[side] = (loaded_bytes(text), price(cycles, exe, cpu, gcc_root) or "")
-                    if not args.libs_only and not same_output([runs.get("ours"), runs.get("gcc")]):
+                    if not args.libs_only and not args.ours_only and not same_output([runs.get("ours"), runs.get("gcc")]):
                         cells = {side: (cell[0], "") for side, cell in cells.items()}  # bytes stay, clocks of unequal runs do not
                 print("\t".join([cpu, path.stem, level, *cells.get("ours", ("", "")), *cells.get("gcc", ("", "")), libs.get("ours", ""), libs.get("gcc", "")]), flush=True)
 

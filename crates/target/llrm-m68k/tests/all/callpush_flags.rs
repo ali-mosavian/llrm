@@ -178,7 +178,7 @@ fn after_a_pointer_add(after: Inst) -> usize {
     let mut function = MFunction::new("f");
     function.classes = vec![Class::Ar32, Class::Xr32, Class::Xr32];
     function.blocks.push(Block { id: 0, insts, phis: vec![] });
-    address_adds(&mut function, Cpu::M68000, false, false);
+    address_adds(&mut function, Cpu::M68000, false, false, false);
     function.blocks[0].insts.len()
 }
 

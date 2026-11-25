@@ -51,8 +51,9 @@ fn small_is_pc_relative_at_every_cpu() {
 /// displacement refused a global past 32 KiB (memcpy_runtime and
 /// memfuncs_runtime, -O0 sweep: ".text: a value of 70016 does not fit its
 /// 2-byte field").
-/// Medium reaches any offset at every cpu with `abs.l` (DEVIATE in `CodeModel`): the pin's PC-relative medium at the
-/// 68020 has only a 16-bit displacement and fails to link past 32 KiB.
+/// Medium reaches any offset at every cpu with `abs.l` (DEVIATE in
+/// `CodeModel`): the pin's PC-relative medium at the 68020 has only a 16-bit
+/// displacement and fails to link past 32 KiB.
 #[test]
 fn medium_is_absolute_at_every_cpu_because_the_pin_pc16_cannot_reach() {
     for cpu in ["68000", "68020"] {
@@ -162,10 +163,11 @@ fn far_globals_work_in_the_medium_model_at_every_cpu() {
     }
 }
 
-/// With no `-mcmodel`, a module whose globals pass 32 KiB mixed `adda.l #pages` and
-/// `lea (pages+40000,%pc)`, and the object writer stopped: ".text: a value of 40000 does not fit its
-/// 2-byte field" (QuickrBasic `pscr.c`, a 64000-byte page buffer). `Auto` is small until the
-/// globals pass what `(d16,%pc)` reaches, then medium.
+/// With no `-mcmodel`, a module whose globals pass 32 KiB mixed `adda.l #pages`
+/// and `lea (pages+40000,%pc)`, and the object writer stopped: ".text: a value
+/// of 40000 does not fit its 2-byte field" (QuickrBasic `pscr.c`, a 64000-byte
+/// page buffer). `Auto` is small until the globals pass what `(d16,%pc)`
+/// reaches, then medium.
 #[test]
 fn no_model_given_a_module_past_32_kib_of_globals_is_medium() {
     for cpu in ["68000", "68020"] {
@@ -190,7 +192,32 @@ fn no_model_given_a_module_past_32_kib_of_globals_is_medium() {
 fn no_model_given_a_small_module_stays_pc_relative() {
     let cpu = cpu_of("68020").unwrap();
     let ir = FAR_IR.replace("70016", "1000").replace("69999", "999");
-    let asm = llrm_m68k::driver::assembly_flagged(&ir, cpu, Level::O2, false, None, CodeModel::Auto, &Default::default())
-        .expect("compiles");
+    let asm =
+        llrm_m68k::driver::assembly_flagged(&ir, cpu, Level::O2, false, None, CodeModel::Auto, &Default::default())
+            .expect("compiles");
     assert!(asm.contains("%pc"), "{asm}");
+}
+
+/// A 4-byte global, and a function of 6,000 stores (about 36 KB of code) that
+/// names it twice: the globals alone are far under 32 KiB, so Auto stayed
+/// small, and the `(d16,%pc)` reference to `g` was out of reach once the code
+/// is counted.
+fn big_function_ir() -> String {
+    let stores: String =
+        (0..6_000).map(|n| format!("  store volatile i32 {}, ptr @g, align 4\n", 100_000 + n)).collect();
+    format!(
+        "target datalayout = \"E-m:e-p:32:16:32-i8:8:8-i16:16:16-i32:16:32-n8:16:32-a:0:16-S16\"\n@g = global i32 0\n\
+         define void @big() {{\n{stores}  ret void\n}}\n"
+    )
+}
+
+#[test]
+fn auto_counts_the_code_with_the_data_against_the_reach() {
+    for cpu in ["68000", "68020"] {
+        let cpu = cpu_of(cpu).unwrap();
+        let ir = big_function_ir();
+        let auto = object_in(&ir, cpu, Level::Os, "big", CodeModel::Auto).expect("auto compiles");
+        let medium = object_in(&ir, cpu, Level::Os, "big", CodeModel::Medium).expect("medium compiles");
+        assert_eq!(auto, medium, "text and data pass 32 KiB: absolute data, as medium");
+    }
 }

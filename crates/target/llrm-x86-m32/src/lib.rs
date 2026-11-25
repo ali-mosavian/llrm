@@ -189,9 +189,9 @@ fn tuning(costs: &llrm_mir::target::OperationCosts) -> llrm_mir::target::Tuning 
         // B).
         unroll_o1_analyzed_trips: Some(16),
         // DEVIATE SD443 (owner w9, exit 2026-11-24: a constant-argument pass
-        // after inlining, as gcc's IPA-CP): a function called directly only after
-        // inlining keeps its address-taken parameters through the pin's one
-        // IPSCCP; a second one after promotion folds them. m32
+        // after inlining, as gcc's IPA-CP): a function called directly only
+        // after inlining keeps its address-taken parameters through the pin's
+        // one IPSCCP; a second one after promotion folds them. m32
         // memory_expansion -1332 B (-O2/-O3), second_ipsccp.c -368 B.
         second_ipsccp: true,
         // DEVIATE SLOT-ADD (owner x86-m32, exit 2026-11-24):
@@ -255,8 +255,9 @@ fn tuning(costs: &llrm_mir::target::OperationCosts) -> llrm_mir::target::Tuning 
         branch_compare_trees_at_size: true,
         inline_never_grows_without_rate: true,
         jump_threading_latch_trial_at_size: true,
-        // DEVIATE OS-TRIAL-CLOCK-CAP (owner x87, exit 2026-12-05): x_switch_ranges
-        // Os refused its table for 35 B at +11% clk; the cell counts on both.
+        // DEVIATE OS-TRIAL-CLOCK-CAP (owner x87, exit 2026-12-05):
+        // x_switch_ranges Os refused its table for 35 B at +11% clk; the cell
+        // counts on both.
         os_trial_clock_cap_percent: Some(2),
         switch_lookup_trial_at_size: true,
         jump_table_size_growth_ratio: Some(300),
@@ -339,12 +340,18 @@ fn tuning(costs: &llrm_mir::target::OperationCosts) -> llrm_mir::target::Tuning 
             setup: [11, 12],
             fst: [4, 6],
         }),
-        // DEVIATE LASTCALL-COLD (owner x86-m32-b, exit 2026-12-05): see `Tuning`.
+        // DEVIATE LASTCALL-COLD (owner x86-m32-b, exit 2026-12-05):
+        // see `Tuning`.
         inline_last_call_in_cold_site: true,
         // DEVIATE SZ1 (owner x86-m32, exit 2026-11-20): D11 holds at -Os, so a
         // callee whose copies grow the code stays a call (called_once_os:
         // gcc -Os does; the pin inlines it).
         inline_size_guard_at_size: true,
+        // DEVIATE OS-OUTLINE-TRIAL (owner qb-arm64-synth-gfx, exit 2026-12-22):
+        // see Tuning. The pin inlines these copies too.
+        inline_outline_trial_at_size: true,
+        inline_outline_trial_max_callees: Some(8),
+        inline_outline_trial_clock_cap_percent: Some(2),
         // DEVIATE SZ2 (owner x86-m32, exit 2026-11-20): -Os keeps a once-called
         // callee whose copy grows the code (gcc does; the pin copies it).
         inline_size_guard_single_site: true,
@@ -354,7 +361,8 @@ fn tuning(costs: &llrm_mir::target::OperationCosts) -> llrm_mir::target::Tuning 
         inline_size_guard_yields_to_inlinehint: true,
         // DEVIATE SZ1-HOT (owner x86-m32-b, exit 2026-12-05): see `Tuning`.
         inline_size_hot_growth_percent: Some(100),
-        // DEVIATE MEMSET-GAP (owner llrm-target-x86-m16-b, exit 2026-11-27): see `Tuning`.
+        // DEVIATE MEMSET-GAP (owner llrm-target-x86-m16-b, exit 2026-11-27):
+        // see `Tuning`.
         memset_gap_merge_at_size: true,
         // DEVIATE SZ3 (owner x86-m32, exit 2026-11-20): an -Os SZ2 trial also
         // inlines the sites its splice brings. The pin inlines callee-first
@@ -364,8 +372,8 @@ fn tuning(costs: &llrm_mir::target::OperationCosts) -> llrm_mir::target::Tuning 
         // -Os 147 -> 39 B (clang 23), 176 m32 programs, no other cell moves.
         inline_chain_trial: true,
         // DEVIATE REC-2: gcc 15.2's `max-inline-recursive-depth` 8 and
-        // `max-inline-insns-recursive` 450, at -O2/-O3 (never -Os). Owner w9, exit
-        // 2026-11-24.
+        // `max-inline-insns-recursive` 450, at -O2/-O3 (never -Os). Owner w9,
+        // exit 2026-11-24.
         recursive_inlining: Some((8, 450)),
         // DEVIATE REC-2/REC-10 bar: 22 `gcc_insns` at -O2 and -O3, fitted to
         // the corpus (gcc's own is 15 at -O2, 30 at -O3, in its size units).
@@ -439,8 +447,6 @@ fn tuning(costs: &llrm_mir::target::OperationCosts) -> llrm_mir::target::Tuning 
         // 32-bit counter; the 486 and P5 pay a prefix on every 16-bit
         // operation (ring -O2: 67177 clk, gcc 61179).
         prefixed_16_bit_counters: true,
-        // DEVIATE MEM-OS-REP (owner x87, exit 2026-12-06): see `Tuning`.
-        inline_variable_memcpy_at_size: true,
         // DEVIATE REC5-1 (owner w2, exit 2026-11-20), not at -Os:
         // see `Tuning::ipsccp_widen_keeps_sign`.
         ipsccp_widen_keeps_sign: true,
@@ -908,9 +914,9 @@ impl llrm_target::Target for M32 {
 
 #[cfg(test)]
 mod tests {
-    /// A loop header's alignment pad had a 10 byte limit (gcc's `.p2align 4,,10`,
-    /// DEVIATE SD545) where the pin's X86 sets none: it left the header
-    /// misaligned and the layout off the pin's.
+    /// A loop header's alignment pad had a 10 byte limit (gcc's `.p2align
+    /// 4,,10`, DEVIATE SD545) where the pin's X86 sets none: it left the
+    /// header misaligned and the layout off the pin's.
     #[test]
     fn test_a_loop_header_pad_has_no_byte_limit_as_the_pin() {
         assert_eq!(llrm_target::Target::loop_alignment_max_skip(&super::M32), 0);
@@ -927,8 +933,8 @@ mod tests {
 
     /// QuickrBasic `repl.c` -O2: ipa-cp cloned `read_file` eight times (a
     /// recursion whose chain benefit compounds, 3e12 for 40 clocks a call):
-    /// 16,336 B against 10,738 B with `-fno-ipa-cp-clone`, gcc 6,025. gcc and the
-    /// pin make no clone at -O2; -O3 clones as gcc does.
+    /// 16,336 B against 10,738 B with `-fno-ipa-cp-clone`, gcc 6,025. gcc and
+    /// the pin make no clone at -O2; -O3 clones as gcc does.
     #[test]
     fn test_m32_makes_no_ipa_cp_clones_at_o2() {
         use llrm_mir::tti::Tti;

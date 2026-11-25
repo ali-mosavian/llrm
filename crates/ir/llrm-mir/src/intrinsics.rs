@@ -321,8 +321,15 @@ const ASM32: &str = "llrm.ia32.asm.";
 /// target names (`rax`, `r8`..`r15`, `eax`, `st0`...).
 const ASM64: &str = "llrm.ia64.asm.";
 
+/// The same for AArch64: `llrm.a64.asm.`, the registers it names (`x9`, `w9`,
+/// `v16`...). Its `bits` is [`AARCH64`], a tag: 64 is the x86-64 one.
+const ASMA64: &str = "llrm.a64.asm.";
+
+/// The `bits` of an AArch64 block (no bitness of its own: x86-64 holds 64).
+pub const AARCH64: u8 = 0xA6;
+
 /// The prefix of a block's name at `bits`, and the bitness a prefix states.
-const ASM_PREFIXES: [(u8, &str); 3] = [(16, ASM), (32, ASM32), (64, ASM64)];
+const ASM_PREFIXES: [(u8, &str); 4] = [(16, ASM), (32, ASM32), (64, ASM64), (AARCH64, ASMA64)];
 
 /// A word of an inline block that names a symbol: where, as what (`offset`,
 /// `segment`, `reloff`), and plus what.
@@ -365,6 +372,9 @@ pub fn asm(name: &str) -> Option<AsmBlock> {
     let [hex, inputs, outputs, clobbers, memory, fixups @ ..] = &parts[..] else {
         return None;
     };
+    // `.sN`: the Nth block alike in all else and unlike in operand types
+    // (`llrm-cc`)
+    let fixups: Vec<&str> = fixups.iter().copied().filter(|one| !one.starts_with('s')).collect();
     let (hex, inputs, outputs, clobbers, memory) = (*hex, *inputs, *outputs, *clobbers, *memory);
     if hex.len() % 2 != 0 {
         return None;
@@ -1287,6 +1297,7 @@ pub fn is_reserved(name: &str) -> bool {
         || name.starts_with("llrm.ia16.")
         || name.starts_with(ASM32)
         || name.starts_with(ASM64)
+        || name.starts_with(ASMA64)
         || name.starts_with("llrm.noalias")
         || name.starts_with("llrm.vararg.")
 }
@@ -1388,7 +1399,8 @@ impl Intrinsic {
                 matches!(types.int_bits(*ty), Some(16 | 32))
                     || matches!(types.get(*ty), Type::Pointer(0))
                     || flat && (types.int_bits(*ty) == Some(8) || matches!(types.get(*ty), Type::Float(_)))
-                    || block.bits == 64 && types.int_bits(*ty) == Some(64)
+                    || matches!(block.bits, 64 | AARCH64) && types.int_bits(*ty) == Some(64)
+                    || block.bits == AARCH64 && matches!(types.get(*ty), Type::Vector { .. })
             };
             let answers = match &block.outputs[..] {
                 [] => types.is_void(*returns),

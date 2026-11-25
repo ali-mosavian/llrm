@@ -409,6 +409,11 @@ impl llrm_target::Target for M64 {
                     .map(|one| {
                         one.with_tuning(llrm_mir::target::Tuning {
                             inline_size_guard_at_size: true,
+                            // DEVIATE OS-OUTLINE-TRIAL (owner qb-arm64-synth-gfx, exit 2026-12-22): see Tuning. The pin
+                            // inlines these copies too.
+                            inline_outline_trial_at_size: true,
+                            inline_outline_trial_max_callees: Some(8),
+                            inline_outline_trial_clock_cap_percent: Some(2),
                             // DEVIATE LATE-MEMCPYOPT-SIZE (owner x86-m32-b, exit 2026-12-12): see
                             // Tuning. QB m64 Os -119 B (synth -63, dialog -56), no file worse.
                             late_memcpyopt_at_size: true,

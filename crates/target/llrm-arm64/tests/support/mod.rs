@@ -1,17 +1,11 @@
 //! Kernels built by this compiler from the pinned clang's un-optimized IR,
 //! linked statically with the cross gcc and run under `qemu-aarch64`.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::Command;
 
-fn clang() -> Option<PathBuf> {
-    let home = std::env::var("HOME").unwrap_or_default();
-    let build = std::env::var("LLVM_BUILD").unwrap_or_else(|_| format!("{home}/scratch/llvm-build-aarch64"));
-    let clang = PathBuf::from(build).join("bin/clang");
-    let tools =
-        ["aarch64-linux-gnu-gcc", "qemu-aarch64"].iter().all(|t| Command::new(t).arg("--version").output().is_ok());
-    (clang.exists() && tools).then_some(clang)
-}
+#[path = "clang.rs"]
+mod clang;
 
 /// What `tests/kernels/<kernel>.c` prints when `llrm-arm64-llc` builds it at
 /// `level` (`-O1`, `-O2`, `-Os`); `None` where the tools are missing.
@@ -19,7 +13,7 @@ pub fn output(
     kernel: &str,
     level: &str,
 ) -> Option<String> {
-    let Some(clang) = clang() else {
+    let Some(clang) = clang::clang() else {
         eprintln!("skipped: needs the pinned clang, aarch64-linux-gnu-gcc and qemu-aarch64");
         return None;
     };

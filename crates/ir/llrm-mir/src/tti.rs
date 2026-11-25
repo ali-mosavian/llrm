@@ -489,6 +489,10 @@ pub struct LsrCost {
     pub insns: u32,
     pub num_regs: u32,
     pub add_rec_cost: u32,
+    /// DEVIATE LSR-PREFIX: the steps of recurrences wider than the target's
+    /// own width, each at `Tti::lsr_wide_step_cost` (the pin's rating has no
+    /// such term).
+    pub wide_steps: u32,
     pub num_iv_muls: u32,
     /// DEVIATE LU17: the target's instructions for the in-line multiplies the
     /// loop as written does to form its induction variables
@@ -1507,6 +1511,16 @@ pub trait Tti {
         false
     }
 
+    /// DEVIATE OS-INLINE-TRIAL (arm64): the most a refused site's modelled
+    /// growth may be, in percent of the caller's bytes, for the finished-code
+    /// trial to be asked about it: the units refused it, the bytes say it is
+    /// about the same, and the loads the copies share are what the model
+    /// cannot place. A site the bytes say grows more is not built. None:
+    /// every refused site.
+    fn opt_size_inline_finished_trial_band(&self) -> Option<i64> {
+        None
+    }
+
     /// Whether a run of copies of adjacent cells is `llvm.memcpy` at every
     /// level, where the bytes of the call are fewer (`mergestores`): the
     /// pin's MemCpyOpt forms it, and the size gate is this target's to lift.
@@ -1533,6 +1547,31 @@ pub trait Tti {
     /// `put32`: 15 units a copy, a call 18; -20 B outlined). False: the bound's
     /// verdict stands.
     fn opt_size_inline_outline_trial(&self) -> bool {
+        false
+    }
+
+    /// With `opt_size_inline_outline_trial`: the clock cap of that trial,
+    /// percent of the work without it (`os_trial_clock_cap_percent`'s
+    /// meaning). None: the target's `os_trial_clock_cap_percent`.
+    fn opt_size_inline_outline_clock_cap_percent(&self) -> Option<i64> {
+        None
+    }
+
+    /// With `opt_size_inline_outline_trial`: the most distinct callees a module
+    /// may have among the candidate sites and still be compiled again. The
+    /// trial's compile cost follows the candidates and its gain does not (QB
+    /// x86 Os: modules of at most 8 callees hold 75% / 100% of the bytes at
+    /// m64 / m32 for a third of the cost). None: no limit.
+    fn opt_size_inline_outline_max_callees(&self) -> Option<usize> {
+        None
+    }
+
+    /// With `opt_size_inline_outline_trial`: a site whose copy the caller folds
+    /// to nothing is not a candidate, a copy that costs no byte has none to
+    /// save (QB exec.c m64: 430 such sites, the trial compile +9016 B and a
+    /// quarter of the trials' compile cost). False: every accepted cold site
+    /// is.
+    fn opt_size_inline_outline_skips_folded_copies(&self) -> bool {
         false
     }
 
@@ -2532,11 +2571,6 @@ pub trait Tti {
         false
     }
 
-    /// `Tuning::inline_variable_memcpy_at_size`.
-    fn inlines_variable_memcpy_at_size(&self) -> bool {
-        false
-    }
-
     /// `Tuning::size_copy_price`.
     fn copy_price_for_size(&self) -> Option<crate::target::CopyPrice> {
         None
@@ -3164,6 +3198,19 @@ pub trait Tti {
         } else {
             Cost::INVALID
         }
+    }
+
+    /// DEVIATE LSR-PREFIX (owner w12, exit 2026-12-22): what stepping a
+    /// recurrence of type `ty` costs beyond one add. Real mode steps a 32-bit
+    /// value with an operand-size prefix, a clock the pin's `LSRCost` does not
+    /// see: a 16-bit counter built as a truncation of a wider recurrence
+    /// (grep~bounds -O2, 1049600 clocks, the same instructions) is no longer
+    /// free.
+    fn lsr_wide_step_cost(
+        &self,
+        _ty: Ty,
+    ) -> u32 {
+        0
     }
 
     /// `isLSRCostLess`: registers first, then the add-recurrence cost, the IV

@@ -42,6 +42,17 @@ use crate::mc::inst::{
 use crate::mc::visit::Reg;
 use crate::mfunc::{Callee, INCOMING_ARGUMENTS, MBlock, MFunc, Op, OpList, PoolEntry, block_label};
 
+/// Whether the AAPCS64 keeps `name` across a call: x19..x28 and the low halves
+/// of v8..v15, by any view.
+fn callee_saved(name: &str) -> bool {
+    let number = name.trim_start_matches(|one: char| one.is_ascii_alphabetic()).parse::<u32>().ok();
+    match (name.chars().next(), number) {
+        (Some('x' | 'w'), Some(19..=28)) => true,
+        (Some('v' | 'd' | 's' | 'h' | 'b' | 'q'), Some(8..=15)) => true,
+        _ => false,
+    }
+}
+
 /// The machine opcode's name.
 fn opcode_name(code: u32) -> Option<&'static str> {
     // `TargetOpcode::COPY` is no output of a pattern, so the table does not
@@ -57,6 +68,7 @@ fn opcode_name(code: u32) -> Option<&'static str> {
             super::call::MEMMOVE_Q => Some("LLRM_MEMMOVE_Q"),
             super::call::MEMSET_Q => Some("LLRM_MEMSET_Q"),
             super::call::SAVE_Q => Some("LLRM_SAVE_Q"),
+            super::call::LLRM_ASM => Some("LLRM_ASM"),
             _ => None,
         })
 }
@@ -1550,6 +1562,28 @@ impl Emitter<'_> {
         }
     }
 
+    /// The registers the `CopyFromReg`s glued after node `id` read: a call's
+    /// results (through its `CALLSEQ_END`) or a block's outputs.
+    fn glued_results(
+        &mut self,
+        id: u32,
+    ) -> Result<Vec<Reg>, String> {
+        let mut defs = Vec::new();
+        let mut glue = SDValue { node: id, res: self.dag.node(SDValue { node: id, res: 0 }).values.len() as u8 - 1 };
+        while let Some(user) = self.dag.users(glue).next() {
+            let user_node = self.dag.node(SDValue { node: user, res: 0 });
+            match user_node.opcode {
+                ISD::CopyFromReg => {
+                    let NodeData::PhysReg(register) = self.dag.node(user_node.ops[1]).data else { break };
+                    defs.push(reg_of(register)?);
+                    glue = SDValue { node: user, res: 2 };
+                }
+                _ => glue = SDValue { node: user, res: user_node.values.len() as u8 - 1 },
+            }
+        }
+        Ok(defs)
+    }
+
     /// `BL symbol` or `BLR reg`: the registers it reads are the `Register`
     /// operands (the arguments), those it writes the physical registers a
     /// glued `CopyFromReg` after its `CALLSEQ_END` reads (the results).
@@ -1577,23 +1611,43 @@ impl Emitter<'_> {
                 _ => None,
             })
             .collect::<Result<Vec<_>, _>>()?;
-        // The glue out of the call goes to `CALLSEQ_END`, and from it to the
-        // result copies.
-        let mut defs = Vec::new();
-        let mut glue = SDValue { node: id, res: self.dag.node(SDValue { node: id, res: 0 }).values.len() as u8 - 1 };
-        while let Some(user) = self.dag.users(glue).next() {
-            let user_node = self.dag.node(SDValue { node: user, res: 0 });
-            match user_node.opcode {
-                ISD::CopyFromReg => {
-                    let NodeData::PhysReg(register) = self.dag.node(user_node.ops[1]).data else { break };
-                    defs.push(reg_of(register)?);
-                    glue = SDValue { node: user, res: 2 };
-                }
-                _ => glue = SDValue { node: user, res: user_node.values.len() as u8 - 1 },
-            }
-        }
+        let defs = self.glued_results(id)?;
         self.mf.calls = true;
         self.ops.push(Op::Call { callee, uses, defs, tail: false });
+        Ok(())
+    }
+
+    /// An inline assembly block: a call of its words, reading the registers
+    /// the node names and writing those its results copy out. It is no call
+    /// of a function (the frame keeps no link register for it).
+    fn asm(
+        &mut self,
+        id: u32,
+    ) -> Result<(), String> {
+        let node = self.dag.node(SDValue { node: id, res: 0 });
+        let NodeData::Symbol(symbol) = self.dag.node(node.ops[1]).data else {
+            return Err("an asm block without its name".into());
+        };
+        let name = self.dag.symbol_names[symbol as usize].clone();
+        let uses = node.ops[2..]
+            .iter()
+            .filter_map(|op| match self.dag.node(*op).data {
+                NodeData::PhysReg(register) => Some(reg_of(register)),
+                _ => None,
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let defs = self.glued_results(id)?;
+        let block = llrm_mir::intrinsics::asm(&name).ok_or("an asm block that does not parse")?;
+        if block.code.len() % 4 != 0 {
+            return Err(format!("{name}: asm code that is not whole words"));
+        }
+        // The block is a call to the allocator: the caller-saved registers
+        // are clobbered. A callee-saved one it names needs the prologue's
+        // save, which a block does not ask for yet.
+        if let Some(kept) = block.clobbers.iter().find(|one| callee_saved(one)) {
+            return Err(format!("asm: clobber of callee-saved register {kept} is not carried"));
+        }
+        self.ops.push(Op::Call { callee: Callee::Symbol(name), uses, defs, tail: false });
         Ok(())
     }
 
@@ -2391,6 +2445,7 @@ impl Emitter<'_> {
                     }
                     "LLRM_MEMCPY_Q" | "LLRM_MEMMOVE_Q" | "LLRM_MEMSET_Q" => return self.block_memory(id, name),
                     "LLRM_SAVE_Q" => return self.save_q(id),
+                    "LLRM_ASM" => return self.asm(id),
                     // The jump through a table is one terminator, made at its
                     // `JumpTableDest32`: the debug info and the `BR` are no
                     // code.
@@ -2491,7 +2546,9 @@ impl Emitter<'_> {
                 {
                     let mut targets = Vec::new();
                     for &block in &self.exits {
-                        let Target::Label(label) = self.label(block)? else { return Err("a block without a label".into()) };
+                        let Target::Label(label) = self.label(block)? else {
+                            return Err("a block without a label".into());
+                        };
                         if !targets.contains(&label) {
                             targets.push(label);
                         }

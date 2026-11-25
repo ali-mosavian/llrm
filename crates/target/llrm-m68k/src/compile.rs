@@ -221,6 +221,10 @@ pub struct Options {
     /// The destination of a long compare may be an address register
     /// (`cmpa.l`, [`crate::addrcmp`]); kept when the function is cheaper.
     pub compare_destinations: bool,
+    /// A pointer add whose result a store or another either-class operand
+    /// reads stays in an address register (`lea`/`addq`/`adda`,
+    /// [`crate::addrarith`]); kept when the function is cheaper.
+    pub address_data_uses: bool,
     /// A 64-bit add or subtract is `add`/`addx` (`ADDC`/`ADDE`, the pin's
     /// lowering); a function it changed is also built with the compare form
     /// and the cheaper kept: `addx` needs data registers on both halves.
@@ -289,6 +293,7 @@ impl Options {
         return_dup: false,
         class_split: false,
         compare_destinations: false,
+        address_data_uses: false,
         carry_chain: true,
         global_copies: true,
         relax_classes: false,
@@ -336,6 +341,7 @@ impl Default for Options {
             return_dup: true,
             class_split: true,
             compare_destinations: true,
+            address_data_uses: true,
             carry_chain: true,
             global_copies: true,
             relax_classes: true,
@@ -564,6 +570,17 @@ fn items_trials(
             options = without;
         }
     }
+    // before the rest: the other trials price their builds with this one's
+    // choice made
+    if touched.address_data_uses {
+        let without = Options { address_data_uses: false, ..options };
+        let (plain, _) = items_once(module, name, cpu, without, prefixes)?;
+        if !crate::trial::keeps(&kept, &plain, cpu, price) {
+            trial_won(name, "address_data_uses", crate::trial::keeps(&plain, &kept, cpu, price));
+            kept = plain;
+            options = without;
+        }
+    }
     if touched.class_split {
         let without = Options { class_split: false, ..options };
         let (plain, _) = items_once(module, name, cpu, without, prefixes)?;
@@ -687,6 +704,9 @@ struct Touched {
     /// A compare's destination was left to the allocator's choice of an
     /// address or a data register ([`crate::addrcmp`]).
     compare_destinations: bool,
+    /// A pointer add was kept in an address register for a result an
+    /// either-class operand reads ([`crate::addrarith::address_adds`]).
+    address_data_uses: bool,
     /// The function has an `addx`, `subx` or `negx` ([`uses_extend`]).
     carry_chain: bool,
     /// The build saved a callee-saved register: the join order may have cost
@@ -722,6 +742,7 @@ impl Touched {
             || self.return_dup
             || self.class_split
             || self.compare_destinations
+            || self.address_data_uses
             || self.carry_chain
             || self.global_copies
             || self.mul_trial
@@ -812,6 +833,7 @@ pub fn libcalls_for(
                 return_dup: false,
                 class_split: false,
                 compare_destinations: false,
+                address_data_uses: false,
                 global_copies: false,
                 relax_classes: false,
                 remat_constants: false,
@@ -1041,7 +1063,18 @@ fn items_once(
                 crate::negadd::negative_adds_to_subq(&mut function);
                 crate::boolbyte::scc_booleans(&mut function);
                 crate::addrroles::address_roles(&mut function);
-                crate::addrarith::address_adds(&mut function, cpu, wants_size, options.compare_destinations);
+                crate::addrarith::address_adds(&mut function, cpu, wants_size, options.compare_destinations, false);
+                // a trial only runs at a size or strict build: elsewhere the
+                // first build is the one kept
+                if options.address_data_uses && (wants_size || options.strict) {
+                    touched.address_data_uses = crate::addrarith::address_adds(
+                        &mut function,
+                        cpu,
+                        wants_size,
+                        options.compare_destinations,
+                        true,
+                    ) > 0;
+                }
                 crate::foldload::fold_loads(&mut function);
                 crate::divrem::remainders_from_quotients(&mut function);
                 if wants_size {

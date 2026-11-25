@@ -219,14 +219,16 @@ pub struct Tuning {
     /// JumpThreading made (gcc's backward threader refuses a path through the
     /// latch) and the smaller object kept. false: the pin's.
     pub jump_threading_latch_trial_at_size: bool,
-    /// DEVIATE OS-TRIAL-CLOCK-CAP: the most clocks, in percent of the pin-shaped
-    /// code's, the -Os trials that keep a smaller shape (`KeepSwitch`,
-    /// `KeepCopyLoop`, `KeepLatch`, `KeepHintedCalls`) may cost. The ruling of
-    /// 2026-11-14 counts an -Os cell on bytes and clocks both. None: bytes alone
-    /// decide. The work it caps is block-frequency weighted (`analysis::frequency`)
-    /// and weighted again by the calls that reach each function from the module's
-    /// roots; a module that defines `main` is a program with that one root, so the
-    /// entries `main` never reaches cost nothing (amendment OS-TRIAL-CLOCK-CAP-ROOT).
+    /// DEVIATE OS-TRIAL-CLOCK-CAP: the most clocks, in percent of the
+    /// pin-shaped code's, the -Os trials that keep a smaller shape
+    /// (`KeepSwitch`, `KeepCopyLoop`, `KeepLatch`, `KeepHintedCalls`) may
+    /// cost. The ruling of 2026-11-14 counts an -Os cell on bytes and
+    /// clocks both. None: bytes alone decide. The work it caps is
+    /// block-frequency weighted (`analysis::frequency`) and weighted again
+    /// by the calls that reach each function from the module's
+    /// roots; a module that defines `main` is a program with that one root, so
+    /// the entries `main` never reaches cost nothing (amendment
+    /// OS-TRIAL-CLOCK-CAP-ROOT).
     pub os_trial_clock_cap_percent: Option<i64>,
     /// DEVIATE OB1: see `Tti::unroll_object_bound`.
     pub unroll_object_bound: Option<u32>,
@@ -348,10 +350,12 @@ pub struct Tuning {
     /// 2026-12-22), aligned or not: a longer `rep movs` fixed ESI/EDI/ECX at
     /// exec.c's entry and the interpreter pc spilled in every handler.
     pub rep_movs_at_size_max: u64,
-    /// The largest constant copy (bytes) a `-O2`/`-O3` build does with `rep movs` of the pointer's width
-    /// when the blocks are aligned, past the pin's 128-byte limit (`emitConstantSizeRepmov`), instead of the
-    /// `memcpy` call. 0: the pin's. DEVIATE REP-MOVS-SPEED (owner llrm-target-x86-m64-b, exit 2026-11-30):
-    /// gcc's generic `memcpy` strategy is `rep movsq` up to 8192 bytes, which `perf` counts as one
+    /// The largest constant copy (bytes) a `-O2`/`-O3` build does with `rep
+    /// movs` of the pointer's width when the blocks are aligned, past the
+    /// pin's 128-byte limit (`emitConstantSizeRepmov`), instead of the
+    /// `memcpy` call. 0: the pin's. DEVIATE REP-MOVS-SPEED (owner
+    /// llrm-target-x86-m64-b, exit 2026-11-30): gcc's generic `memcpy`
+    /// strategy is `rep movsq` up to 8192 bytes, which `perf` counts as one
     /// instruction against the library's ~190 for 4000 bytes (scroll O2).
     pub rep_movs_at_speed_max: u64,
     /// A signed divide by a power of two stays an `idiv` at `-Os` (and `-Oz`,
@@ -505,9 +509,10 @@ pub struct Tuning {
     /// -O3 +8.1% clocks and 1,615 B, queens -O3 +8.3% and 3,706 B.
     pub backward_threading: bool,
     /// `sinkCommonInsts` in every `SimplifyCFG` of a function that is
-    /// optimized for size, as the pin's `-sink-common-insts` (its default is the
-    /// late slot only). Where a function is inlined many times, the copies'
-    /// identical write-backs are one (gcc `-fcrossjumping`, on at size).
+    /// optimized for size, as the pin's `-sink-common-insts` (its default is
+    /// the late slot only). Where a function is inlined many times, the
+    /// copies' identical write-backs are one (gcc `-fcrossjumping`, on at
+    /// size).
     pub sink_common_at_size: bool,
     /// DEVIATE LATE-MEMCPYOPT-SIZE (owner x86-m32-b, exit 2026-12-12): at
     /// size, `MemCpyOpt` and `DSE` run once more after the simplification
@@ -618,6 +623,18 @@ pub struct Tuning {
     /// code, summed over its sites. false: the pin's `OptSizeThreshold` 50
     /// alone decides, which allows the growth.
     pub inline_size_guard_at_size: bool,
+    /// DEVIATE OS-OUTLINE-TRIAL (see `Tti::opt_size_inline_outline_trial`):
+    /// an -Os module the size bound let inline a callee that goes with its
+    /// calls is compiled again with those sites kept as calls, the smaller
+    /// finished code kept. false: the bound's verdict stands.
+    pub inline_outline_trial_at_size: bool,
+    /// With `inline_outline_trial_at_size`: the most candidate callees a module
+    /// has and is still tried (`Tti::opt_size_inline_outline_max_callees`).
+    pub inline_outline_trial_max_callees: Option<usize>,
+    /// With `inline_outline_trial_at_size`: its own clock cap, percent
+    /// (`Tti::opt_size_inline_outline_clock_cap_percent`). None:
+    /// `os_trial_clock_cap_percent`.
+    pub inline_outline_trial_clock_cap_percent: Option<i64>,
     /// With `inline_size_guard_at_size`, the bound also holds an -O1 caller.
     /// false: -O1 keeps the pin's threshold alone, where clang inlines a small
     /// callee that grows the code and clocks are the bar.
@@ -696,8 +713,9 @@ pub struct Tuning {
     /// llrm-target-x86-m64, exit 2026-11-24), the loop stays scalar: m64 -Os
     /// bytes +5..+50% on 15 corpus files.
     pub vectorize_at_size: bool,
-    /// The backend selects a vector `icmp`, `fcmp` and `select` (`Tti::selects_vector_compares`): the loop
-    /// vectorizer widens the compares of a loop. false where the selector lacks them.
+    /// The backend selects a vector `icmp`, `fcmp` and `select`
+    /// (`Tti::selects_vector_compares`): the loop vectorizer widens the
+    /// compares of a loop. false where the selector lacks them.
     pub vector_compares: bool,
     /// `shouldMaximizeVectorBandwidth(RGK_FixedWidthVector)`: `LoopVectorize`
     /// sizes the widest VF by the smallest type of the loop. false: the pin's
@@ -880,16 +898,6 @@ pub struct Tuning {
     /// alone. false: the pin's, which splits it there too and grows the code
     /// by a compare, a branch and a copy of the call.
     pub partial_libcalls_skip_at_size: bool,
-    /// DEVIATE MEM-OS-REP (owner x87, exit 2026-12-06): tuned for size, an
-    /// `llvm.memcpy` of a length known only at run time that is no loop's work
-    /// (its block is in no loop) is one `rep movsb`, not a call of `memcpy`.
-    /// gcc's `decide_alg` takes `rep_prefix_1_byte` for any unknown size when
-    /// `optimize_insn_for_size_p`; the pin's `EmitTargetCodeForMemcpy` calls
-    /// `memcpy`. A copy in a loop keeps the call: glibc's `memcpy` is faster
-    /// than the `rep movsb` startup (6.4 against 8.2 ticks for 0-32 bytes).
-    /// m32 only: at m64 QB `localarr` ran 51.0M clk against 44.1M with two
-    /// small copies as `rep movsb` (+15.6%), a worse cell than clang's 40.2M.
-    pub inline_variable_memcpy_at_size: bool,
     /// DEVIATE MEM-OS (owner anyisa, exit 2026-11-14), the neighbour of SD541:
     /// tuned for size, a constant `memcpy`/`memmove` whose load and store
     /// pieces take more bytes than the call of the library routine (`mov
@@ -1049,6 +1057,9 @@ impl Tuning {
         ext_load_extra_clocks: 0,
         immediate_forms_at_size: false,
         inline_size_guard_at_size: false,
+        inline_outline_trial_at_size: false,
+        inline_outline_trial_max_callees: None,
+        inline_outline_trial_clock_cap_percent: None,
         inline_size_guard_at_o1: false,
         inline_size_guard_single_site: false,
         inline_size_guard_yields_to_inlinehint: false,
@@ -1108,7 +1119,6 @@ impl Tuning {
         select_optimize_penalty: None,
         prefixed_16_bit_counters: false,
         partial_libcalls_skip_at_size: false,
-        inline_variable_memcpy_at_size: false,
         size_copy_price: None,
         ipsccp_widen_keeps_sign: false,
         ipsccp_widen_keeps_sign_at_size: false,

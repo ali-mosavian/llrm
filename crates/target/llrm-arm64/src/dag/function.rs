@@ -42,6 +42,10 @@ pub fn builder_target(platform: Platform) -> BuilderTarget {
             known_bits_for_target_node: Some(known_bits_for_target_node),
             fma_faster: true,
             vectors: crate::machine::vectors_enabled(),
+            nodes: llrm_codegen::backend::selectiondag::builder::LoweringNodes {
+                asm: Some(ISD::Machine(super::call::LLRM_ASM)),
+                ..llrm_codegen::backend::selectiondag::builder::LoweringNodes::installed()
+            },
             ..DagConfig::default()
         },
         shift_amount: EVT::I64,

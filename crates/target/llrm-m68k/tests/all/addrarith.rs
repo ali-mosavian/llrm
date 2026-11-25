@@ -264,3 +264,95 @@ s:
     let indexed_lea = |line: &&str| line.starts_with("\tlea\t(0,%a") && line.contains(",%d");
     assert!(!out.lines().any(|line| indexed_lea(&line)), "the stored sum is an address:\n{out}");
 }
+
+/// A pointer stepped in a loop and returned (`while (*p != 58 && *p) p += 3;
+/// return p;`) went through a data register on every step (`move.l %a0, %d0;
+/// addq.l #3, %d0; movea.l %d0, %a0`, 6 bytes): the return, a copy into the
+/// fixed address register, counted as a data use. It is `addq.l #3, %a0`.
+fn walk_and_return() -> &'static str {
+    "define ptr @f(ptr %p) optsize {
+entry:
+  br label %l
+l:
+  %q = phi ptr [ %p, %entry ], [ %q1, %n ]
+  %c = load i8, ptr %q
+  %z = icmp eq i8 %c, 0
+  br i1 %z, label %x, label %t
+t:
+  %e = icmp eq i8 %c, 58
+  br i1 %e, label %x, label %n
+n:
+  %q1 = getelementptr i8, ptr %q, i32 3
+  br label %l
+x:
+  ret ptr %q
+}"
+}
+
+/// How many register-to-register copies between a data and an address register
+/// the text holds.
+fn class_crossings(text: &str) -> usize {
+    text.lines()
+        .map(str::trim)
+        .filter(|line| {
+            let Some((op, args)) = line.split_once('\t') else { return false };
+            matches!(op, "move.l" | "movea.l")
+                && args.split_once(", ").is_some_and(|(from, to)| {
+                    (from.starts_with("%a") && to.starts_with("%d")) || (from.starts_with("%d") && to.starts_with("%a"))
+                })
+        })
+        .count()
+}
+
+#[test]
+fn a_returned_pointer_step_stays_in_the_address_register_at_os() {
+    let options = Options { size: true, ..Options::default() };
+    for cpu in [Cpu::M68000, Cpu::M68020] {
+        let out = text_with(&module(walk_and_return()), "f", cpu, options).expect("compiles");
+        assert_eq!(class_crossings(&out), 0, "{cpu:?}: the step crosses classes:\n{out}");
+        assert!(out.contains("addq.l\t#3, %a"), "{cpu:?}: the step is addq on an address register:\n{out}");
+    }
+}
+
+/// `p = *at; while (t[*++p] != 255); *at = p;`: the step's input is read by the
+/// add and by the byte load that folded the `+ 1` (`move.b (1,%aN)`), so the
+/// pass that puts a pointer add in the address register (it wanted the copy
+/// read by the add alone) left it in a data register: `move.l %a1, %d0;
+/// addq.l #1, %d0; movea.l %d1, %a2` round the loop, 2 copies and a register
+/// per trip (QB `kw_scan`).
+const SCAN: &str = "define void @f(ptr %at, ptr %t) {
+entry:
+  %p0 = load ptr, ptr %at
+  br label %l
+l:
+  %q = phi ptr [ %p0, %entry ], [ %q1, %l ]
+  %q1 = getelementptr i8, ptr %q, i32 1
+  %b = load i8, ptr %q1
+  %z = zext i8 %b to i32
+  %e = getelementptr i8, ptr %t, i32 %z
+  %k = load i8, ptr %e
+  %c = icmp eq i8 %k, -1
+  br i1 %c, label %x, label %l
+x:
+  store ptr %q1, ptr %at
+  ret void
+}";
+
+#[test]
+fn a_pointer_step_read_by_a_displaced_load_too_stays_in_the_address_register() {
+    for cpu in [Cpu::M68000, Cpu::M68020] {
+        let out = text_with(&module(SCAN), "f", cpu, Options { size: true, ..Options::default() }).expect("compiles");
+        assert!(out.contains("addq.l\t#1, %a"), "{cpu:?}:\n{out}");
+        let (_, body) = out.split_once(".LBB0_1:").expect("a loop");
+        let body = body.split_once("\tbne\t.LBB0_1").expect("its back edge").0;
+        let crossings = body
+            .lines()
+            .filter(|line| {
+                let line = line.trim();
+                (line.starts_with("move.l\t%a") && line.contains(", %d")) || line.starts_with("movea.l\t%d")
+            })
+            .count();
+        assert_eq!(crossings, 0, "{cpu:?}: copies between address and data registers in the loop:\n{out}");
+        assert!(body.contains("(%a"), "{cpu:?}: the byte load reads the stepped pointer:\n{out}");
+    }
+}

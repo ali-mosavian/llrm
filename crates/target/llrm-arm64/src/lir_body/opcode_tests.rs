@@ -119,6 +119,7 @@ fn a_name_without_a_suffix_is_llvms_or_is_listed() {
         ("ORRv16b", "ORRv16i8"),
         ("TBZ", "TBZ"),
         ("TBNZ", "TBNZ"),
+        ("WORD", "BRK"),
     ];
     const FAMILIES: &[&str] = &["FCMP", "FCVTZ", "SCVTF", "UCVTF", "TB"];
     let mut odd = Vec::new();

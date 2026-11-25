@@ -69,6 +69,7 @@ pub(super) fn to_inst(
         }
         Inst::Svc { imm16 } => semantics(Operation::Escape, "SVC", vec![], vec![imm(i64::from(*imm16))], None),
         Inst::Brk { imm16 } => semantics(Operation::Escape, "BRK", vec![], vec![imm(i64::from(*imm16))], None),
+        Inst::Word { word } => semantics(Operation::Escape, "WORD", vec![], vec![imm(i64::from(*word))], None),
         Inst::Nop => semantics(Operation::Nothing, "NOP", vec![], vec![], None),
         _ => return Ok(None),
     }))
@@ -183,6 +184,7 @@ pub(super) fn back(
         }),
         "SVC" => Op::I(Inst::Svc { imm16: value_of(&s[0]) as u16 }),
         "BRK" => Op::I(Inst::Brk { imm16: value_of(&s[0]) as u16 }),
+        "WORD" => Op::I(Inst::Word { word: value_of(&s[0]) as u32 }),
         "NOP" => Op::I(Inst::Nop),
         _ if name.starts_with("CB") => {
             let (_, letter, _) = split(name);

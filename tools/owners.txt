@@ -55,3 +55,4 @@ llrm-oversight
 llrm-coordinator
 w15-arm64
 z80-argpush
+qb-arm64-synth-gfx

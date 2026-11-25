@@ -342,6 +342,8 @@ pub(crate) struct FrameInputs {
     pub(crate) frame_indices: Vec<i32>,
     /// The frame operands that name each, in the same order.
     uses: Vec<u64>,
+    /// The allocation left `%a6` unused: the frame may take it as its pointer.
+    frame_pointer_free: bool,
 }
 
 impl FrameInputs {
@@ -403,25 +405,36 @@ impl FrameInputs {
                     .count() as u64
             })
             .collect();
-        FrameInputs { fixed, objects, used, has_calls, short, has_var_sized, frame_indices, uses }
+        let frame_pointer_free = !used.contains(&reg::A6);
+        FrameInputs { fixed, objects, used, has_calls, short, has_var_sized, frame_indices, uses, frame_pointer_free }
     }
 
-    /// The laid-out frame for a call area of `max_call_frame` bytes.
+    /// The laid-out frame for a call area of `max_call_frame` bytes. A frame
+    /// whose incoming arguments the stack pointer cannot reach in 16 bits
+    /// takes `%a6` as its pointer when the allocation left it free (the
+    /// pre-allocation rule, [`frame::needs_frame_pointer`], only sees the
+    /// locals' sizes: the spill slots, saved registers and call area still
+    /// to come can push an argument past the reach).
     pub(crate) fn layout(
         &self,
         max_call_frame: i64,
     ) -> frame::Layout {
-        frame::layout(&Function {
-            fixed: self.fixed.len(),
-            objects: self.objects.clone(),
-            saved: self.used.clone(),
-            max_call_frame,
-            stack_align: if self.short { frame::SHIPPED_STACK_ALIGN } else { 0 },
-            adjusts_stack: self.has_calls,
-            has_var_sized: self.has_var_sized,
-            uses: self.uses.clone(),
-            ..Function::default()
-        })
+        let of = |frame_pointer_all: bool| {
+            frame::layout(&Function {
+                fixed: self.fixed.len(),
+                objects: self.objects.clone(),
+                saved: self.used.clone(),
+                max_call_frame,
+                stack_align: if self.short { frame::SHIPPED_STACK_ALIGN } else { 0 },
+                adjusts_stack: self.has_calls,
+                has_var_sized: self.has_var_sized,
+                uses: self.uses.clone(),
+                frame_pointer_all,
+                ..Function::default()
+            })
+        };
+        let layout = of(false);
+        if self.frame_pointer_free && !layout.has_fp && layout.fixed_out_of_reach() { of(true) } else { layout }
     }
 }
 
@@ -570,6 +583,11 @@ pub fn finish_with(
         }
     }
     let layout = frame_of(kept_area);
+    // `layout` takes `%a6` when it is free; an argument past `(d16,%sp)` with
+    // `%a6` allocated cannot be named
+    if !layout.has_fp && layout.fixed_out_of_reach() {
+        return Err(format!("{}: an argument is past the reach of (d16,%sp) and %a6 is allocated", function.name));
+    }
     let mut out = Vec::new();
     let (opening, closing) = frame_ops(&layout, cpu, push_frame, short, wants_size)?;
     opening.iter().for_each(|op| frame_op(op, &mut out, short));
@@ -814,6 +832,27 @@ pub fn finish_with(
             pushed -= owed;
             owed = 0;
         }
+        // `(d16,%a6)` names an object within 32 KiB of the frame pointer; one
+        // further (a frame of several large objects) is reached by moving
+        // `%a6` to it and back: `adda` and `suba` leave the condition codes
+        // alone, and nothing reads the frame pointer in between.
+        let mut operands = operands;
+        let mut restore = None;
+        if let Some(at) = far_frame_pair(&operands).filter(|_| inst.kind != Kind::Op("LEA32p")) {
+            let mc::Operand::Imm(disp) = operands[at] else { return Err("a far frame displacement".to_owned()) };
+            if operands.iter().filter(|one| matches!(one, mc::Operand::Reg(r) if *r == reg::A6)).count() > 1 {
+                return Err("a far frame operand beside another use of %a6".to_owned());
+            }
+            let near = (disp + 32768).rem_euclid(65536) - 32768;
+            let moved = disp - near;
+            let a6 = mc::Operand::Reg(reg::A6);
+            let step =
+                |opcode| mc::Inst { opcode, operands: vec![a6.clone(), a6.clone(), mc::Operand::Imm(moved.abs())] };
+            let (forth, back) = if moved >= 0 { ("ADD32ai", "SUB32ai") } else { ("SUB32ai", "ADD32ai") };
+            operands[at] = mc::Operand::Imm(near);
+            out.push(step(forth));
+            restore = Some(step(back));
+        }
         match inst.kind {
             Kind::Copy => {
                 let [mc::Operand::Reg(dst), mc::Operand::Reg(src)] = operands[..] else {
@@ -977,9 +1016,22 @@ pub fn finish_with(
             }
             Kind::Op(name) => out.push(mc::Inst { opcode: name, operands }),
         }
+        out.extend(restore);
     }
     flush(&mut out, &mut marks, &mut lines);
     Ok(lines)
+}
+
+/// The position of a displacement past 16 bits that is taken from `%a6`.
+fn far_frame_pair(operands: &[mc::Operand]) -> Option<usize> {
+    operands
+        .windows(2)
+        .position(
+            |pair| matches!(
+                pair,
+                [mc::Operand::Imm(d), mc::Operand::Reg(base)] if *base == reg::A6 && i16::try_from(*d).is_err()
+            ),
+        )
 }
 
 /// `ExpandMOVI` for a long: a clear, a `moveq` where the register is a data

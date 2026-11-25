@@ -85,6 +85,7 @@ const SOURCE_ORDER: Options = Options {
     return_dup: false,
     class_split: false,
     compare_destinations: false,
+    address_data_uses: false,
     carry_chain: true,
     global_copies: true,
     relax_classes: false,
