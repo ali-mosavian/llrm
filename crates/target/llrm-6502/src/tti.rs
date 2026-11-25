@@ -370,11 +370,15 @@ impl Tti for Mos6502 {
     ) -> bool {
         let key = |c: &LsrCost| {
             // u64: a rejected formula carries `u32::MAX` terms.
-            let work = 3 * u64::from(c.add_rec_cost)
-                + 7 * u64::from(c.num_base_adds)
-                + 40 * u64::from(c.num_iv_muls)
-                + u64::from(c.written_work)
-                + 4 * u64::from(c.imm_cost);
+            // Half instructions: a step counts 2 for a width `n8` does not
+            // hold and 1 for a byte (llvm-mos `RateRegister`), at 4 each: a
+            // word step is `inc; bne; inc` and its branch, a byte step is
+            // half that. The other terms are doubled to match.
+            let work = 4 * u64::from(c.add_rec_cost)
+                + 14 * u64::from(c.num_base_adds)
+                + 80 * u64::from(c.num_iv_muls)
+                + 2 * u64::from(c.written_work)
+                + 8 * u64::from(c.imm_cost);
             (work, c.num_regs, c.scale_cost, c.setup_cost)
         };
         key(a) < key(b)

@@ -493,15 +493,33 @@ pub fn scaling_factor_cost(
         Kind::Address => {
             // The price at both ends of the offsets.
             // Folded above, so the formula has a mode.
-            let mode = f.mode().expect("a folded formula has a mode");
+            let mode = f.mode_in(se).expect("a folded formula has a mode");
             let at = |offset: Immediate| {
-                tti.scaling_factor_cost_at(
+                let offset = f.base_offset.add_unsigned(offset).0;
+                let cost = tti.scaling_factor_cost_at(
                     lu.access_ty.bytes,
                     mode.global,
-                    f.base_offset.add_unsigned(offset).0,
+                    offset,
                     mode.has_base_reg,
                     mode.scale,
-                )
+                );
+                // llvm-mos's `getScalingFactorCost` reads the widths too: a
+                // mode legal for them is free, not invalid.
+                if !cost.valid
+                    && tti.is_legal_addressing_mode_typed(
+                        lu.access_ty.addr_space,
+                        lu.access_ty.bytes,
+                        mode.global,
+                        offset,
+                        mode.has_base_reg,
+                        mode.scale,
+                        mode.bits.base,
+                        mode.bits.scaled,
+                    )
+                {
+                    return TtiCost::FREE;
+                }
+                cost
             };
             let (min, max) = (at(lu.min_offset), at(lu.max_offset));
             assert!(min.valid && max.valid, "Legal addressing mode has an illegal cost!");
@@ -754,11 +772,6 @@ impl Cost {
         if !absorbed && inside {
             self.c.num_base_adds += u32::from(f.unfolded_offset.is_non_zero());
         }
-        // llvm-mos `RateFormula`: the adds of a formula of an illegal width
-        // are as many machine adds again.
-        if matches!(f.ty(r.se, r.cx), Some(Ty::Int(bits)) if r.cx.layout.is_illegal_width(bits)) {
-            self.c.num_base_adds += self.c.num_base_adds - prev_base_adds;
-        }
 
         if let Some(m) = bytes_model {
             let constant = |v: i64| m.constant + leb_len(v);
@@ -968,9 +981,13 @@ impl Cost {
                 return;
             }
 
-            // llvm-mos: a step of an illegal width is several machine adds.
+            // llvm-mos `RateRegister`: a step of an illegal width is several
+            // machine adds. Not translated: its `RateFormula` doubling of the
+            // base adds (a 16-bit table pointer kept beside the counter paid
+            // +42 B at -Os, switch_peeled_table; the 6502 prices base adds
+            // by width itself).
             let reg_ty = r.se.type_of(reg);
-            let mut loop_cost = if matches!(reg_ty, Ty::Int(bits) if r.cx.layout.is_illegal_width(bits)) {
+            let mut loop_cost = if r.cx.layout.is_illegal_width(r.se.get_type_size_in_bits(r.cx, reg_ty)) {
                 2
             } else {
                 1
