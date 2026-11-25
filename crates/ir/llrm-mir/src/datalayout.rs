@@ -212,6 +212,15 @@ impl DataLayout {
         self.legal.contains(&bits)
     }
 
+    /// `DataLayout::isIllegalInteger` (llvm-mos): `bits` is no native width
+    /// where the layout names native widths at all.
+    pub fn is_illegal_width(
+        &self,
+        bits: u32,
+    ) -> bool {
+        !self.legal.is_empty() && !self.legal.contains(&bits)
+    }
+
     /// `DataLayout::fitsInLegalInteger`
     /// ([DataLayout.h](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/IR/DataLayout.h)):
     /// whether some native integer is at least `bits` wide.

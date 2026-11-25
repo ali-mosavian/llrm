@@ -754,6 +754,11 @@ impl Cost {
         if !absorbed && inside {
             self.c.num_base_adds += u32::from(f.unfolded_offset.is_non_zero());
         }
+        // llvm-mos `RateFormula`: the adds of a formula of an illegal width
+        // are as many machine adds again.
+        if matches!(f.ty(r.se, r.cx), Some(Ty::Int(bits)) if r.cx.layout.is_illegal_width(bits)) {
+            self.c.num_base_adds += self.c.num_base_adds - prev_base_adds;
+        }
 
         if let Some(m) = bytes_model {
             let constant = |v: i64| m.constant + leb_len(v);
@@ -963,7 +968,13 @@ impl Cost {
                 return;
             }
 
-            let mut loop_cost = 1;
+            // llvm-mos: a step of an illegal width is several machine adds.
+            let reg_ty = r.se.type_of(reg);
+            let mut loop_cost = if matches!(reg_ty, Ty::Int(bits) if r.cx.layout.is_illegal_width(bits)) {
+                2
+            } else {
+                1
+            };
             // A pointer that steps by a constant from an invariant start is a
             // post-indexed access's own increment: free where every fixup of
             // the use runs each trip.

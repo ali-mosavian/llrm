@@ -614,6 +614,16 @@ impl Tti for Mos6502 {
         matches!((from, to), (Ty::Int(from), Ty::Int(to)) if to < from)
     }
 
+    /// llvm-mos `MOSTargetLowering::isZExtFree`: a byte widened by zeros is
+    /// the byte and a zero in the high lane.
+    fn is_zext_free(
+        &self,
+        from: Ty,
+        to: Ty,
+    ) -> bool {
+        matches!((from, to), (Ty::Int(from), Ty::Int(to)) if from < to)
+    }
+
     fn is_legal_addressing_mode(
         &self,
         gv: bool,

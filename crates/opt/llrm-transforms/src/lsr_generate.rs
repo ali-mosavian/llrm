@@ -882,6 +882,78 @@ impl Collection<'_, '_> {
         }
     }
 
+    /// llvm-mos `LSRInstance::GenerateZExts`
+    /// ([LoopStrengthReduce.cpp](https://github.com/llvm-mos/llvm-mos/blob/main/llvm/lib/Transforms/Scalar/LoopStrengthReduce.cpp)):
+    /// a register of an illegal integer width, known non-negative at every
+    /// fixup and whose unsigned range needs fewer bytes, is also offered
+    /// truncated to the widest of those byte counts, where the target widens
+    /// it free (`Tti::is_zext_free`): the step is then a byte add and the
+    /// high lane a constant zero. Not in the pin, whose registers keep the
+    /// type of their use.
+    ///
+    /// DEVIATE: a register that needs its whole width is left alone (llvm-mos
+    /// truncates to the same type there, which `getTruncateExpr` does not
+    /// allow).
+    pub fn generate_zexts(
+        &mut self,
+        se: &mut ScalarEvolution,
+        lu_idx: usize,
+        base: Formula,
+    ) {
+        let cx = self.cx;
+        if base.ty(se, cx).is_none() {
+            return;
+        }
+        let mut f = base.clone();
+        let mut changed = false;
+        // The base registers, then the scaled one when it has scale one.
+        let scaled_too = f.scale == 1 && f.scaled_reg.is_some();
+        let count = f.base_regs.len() + usize::from(scaled_too);
+        for idx in 0..count {
+            let reg = if idx == f.base_regs.len() { f.scaled_reg.expect("scaled") } else { f.base_regs[idx] };
+            let ty = se.type_of(reg);
+            let Ty::Int(width) = ty else { continue };
+            if cx.layout.legal_integer(width) {
+                continue;
+            }
+            let mut narrow_width = 0;
+            let mut cannot = false;
+            let loops: Vec<Vec<llrm_mir::module::BlockId>> =
+                self.uses[lu_idx].fixups.iter().map(|fixup| fixup.post_inc_loops.clone()).collect();
+            for l in &loops {
+                let r = se.denormalize_for_post_inc_use(cx, reg, l);
+                if !se.is_known_non_negative(cx, r) {
+                    cannot = true;
+                    break;
+                }
+                let bytes = se.get_unsigned_range(cx, r).get_active_bits().div_ceil(8);
+                if bytes == 0 {
+                    cannot = true;
+                    break;
+                }
+                narrow_width = narrow_width.max(bytes * 8);
+            }
+            if cannot || narrow_width >= width || !cx.layout.legal_integer(narrow_width) {
+                continue;
+            }
+            if !self.tti.is_zext_free(tti_ty(Ty::Int(narrow_width)), tti_ty(ty)) {
+                continue;
+            }
+            let narrow = se.get_truncate_expr(cx, ScevUse::of(reg), Ty::Int(narrow_width), 0);
+            if idx == f.base_regs.len() {
+                f.scaled_reg = Some(narrow);
+            } else {
+                f.base_regs[idx] = narrow;
+            }
+            changed = true;
+        }
+        if !changed {
+            return;
+        }
+        f.canonicalize(se, self.l);
+        let _ = self.insert_formula(se, lu_idx, &f);
+    }
+
     /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/LoopStrengthReduce.cpp#L4608
     /// `GenerateCrossUseConstantOffsets`: registers a constant apart, with
     /// formulae that take the one from the other.
@@ -1054,6 +1126,10 @@ impl Collection<'_, '_> {
             for i in 0..self.uses[lu_idx].formulae.len() {
                 let f = self.uses[lu_idx].formulae[i].clone();
                 self.generate_combinations(se, lu_idx, f);
+            }
+            for i in 0..self.uses[lu_idx].formulae.len() {
+                let f = self.uses[lu_idx].formulae[i].clone();
+                self.generate_zexts(se, lu_idx, f);
             }
         }
         for lu_idx in 0..self.uses.len() {
