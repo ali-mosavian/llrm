@@ -261,7 +261,7 @@ s:
 }";
     let module = llrm_mir::parse::module(ir).expect("parses");
     let out = text_with(&module, "f", Cpu::M68000, Options::default()).expect("compiles");
-    let indexed_lea = |line: &&str| line.starts_with("\tlea\t(0,%a") && line.contains(",%d");
+    let indexed_lea = |line: &&str| line.starts_with("\tlea\t(0,%a") && line.contains(", %d");
     assert!(!out.lines().any(|line| indexed_lea(&line)), "the stored sum is an address:\n{out}");
 }
 
@@ -354,5 +354,35 @@ fn a_pointer_step_read_by_a_displaced_load_too_stays_in_the_address_register() {
             .count();
         assert_eq!(crossings, 0, "{cpu:?}: copies between address and data registers in the loop:\n{out}");
         assert!(body.contains("(%a"), "{cpu:?}: the byte load reads the stepped pointer:\n{out}");
+    }
+}
+
+/// A pointer read at one place and stepped by 1 or 2 at others: every step
+/// read the pointer through a copy into the others' data-class inputs, so none
+/// was made an address add and each paid `move; addq; move` through a data
+/// register (QB `decl_step`: 136 B, gcc 112; declare.c -146 B at 68020).
+#[test]
+fn the_steps_of_one_pointer_are_address_adds() {
+    let ir = "define ptr @f(ptr %p) minsize {
+entry:
+  br label %l
+l:
+  %q = phi ptr [ %p, %entry ], [ %q1, %one ], [ %q2, %two ]
+  %c = load i8, ptr %q
+  switch i8 %c, label %x [ i8 46, label %one
+                           i8 33, label %two ]
+one:
+  %q1 = getelementptr i8, ptr %q, i32 1
+  br label %l
+two:
+  %q2 = getelementptr i8, ptr %q, i32 2
+  br label %l
+x:
+  ret ptr %q
+}";
+    for cpu in [Cpu::M68000, Cpu::M68020] {
+        let asm = text(ir, cpu);
+        let in_data = asm.lines().filter(|line| line.starts_with("\taddq.l\t#") && line.contains(", %d")).count();
+        assert_eq!(in_data, 0, "{cpu:?}: a pointer step in a data register:\n{asm}");
     }
 }

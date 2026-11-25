@@ -59,6 +59,12 @@ enum Use {
     /// A copy into this register.
     Copy(u32),
     Phi(u32),
+    /// A copy into the input of a pointer step (`x = copy y; d = x + k`):
+    /// the step is an address add of its own, so the copy costs `y` nothing in
+    /// a data register. Without it the steps of one pointer, each a data copy
+    /// of `y` to the others, kept each other in data registers (gcc
+    /// `regclass` takes the class of a pointer family by its uses' costs).
+    Step(u32),
     /// An operand the instruction's description gives an address register.
     Address,
     /// An operand of either class (a store's source, a compare's other side):
@@ -79,6 +85,14 @@ fn uses_by_register(
     let mut all: Vec<Vec<Use>> = (0..function.classes.len()).map(|_| Vec::new()).collect();
     let mut deferred: Vec<(usize, usize, Vec<u32>)> = Vec::new();
     let mut copy_of: Vec<Option<u32>> = vec![None; function.classes.len()];
+    let mut steps: HashSet<u32> = HashSet::default();
+    for inst in function.blocks.iter().flat_map(|block| &block.insts) {
+        if let (Kind::Op("ADD32di" | "ADDQ32di" | "SUB32di" | "SUBQ32di"), [_, Operand::Use(Reg::Virt(x)), Operand::Imm(_)]) =
+            (&inst.kind, &inst.operands[..])
+        {
+            steps.insert(*x);
+        }
+    }
     for block in &function.blocks {
         for phi in &block.phis {
             for (_, incoming) in &phi.incoming {
@@ -100,6 +114,7 @@ fn uses_by_register(
                 if let Operand::Use(Reg::Virt(v)) = operand {
                     let slot = all[*v as usize].len();
                     all[*v as usize].push(match (&inst.kind, &inst.operands[..]) {
+                        (Kind::Copy, [Operand::Def(Reg::Virt(dst)), _]) if steps.contains(dst) => Use::Step(*dst),
                         (Kind::Copy, [Operand::Def(Reg::Virt(dst)), _]) => Use::Copy(*dst),
                         // a pointer returned or passed in an address register
                         (Kind::Copy, [Operand::Def(Reg::Phys(to)), _]) if wide && is_address(*to) => Use::Address,
@@ -188,7 +203,7 @@ fn reaches_addresses_only(
                 Class::Xr32 => reaches_addresses_only(function, uses, *to, skip, seen),
                 _ => false,
             },
-            Use::Address | Use::Either => true,
+            Use::Address | Use::Either | Use::Step(_) => true,
             Use::Other => false,
         })
 }
@@ -303,7 +318,7 @@ fn address_copy(
             |one| match one {
                 Use::Other | Use::Address | Use::Either => true,
                 Use::Copy(to) => function.classes[*to as usize] == Class::Ar32,
-                Use::Phi(_) => false,
+                Use::Phi(_) | Use::Step(_) => false,
             },
         );
     // only in the wide run of a size build, which the trial keeps where it is
