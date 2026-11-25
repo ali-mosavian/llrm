@@ -143,6 +143,9 @@ struct Sink<'a, T: Target> {
     merge: HashMap<(u32, u32), u32>,
     to_split: Vec<(u32, u32)>,
     live_out: Option<Vec<Vec<u64>>>,
+    /// `CachedRegisterPressure`: a block's pressure, kept until the block being
+    /// processed is done.
+    cached_pressure: HashMap<usize, Vec<(T::Class, usize)>>,
     /// Whether an edge may get a block of its own for an instruction to land
     /// in.
     allow_split: bool,
@@ -202,6 +205,7 @@ impl<'a, T: Target + Jump> Sink<'a, T> {
             merge: HashMap::default(),
             to_split: Vec::new(),
             live_out: None,
+            cached_pressure: HashMap::default(),
             allow_split: true,
             tied_chains: false,
         };
@@ -219,6 +223,7 @@ impl<'a, T: Target + Jump> Sink<'a, T> {
         self.copy_source = vec![None; count];
         self.uses = vec![Vec::new(); count];
         self.live_out = None;
+        self.cached_pressure.clear();
         for (at, block) in self.function.blocks.iter().enumerate() {
             for phi in &block.phis {
                 if let Some(v) = virt(phi.result) {
@@ -324,11 +329,8 @@ impl<'a, T: Target + Jump> Sink<'a, T> {
         &mut self,
         block: usize,
     ) -> Vec<(T::Class, usize)> {
-        if self.live_out.is_none() {
-            self.live_out = Some(self.liveness());
-        }
         let classes = &self.function.classes;
-        let mut live: Vec<u64> = self.live_out.as_ref().unwrap()[block].clone();
+        let mut live: Vec<u64> = Vec::new();
         // live registers per class, kept as registers come and go
         let mut counts: Vec<(T::Class, usize)> = Vec::new();
         let bump = |counts: &mut Vec<(T::Class, usize)>, v: u32, up: bool| {
@@ -448,7 +450,11 @@ impl<'a, T: Target + Jump> Sink<'a, T> {
         block: usize,
     ) -> bool {
         let limit = T::candidates(class).len();
-        let have = self.pressure(block).iter().find(|(one, _)| *one == class).map_or(0, |(_, count)| *count);
+        if !self.cached_pressure.contains_key(&block) {
+            let pressure = self.pressure(block);
+            self.cached_pressure.insert(block, pressure);
+        }
+        let have = self.cached_pressure[&block].iter().find(|(one, _)| *one == class).map_or(0, |(_, count)| *count);
         1 + have >= limit
     }
 
@@ -781,7 +787,6 @@ impl<'a, T: Target + Jump> Sink<'a, T> {
             }
             self.uses[src as usize].push(site);
         }
-        self.live_out = None;
         true
     }
 
@@ -855,7 +860,6 @@ impl<'a, T: Target + Jump> Sink<'a, T> {
             }
         }
         self.function.blocks[to].insts.insert(0, inst);
-        self.live_out = None;
         true
     }
 
@@ -883,6 +887,11 @@ impl<'a, T: Target + Jump> Sink<'a, T> {
             if self.sink_instruction(block, at, &mut saw_store, &mut cache) {
                 changed = true;
             }
+        }
+        // recalculate the pressure after sinking into a block
+        self.cached_pressure.clear();
+        if changed {
+            self.live_out = None;
         }
         changed
     }
