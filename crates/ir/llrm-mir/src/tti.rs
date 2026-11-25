@@ -1564,6 +1564,18 @@ pub trait Tti {
         None
     }
 
+    /// DEVIATE INLINE-HINT-RATE: when the trials that keep the calls of a
+    /// hinted callee (keep-hinted-calls, keep-loop-calls) keep the smaller
+    /// object: the work they add is within `percent` of the module's, or at
+    /// most `per_byte` modelled clocks for each byte saved. gcc's
+    /// `want_inline_small_function_p` (growth <= 0) keeps the calls for bytes
+    /// at -Os. Neither alone: the percent misreads code that runs once (+83% is
+    /// 180 clocks for 428 B), the rate passes a loop with a large base. None:
+    /// the shared percent cap.
+    fn opt_size_inline_hint_trial_limits(&self) -> Option<(i64, i64)> {
+        None
+    }
+
     /// With `opt_size_inline_outline_trial`: the most distinct callees a module
     /// may have among the candidate sites and still be compiled again. The
     /// trial's compile cost follows the candidates and its gain does not (QB
