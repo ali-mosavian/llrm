@@ -181,10 +181,6 @@ struct Late {
     /// of different loops merge.
     loops: HashMap<usize, usize>,
     graph: RefCell<Option<Graph>>,
-    /// The labels each block's terminators name, and whether one is a table
-    /// jump, by block id: kept until the block's terminators change, so the
-    /// graph, rebuilt after every merge, reads no instruction again.
-    named: RefCell<HashMap<usize, (Vec<usize>, bool)>>,
 }
 
 impl Late {
@@ -250,7 +246,6 @@ impl Late {
             for_size,
             loops: HashMap::default(),
             graph: RefCell::new(None),
-            named: RefCell::new(HashMap::default()),
         }
     }
 
@@ -410,57 +405,22 @@ impl Late {
         EDGE_SCANS.with(|count| count.set((count.get().0, count.get().1 + 1)));
         let block = &self.blocks[at];
         let named = |label: usize| by_label.get(label).copied().filter(|&id| id != usize::MAX);
-        let (labels, table) = self.terminator_labels(at);
-        if table {
-            out.extend(self.tables.iter().filter_map(|&label| named(label)));
+        // the terminators are the block's last instructions
+        for inst in block.insts.iter().rev().take_while(|inst| {
+            EDGE_SCANS.with(|count| count.set((count.get().0 + 1, count.get().1)));
+            ending(inst) != Ending::Plain
+        }) {
+            match ending(inst) {
+                Ending::Plain | Ending::Return | Ending::Trap => {}
+                Ending::Table => out.extend(self.tables.iter().filter_map(|&label| named(label))),
+                _ => out.extend(self.label_of(inst).and_then(named)),
+            }
         }
-        out.extend(labels.into_iter().filter_map(named));
-        let _ = block;
         if self.falls_through(at) {
             out.push(self.blocks[at + 1].id);
         }
         out.sort_unstable();
         out.dedup();
-    }
-
-    /// The labels the terminators of `blocks[at]` name, and whether one is a
-    /// table jump (`ending`), from the terminators only.
-    fn terminator_labels(
-        &self,
-        at: usize,
-    ) -> (Vec<usize>, bool) {
-        let id = self.blocks[at].id;
-        let kept = self.named.borrow().get(&id).cloned();
-        let found = kept.unwrap_or_else(|| {
-            let mut labels = Vec::new();
-            let mut table = false;
-            EDGE_SCANS.with(|count| count.set((count.get().0, count.get().1 + 1)));
-            for inst in self.blocks[at].insts.iter().rev().take_while(|inst| {
-                EDGE_SCANS.with(|count| count.set((count.get().0 + 1, count.get().1)));
-                ending(inst) != Ending::Plain
-            }) {
-                match ending(inst) {
-                    Ending::Plain | Ending::Return | Ending::Trap => {}
-                    Ending::Table => table = true,
-                    _ => labels.extend(self.label_of(inst)),
-                }
-            }
-            self.named.borrow_mut().insert(id, (labels.clone(), table));
-            (labels, table)
-        });
-        #[cfg(debug_assertions)]
-        {
-            let mut fresh = (Vec::new(), false);
-            for inst in self.blocks[at].insts.iter().rev().take_while(|inst| ending(inst) != Ending::Plain) {
-                match ending(inst) {
-                    Ending::Plain | Ending::Return | Ending::Trap => {}
-                    Ending::Table => fresh.1 = true,
-                    _ => fresh.0.extend(self.label_of(inst)),
-                }
-            }
-            assert_eq!(found, fresh, "stale terminator labels of block {id}");
-        }
-        found
     }
 
     fn falls_through(
@@ -560,7 +520,6 @@ impl Late {
                 }
             }
         }
-        self.named.get_mut().clear();
         self.changed();
         // blocks nothing reaches
         let dead: Vec<usize> = self
@@ -598,7 +557,6 @@ impl Late {
                 continue;
             }
             let joined = self.blocks.remove(at);
-            self.named.get_mut().remove(&self.blocks[at - 1].id);
             let before = &mut self.blocks[at - 1];
             let base = before.insts.len();
             before.insts.extend(joined.insts);
@@ -783,7 +741,6 @@ impl TailMergeFunction for Late {
         while self.blocks[at].insts.last().is_some_and(|last| self.branches_to_block(last)) {
             self.blocks[at].insts.pop();
         }
-        self.named.get_mut().remove(&block);
         let len = self.blocks[at].insts.len();
         self.blocks[at].rows.iter_mut().for_each(|(index, _)| *index = (*index).min(len));
         self.relink(&[block]);
@@ -798,7 +755,6 @@ impl TailMergeFunction for Late {
     ) {
         let label = self.label_for(taken);
         let at = self.at(block);
-        self.named.get_mut().remove(&block);
         match cond {
             Some(cond) => {
                 let mut branch = cond.clone();
@@ -834,7 +790,6 @@ impl TailMergeFunction for Late {
         if let Some(header) = self.loops.get(&block).copied() {
             self.loops.insert(id, header);
         }
-        self.named.get_mut().remove(&block);
         let tail = self.blocks[position].insts.split_off(at);
         let (kept, moved): (Vec<_>, Vec<_>) =
             std::mem::take(&mut self.blocks[position].rows).into_iter().partition(|(index, _)| *index < at);
@@ -856,7 +811,6 @@ impl TailMergeFunction for Late {
     ) {
         let label = self.label_for(dest);
         let position = self.at(block);
-        self.named.get_mut().remove(&block);
         self.blocks[position].insts.truncate(at);
         self.blocks[position].rows.retain(|(index, _)| *index < at);
         if self.blocks.get(position + 1).map(|next| next.id) != Some(dest) {

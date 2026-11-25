@@ -1,6 +1,6 @@
 //! The class split walked the whole function once per candidate register to
 //! find where it is read and written, so a function of many address values
-//! took time in proportion to values x instructions (`synth.c` at 68020 -O2:
+//! took time in proportion to values x instructions (a very large function:
 //! 6% of its compile instructions). It now walks once.
 
 use llrm_m68k::classsplit::{hold_in_data_registers, occurrences_visited};
