@@ -184,9 +184,24 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
         n0: SDValue,
         n1: SDValue,
         signed: bool,
+        node: SDValue,
     ) -> bool {
         let config = self.dag.config();
         if !self.int_div_cheap(vt) {
+            return false;
+        }
+        // DEVIATE EXACT-DIV-OS: an `exact` divide by a constant is a shift and
+        // one multiply by the odd part's inverse (`BuildExactSDIV`): no more
+        // bytes than the divide's `mov`, `cdq`, `div` (a pointer difference of
+        // 36-byte elements: `sar`, `imul` 9 B against 8) and a multiply for the
+        // divide's ~40 clocks on a 486. gcc and clang (-Os) make it. Needs a
+        // legal multiply.
+        if config.exact_div_inverse
+            && self.dag.node(node).flags.0 & SDNodeFlags::EXACT.0 != 0
+            && !vt.is_vector()
+            && self.dag.constant(n1).is_some_and(|c| c > 1)
+            && self.tli.is_some_and(|tli| tli.is_operation_legal_or_custom(ISD::Mul, vt))
+        {
             return false;
         }
         let bits = vt.size_in_bits();
@@ -411,7 +426,7 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
         }
         if self.dag.const_or_splat(n1).is_some()
             && (vt.is_vector()
-                || (!self.divide_stays(vt, n0, n1, true)
+                || (!self.divide_stays(vt, n0, n1, true, node)
                     && !self.hardware_divide_wins(vt, n0, n1, true, self.has_sibling_rem(n0, n1, true))))
         {
             // DEVIATE SD-DIVMAG: by a negative divisor the quotient is the
@@ -580,7 +595,7 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
         // sequence is the only form.
         if self.dag.const_or_splat(n1).is_some()
             && (vt.is_vector()
-                || (!self.divide_stays(vt, n0, n1, false)
+                || (!self.divide_stays(vt, n0, n1, false, node)
                     && !self.hardware_divide_wins(vt, n0, n1, false, self.has_sibling_rem(n0, n1, false))))
         {
             return self.build_udiv(n0, n1, node);
@@ -697,7 +712,7 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
         // "Checking cheapness here makes sense since the simplification
         // results in fatter code." A vector has no divide to keep.
         if !vt.is_vector()
-            && (self.divide_stays(vt, n0, n1, signed) || self.hardware_divide_wins(vt, n0, n1, signed, true))
+            && (self.divide_stays(vt, n0, n1, signed, node) || self.hardware_divide_wins(vt, n0, n1, signed, true))
         {
             return None;
         }

@@ -1175,6 +1175,7 @@ fn selected_in(
         // +763 B over 309 programs (2026-10-27). Cost: an idiv is ~40 clocks
         // on a 486 where the multiply is ~13.
         .with_int_div_cheap(cpu.size || cpu.min_size || cpu.bytes_strict() && arch.small_divide_at_o1())
+        .with_exact_div_inverse(true)
         .with_sdiv_pow2_stays(
             cpu.min_size
                 || llrm_mir::memory::has(&function.attrs, "minsize")
