@@ -116,22 +116,21 @@ fn the_check_reports_an_ora_join_and_a_loop() {
     );
 }
 
-/// A long shifted by 3 to 7 bits at -O2 and -O3 was a loop of word shifts, the
-/// type legalizer's two (`x >> 5` 276 clocks a call, `x << 4` 220); llvm-mos
-/// writes it as one-bit steps over the four bytes, and from 5 bits as a byte
-/// move and `8 - n` steps the other way (`shouldOverCorrect`). No loop, no
-/// runtime routine, and the clocks of the chain.
+/// A long shifted by 5 to 7 bits at -O2 and -O3 was a loop of word shifts, the
+/// type legalizer's two (`x >> 5` 276 clocks a call); llvm-mos writes it as a
+/// byte move and `8 - n` one-bit steps the other way (`shouldOverCorrect`).
+/// No loop, no runtime routine, and the clocks of the chain.
 #[test]
-fn a_long_shifted_by_three_to_seven_bits_is_a_chain_at_speed_levels() {
+fn a_long_shifted_by_five_to_seven_bits_is_a_chain_at_speed_levels() {
     let mut over = Vec::new();
     for level in [Level::O2, Level::O3] {
-        for by in 3..=7u32 {
+        for by in 5..=7u32 {
             for op in ["shl", "lshr"] {
                 let (bytes, body) = bytes_of(op, by, level);
                 let estimate = estimate_of(&body);
-                // one-bit steps over four bytes (20 clocks each): `by` of them
-                // below 5 bits, `8 - by` from 5, and the byte moves around them
-                let steps = if by < 5 { by } else { 8 - by };
+                // `8 - by` one-bit steps over four bytes (20 clocks each) and
+                // the byte moves around them
+                let steps = 8 - by;
                 let limit = u64::from(steps) * 20 + 90;
                 if body.lines().map(str::trim).any(|line| line.starts_with('b') && !line.starts_with("bit")) {
                     over.push(format!("{op} {by} {level:?}: a loop\n{body}"));

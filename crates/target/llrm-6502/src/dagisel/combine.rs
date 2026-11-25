@@ -782,12 +782,16 @@ fn shifted_byte_in_pieces(
 /// bytes, or from 5 bits a byte more the other way (`shouldOverCorrect`).
 ///
 /// DEVIATE 6502-LONG-SHIFT (owner x87, exit 2026-12-15): up to two bits at
-/// every level, and 3 to 7 only in a function a speed level tunes (-O2,
-/// -O3). At -Os and -O1 a step is 8 B unrolled where `shift_forms` makes a
-/// loop of the words' shifts (13 B whatever the count), and the 81 programs
-/// got 56 to 213 B larger; those levels wait for a loop form of the chain.
-/// After a byte (9 to 15 bits) the words' own shifts are shorter than the
-/// chain for 3 to 7 bits (`x << 15` 107k clocks for 1000 calls, the chain 126k).
+/// every level, and the over-corrected form (5 to 7 bits) only in a function a
+/// speed level tunes (-O2, -O3). llvm-mos also steps 3 and 4 bits in the same
+/// direction, but the pin's word shifts are as good there: three or four steps
+/// were +9 B and +9.5% clocks in switch_table_holes and +86 B in
+/// volatile_bitfield for nothing in the 81 programs. At -Os and -O1 a step is
+/// 8 B unrolled where `shift_forms` makes a loop of the words' shifts (13 B
+/// whatever the count), and the 81 programs got 56 to 213 B larger; those
+/// levels wait for a loop form of the chain. After a byte (9 to 15 bits) the
+/// words' own shifts are shorter than the chain for 5 to 7 bits (`x << 15`
+/// 107k clocks for 1000 calls, the chain 126k).
 fn long_shift_in_bytes(
     dag: &mut SelectionDAG,
     node: SDValue,
@@ -800,7 +804,7 @@ fn long_shift_in_bytes(
     let (bytes, bits) = (c / 8, c % 8);
     // one step is the funnel `funnel_by_one` makes; in a function tuned for
     // size only up to two bits are chains (see above)
-    let most = if sized || bytes == 1 { 2 } else { 7 };
+    let most = if sized || bytes == 1 || !should_over_correct(bits) { 2 } else { 7 };
     if c < 2 || bytes > 1 || !(1..=most).contains(&bits) {
         return None;
     }
