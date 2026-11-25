@@ -349,7 +349,16 @@ impl ProgramPass for Walk {
             ..crate::inlinecost::InlineParams::from_level(if self.inline.limit >= 250 { 3 } else { 2 })
         };
         // The target's tuning table.
-        if let Some(threshold) = program.target.tti().and_then(|tti| tti.inline_threshold_override()) {
+        let level = if !matches!(self.inline.caller_size(), crate::inlinecost::CallerSize::Speed) {
+            None
+        } else if !self.speed_rate {
+            Some(1)
+        } else if self.inline.limit >= 250 {
+            Some(3)
+        } else {
+            Some(2)
+        };
+        if let Some(threshold) = threshold_override(program.target.tti().as_deref(), level) {
             params.default_threshold = threshold;
         }
         let size = self.inline.caller_size();
@@ -1647,6 +1656,16 @@ impl SelfInline {
         }
         Ok(())
     }
+}
+
+/// The target's `DefaultThreshold` for a caller at `level` (1, 2, 3; none for
+/// a size caller): its level entry, else its flat one; none: the pass's own.
+fn threshold_override(
+    tti: Option<&dyn llrm_mir::tti::Tti>,
+    level: Option<u8>,
+) -> Option<i64> {
+    let tti = tti?;
+    level.and_then(|level| tti.inline_threshold_at_level(level)).or_else(|| tti.inline_threshold_override())
 }
 
 #[cfg(test)]

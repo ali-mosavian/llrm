@@ -543,6 +543,12 @@ pub struct Tuning {
     /// `InlineParams::DefaultThreshold`, the inliner's bar for a caller not
     /// optimized for size; none: 225, or 250 at -O3.
     pub inline_threshold: Option<i64>,
+    /// `DefaultThreshold` at -O1, -O2 and -O3 each; none: `inline_threshold`,
+    /// then the level's own (225, 225, 250). The level a size caller or -Os
+    /// runs at has no entry: its bar is `OptSizeThreshold`.
+    pub inline_threshold_o1: Option<i64>,
+    pub inline_threshold_o2: Option<i64>,
+    pub inline_threshold_o3: Option<i64>,
     /// DEVIATE BFS-1 (owner x86-m16-b, exit 2026-11-25): the inliner's
     /// cold-call-site test reads the site's frequency from a flow in which
     /// edges into `unreachable`-ended failure blocks carry no mass, where the
@@ -1050,6 +1056,9 @@ impl Tuning {
         unswitch_threshold: None,
         phiopt_one_feeding_statement: false,
         inline_threshold: None,
+        inline_threshold_o1: None,
+        inline_threshold_o2: None,
+        inline_threshold_o3: None,
         cold_site_ignores_sinks: false,
         inline_last_call_in_cold_site: false,
         read_only_in_code: false,
@@ -2160,5 +2169,6 @@ mod tests {
         assert!(pin.carry_slot_indexes);
         assert_eq!(pin.address_reference_milliweight, 1000);
         assert_eq!(pin.inline_threshold, None);
+        assert_eq!((pin.inline_threshold_o1, pin.inline_threshold_o2, pin.inline_threshold_o3), (None, None, None));
     }
 }
