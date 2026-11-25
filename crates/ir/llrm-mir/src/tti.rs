@@ -1550,9 +1550,9 @@ pub trait Tti {
         false
     }
 
-    /// With `opt_size_inline_outline_trial`: the clock cap of that trial, percent
-    /// of the work without it (`os_trial_clock_cap_percent`'s meaning). None:
-    /// the target's `os_trial_clock_cap_percent`.
+    /// With `opt_size_inline_outline_trial`: the clock cap of that trial,
+    /// percent of the work without it (`os_trial_clock_cap_percent`'s
+    /// meaning). None: the target's `os_trial_clock_cap_percent`.
     fn opt_size_inline_outline_clock_cap_percent(&self) -> Option<i64> {
         None
     }
@@ -2568,11 +2568,6 @@ pub trait Tti {
     /// Whether `sinks_select_arms` also holds in a size build: the branch form
     /// leaves out the copy of the other arm, so it is not longer.
     fn sinks_select_arms_for_size(&self) -> bool {
-        false
-    }
-
-    /// `Tuning::inline_variable_memcpy_at_size`.
-    fn inlines_variable_memcpy_at_size(&self) -> bool {
         false
     }
 
