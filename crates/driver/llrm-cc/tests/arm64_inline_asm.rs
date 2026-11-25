@@ -2,7 +2,7 @@
 //! `fsqrt ${0:d}`, a memory output, a fixed `w0`) was refused by the backend
 //! ("expected a constant, found asm"). A block is now one `llrm.a64.asm.*` call
 //! whose words are laid down at the site. The gate needs the pin's AArch64
-//! clang (`LLRM_A64_CLANG`, default `~/scratch/llvm-build-aarch64`), the
+//! clang (`LLRM_A64_CLANG`, set in the gate's env), the
 //! AArch64 binutils objcopy, `llrm-arm64-llc` built beside the driver,
 //! `aarch64-linux-gnu-gcc` and `qemu-aarch64`: a missing tool fails the test.
 
@@ -15,6 +15,7 @@ fn tool_present(program: &str) -> bool {
 
 #[test]
 fn test_arm64_asm_blocks_compute_what_the_source_says_at_every_level() {
+    assert!(std::env::var_os("LLRM_A64_CLANG").is_some(), "this test needs LLRM_A64_CLANG: a pin clang built with AArch64");
     for tool in ["aarch64-linux-gnu-gcc", "aarch64-linux-gnu-objcopy", "qemu-aarch64"] {
         assert!(tool_present(tool), "this test needs {tool}");
     }

@@ -1234,21 +1234,13 @@ fn build(
                             Some(64) => "x86_64-unknown-none",
                             _ => "i386-unknown-none",
                         };
-                        // The pin's x86 clang has no AArch64 assembler: a block
-                        // is assembled by the pin built
-                        // with it (LLRM_A64_CLANG, else
-                        // ~/scratch/llvm-build-aarch64) and cut to its `.text`
-                        // by a binutils objcopy for
-                        // AArch64 (LLRM_A64_OBJCOPY).
+                        // A block is assembled by the pin clang the route resolves
+                        // (`clang_path`); LLRM_A64_CLANG names one built with the
+                        // AArch64 target, and a binutils objcopy for AArch64
+                        // (LLRM_A64_OBJCOPY) cuts out its `.text`.
                         let (assembler_program, objcopy) = if flat == Some(llrm_mir::intrinsics::AARCH64) {
                             (
-                                std::env::var_os("LLRM_A64_CLANG").map_or_else(
-                                    || {
-                                        PathBuf::from(std::env::var_os("HOME").unwrap_or_default())
-                                            .join("scratch/llvm-build-aarch64/bin/clang")
-                                    },
-                                    PathBuf::from,
-                                ),
+                                std::env::var_os("LLRM_A64_CLANG").map_or_else(|| clang.clone(), PathBuf::from),
                                 std::env::var_os("LLRM_A64_OBJCOPY")
                                     .map_or_else(|| PathBuf::from("aarch64-linux-gnu-objcopy"), PathBuf::from),
                             )
