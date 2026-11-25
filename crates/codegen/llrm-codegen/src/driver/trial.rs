@@ -112,11 +112,7 @@ impl Noted {
             hinted: trial::take_hint_yields(),
             looped: trial::take_loop_yields(),
             hot: trial::take_hot_yields(),
-            accepted: trial::take_accepted()
-                .iter()
-                .flat_map(|site| site.callees.iter())
-                .collect::<BTreeSet<_>>()
-                .len(),
+            accepted: trial::take_accepted().iter().flat_map(|site| site.callees.iter()).collect::<BTreeSet<_>>().len(),
         };
         trial::clear_rotated_loops();
         noted
@@ -519,6 +515,20 @@ fn leaf_fold_trial(options: &Options) -> bool {
     options.cpu().is_ok_and(|cpu| cpu.size) && options.arch.leaf_fold_at_size()
 }
 
+/// Whether a function of `module` is over `Tuning::trial_insts_max`: the -Os
+/// dimensions re-run the mid-end over the whole module, so a module with a
+/// function this large is built once (the size bound m68k's backend trials
+/// have, read on the module's own IR).
+fn over_trial_cap(
+    module: &llrm_mir::module::Module,
+    options: &Options,
+) -> bool {
+    let Some(most) = options.cpu().ok().and_then(|cpu| cpu.target().tti()).and_then(|tti| tti.trial_insts_max()) else {
+        return false;
+    };
+    module.functions().any(|(_, _, function)| function.live_instructions() > most)
+}
+
 /// `module` compiled as `compiled_module` does and, where the target has
 /// trials, again with one decision reversed at a time, each kept if the
 /// finished code prices better: at -O1 UNROLL-O1-TRIAL
@@ -536,7 +546,7 @@ pub fn compiled_module_trying(
     if let Some(limit) = o1_unroll_limit(options) {
         return compiled_module_at_o1(module, name, options, limit, bytes, unpadded);
     }
-    let dimensions = Dimension::of(options);
+    let dimensions = if over_trial_cap(&module, options) { Vec::new() } else { Dimension::of(options) };
     if dimensions.is_empty() {
         if !leaf_fold_trial(options) && !ipra_trial(options) {
             return compiled_module(module, name, options);
@@ -612,11 +622,8 @@ fn compiled_module_at_size(
     // OS-OUTLINE-TRIAL's compile cost grows with its candidates, its gain does
     // not: a module of many candidate callees is not tried
     // (`Tti::opt_size_inline_outline_max_callees`).
-    let outline_callees = options
-        .cpu()
-        .ok()
-        .and_then(|cpu| cpu.target().tti())
-        .and_then(|tti| tti.opt_size_inline_outline_max_callees());
+    let outline_callees =
+        options.cpu().ok().and_then(|cpu| cpu.target().tti()).and_then(|tti| tti.opt_size_inline_outline_max_callees());
     let active: Vec<Dimension> = dimensions
         .iter()
         .copied()
