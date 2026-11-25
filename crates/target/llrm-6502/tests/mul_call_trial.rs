@@ -60,11 +60,12 @@ exit:
   ret void
 }\n";
 
-/// Four expansions of `x * 7` were 4 x 22 B left in line at -O2; the calls and
-/// the routine are fewer bytes.
+/// Four expansions of `x * 7` were 4 x 22 B left in line; the calls and the
+/// routine are fewer bytes, and -O1 is bytes first. -O2 and -O3 price the
+/// calls' clocks at the judge's rate (`mul_call_judge.rs`).
 #[test]
-fn four_constant_multiplies_outside_a_loop_are_calls_at_o2() {
-    let text = asm(FOUR, Level::O2);
+fn four_constant_multiplies_outside_a_loop_are_calls_at_o1() {
+    let text = asm(FOUR, Level::O1);
     assert!(text.contains("jsr __mulsi3"), "{text}");
 }
 
