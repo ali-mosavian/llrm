@@ -494,6 +494,24 @@ impl Tti for M68k {
         Some(crate::sizes::body_call_sequence(self.cpu, shape, kind))
     }
 
+    /// D11-MEM, as x86: the size guard counts a memset, memmove or memcpy of
+    /// unknown length, in bytes, as the call it stays (three pushed words and
+    /// a `jsr`), not the pin's one instruction: `justify` (94 B of fills and
+    /// a move) read as 12 B and went into `set` three times (file.c Os 408 B
+    /// against gcc's 336).
+    fn size_caller_memory_call_units(&self) -> Option<i64> {
+        use llrm_mir::tti::{CallArgument, CallShape, Ty};
+        let word = CallArgument { ty: Some(Ty::Int(32)), byval_bytes: None };
+        let shape = CallShape { arguments: vec![word; 3], callee_frame_bytes: 0, caller_frame_bytes: 0 };
+        Some(crate::sizes::body_call_sequence(self.cpu, &shape, CostKind::CodeSize).value)
+    }
+
+    /// D11-MEM in the SZ2 trial's units: the same call, as the plain
+    /// `CodeSize` count prices three arguments.
+    fn size_trial_memory_call_units(&self) -> Option<i64> {
+        Some(self.direct_call_cost(3, CostKind::CodeSize).value)
+    }
+
     fn callee_frame_cost(
         &self,
         shape: &llrm_mir::tti::CallShape,
