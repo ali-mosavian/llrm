@@ -2,9 +2,12 @@
 //! `fsqrt ${0:d}`, a memory output, a fixed `w0`) was refused by the backend
 //! ("expected a constant, found asm"). A block is now one `llrm.a64.asm.*` call
 //! whose words are laid down at the site. The gate needs the pin's AArch64
-//! clang (found as `llrm-arm64`'s kernel tests find it: `LLVM_BUILD`, else
-//! under `$HOME`), the AArch64 binutils objcopy, `llrm-arm64-llc` built beside the driver,
-//! `aarch64-linux-gnu-gcc` and `qemu-aarch64`: a missing tool fails the test.
+//! clang (found by `llrm-arm64`'s tests/support/clang.rs), the
+//! AArch64 binutils objcopy and `llrm-arm64-llc` built beside the driver: a
+//! missing tool fails the test.
+
+#[path = "../../../target/llrm-arm64/tests/support/clang.rs"]
+mod clang;
 
 use std::path::Path;
 use std::process::Command;
@@ -15,13 +18,9 @@ fn tool_present(program: &str) -> bool {
 
 #[test]
 fn test_arm64_asm_blocks_compute_what_the_source_says_at_every_level() {
-    let home = std::env::var("HOME").unwrap_or_default();
-    let build = std::env::var("LLVM_BUILD").unwrap_or_else(|_| format!("{home}/scratch/llvm-build-aarch64"));
-    let clang = Path::new(&build).join("bin/clang");
-    assert!(clang.exists(), "this test needs the pin clang built with AArch64 at {}", clang.display());
-    for tool in ["aarch64-linux-gnu-gcc", "aarch64-linux-gnu-objcopy", "qemu-aarch64"] {
-        assert!(tool_present(tool), "this test needs {tool}");
-    }
+    let clang = clang::clang()
+        .expect("this test needs the pin clang built with AArch64, aarch64-linux-gnu-gcc and qemu-aarch64");
+    assert!(tool_present("aarch64-linux-gnu-objcopy"), "this test needs aarch64-linux-gnu-objcopy");
     let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/c/a64_inline_asm.c");
     for level in ["-O1", "-O2", "-Os"] {
         let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("a64asm-{level}-{}", std::process::id()));
