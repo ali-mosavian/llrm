@@ -54,6 +54,12 @@ pub trait Jump {
     fn reverse(_branch: &Inst) -> Option<Inst> {
         None
     }
+
+    /// Whether `inst` opens (`Some(true)`) or closes (`Some(false)`) the area
+    /// a call's arguments are made in (`ADJCALLSTACKDOWN`, `ADJCALLSTACKUP`).
+    fn call_area(_inst: &Inst) -> Option<bool> {
+        None
+    }
 }
 
 /// Where a virtual register is read: the block holding the instruction or

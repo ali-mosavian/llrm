@@ -304,6 +304,9 @@ struct Folder<'a, C, J> {
     crossing: crate::tailmerge::Crossing<'a>,
     /// Block frequencies by id that tail merging keeps current.
     frequencies: Option<&'a mut HashMap<u32, f64>>,
+    /// Whether a call area stays in the block that opens it
+    /// ([`Jump::call_area`]).
+    keep_areas: bool,
     jump: std::marker::PhantomData<J>,
 }
 
@@ -778,7 +781,9 @@ impl<C, T: Target<Class = C> + Jump> Folder<'_, C, T> {
             let same = {
                 let (first, second) = (&self.function.blocks[one].insts, &self.function.blocks[two].insts);
                 let (Some(head), Some(tail)) = (first.get(run), second.get(run)) else { break };
-                identical(head, tail, assignment) && safe_to_move(&self.function.fixed, head, &mut true)
+                identical(head, tail, assignment)
+                    && safe_to_move(&self.function.fixed, head, &mut true)
+                    && !(self.keep_areas && T::call_area(head).is_some())
             };
             if !same {
                 // HC1: the twin of one head may sit a few independent
@@ -828,7 +833,7 @@ impl<C, T: Target<Class = C> + Jump> Folder<'_, C, T> {
 /// `BranchFolder::OptimizeFunction` without tail merging or hoisting: true
 /// when anything changed.
 pub fn branch_fold<T: Target + Jump>(function: &mut MFunction<T::Class>) -> bool {
-    fold::<T>(function, None, crate::tailmerge::Crossing::Never, None)
+    fold::<T>(function, None, crate::tailmerge::Crossing::Never, None, false)
 }
 
 /// [`branch_fold`] with `HoistCommonCodeInSuccs`, which needs to know which
@@ -837,7 +842,18 @@ pub fn branch_fold_hoisting<T: Target + Jump>(
     function: &mut MFunction<T::Class>,
     assignment: &Assignment,
 ) -> bool {
-    fold::<T>(function, Some(assignment), crate::tailmerge::Crossing::Never, None)
+    fold::<T>(function, Some(assignment), crate::tailmerge::Crossing::Never, None, false)
+}
+
+/// [`branch_fold_hoisting`] whose tail merging leaves a call's arguments with
+/// their call: a tail does not close a call area it did not open, so the
+/// arguments can be pushed where the call is made and the closing code shared
+/// after (gcc's `-fcrossjumping` runs on the pushed code).
+pub fn branch_fold_hoisting_keeping_call_areas<T: Target + Jump>(
+    function: &mut MFunction<T::Class>,
+    assignment: &Assignment,
+) -> bool {
+    fold::<T>(function, Some(assignment), crate::tailmerge::Crossing::Never, None, true)
 }
 
 /// [`branch_fold_hoisting`] whose tail merging also joins blocks of different
@@ -846,7 +862,7 @@ pub fn branch_fold_hoisting_across_loops<T: Target + Jump>(
     function: &mut MFunction<T::Class>,
     assignment: &Assignment,
 ) -> bool {
-    fold::<T>(function, Some(assignment), crate::tailmerge::Crossing::Always, None)
+    fold::<T>(function, Some(assignment), crate::tailmerge::Crossing::Always, None, false)
 }
 
 /// [`branch_fold_hoisting`] whose tail merging joins the blocks of the named
@@ -857,7 +873,7 @@ pub fn branch_fold_hoisting_across_hot_loops<T: Target + Jump>(
     hot: &HashSet<u32>,
     frequencies: &mut HashMap<u32, f64>,
 ) -> bool {
-    fold::<T>(function, Some(assignment), crate::tailmerge::Crossing::Loops(hot), Some(frequencies))
+    fold::<T>(function, Some(assignment), crate::tailmerge::Crossing::Loops(hot), Some(frequencies), false)
 }
 
 fn fold<T: Target + Jump>(
@@ -865,6 +881,7 @@ fn fold<T: Target + Jump>(
     assignment: Option<&Assignment>,
     crossing: crate::tailmerge::Crossing<'_>,
     frequencies: Option<&mut HashMap<u32, f64>>,
+    keep_areas: bool,
 ) -> bool {
     let mut folder = Folder::<T::Class, T> {
         function,
@@ -872,6 +889,7 @@ fn fold<T: Target + Jump>(
         number: HashMap::default(),
         crossing,
         frequencies,
+        keep_areas,
         jump: std::marker::PhantomData,
     };
     let mut ever = false;
@@ -881,6 +899,7 @@ fn fold<T: Target + Jump>(
             folder.assignment,
             folder.crossing,
             folder.frequencies.as_deref_mut(),
+            keep_areas,
         );
         changed |= folder.optimize_branches();
         changed |= folder.hoist_common_code();
