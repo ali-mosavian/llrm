@@ -50,19 +50,22 @@ static OPCOSTS: LazyLock<llrm_target::opcosts::Description> = LazyLock::new(|| {
     llrm_target::opcosts::Description::parse(include_str!("opcosts.txt")).expect("opcosts.txt parses")
 });
 
-/// DEVIATE THROUGHPUT (owner x86-m64, exit 2026-12-20): the x86-64 column's processor resources
-/// (`machine/tune/x86/x86-64.toml` `[schedule]`, the pin's SandyBridgeModel) and latencies, each operation the
-/// sum of its forms as the clock table is. A form the schedule does not list occupies no resource.
+/// DEVIATE THROUGHPUT (owner x86-m64, exit 2026-12-20): the x86-64 column's
+/// processor resources (`machine/tune/x86/x86-64.toml` `[schedule]`, the pin's
+/// SandyBridgeModel) and latencies, each operation the sum of its forms as the
+/// clock table is. A form the schedule does not list occupies no resource.
 static THROUGHPUT: LazyLock<llrm_mir::target::Throughput> = LazyLock::new(|| {
     let table = TIMINGS.cpu("x86-64").expect("timings.times states the x86-64 column");
     let find = |rows: &[(String, i64)], form: &str| rows.iter().find(|(one, _)| one == form).map(|(_, value)| *value);
     let latency = |form: &str| 1000 * find(&table.latency, form).or_else(|| find(&table.clocks, form)).unwrap_or(1);
-    let text = llrm_target::tune::X86.iter().find(|(name, _)| *name == "x86-64").map(|(_, text)| *text).expect("the x86-64 tune file");
-    llrm_target::schedule::Schedule::parse(text).expect("x86-64.toml's [schedule] parses").throughput(
-        table.issue,
-        OPCOSTS.operations(&latency, 0),
-        &|price| OPCOSTS.operations(price, 0),
-    )
+    let text = llrm_target::tune::X86
+        .iter()
+        .find(|(name, _)| *name == "x86-64")
+        .map(|(_, text)| *text)
+        .expect("the x86-64 tune file");
+    llrm_target::schedule::Schedule::parse(text)
+        .expect("x86-64.toml's [schedule] parses")
+        .throughput(table.issue, OPCOSTS.operations(&latency, 0), &|price| OPCOSTS.operations(price, 0))
 });
 
 /// The CPUs' timings: `timings.times`.
@@ -409,170 +412,247 @@ impl llrm_target::Target for M64 {
                     .map(|one| {
                         one.with_tuning(llrm_mir::target::Tuning {
                             inline_size_guard_at_size: true,
-                            // DEVIATE OS-OUTLINE-TRIAL (owner qb-arm64-synth-gfx, exit 2026-12-22): see Tuning. The pin
-                            // inlines these copies too.
+                            // DEVIATE OS-OUTLINE-TRIAL (owner
+                            // qb-arm64-synth-gfx, exit 2026-12-22): see Tuning.
+                            // The pin inlines these copies too.
                             inline_outline_trial_at_size: true,
                             inline_outline_trial_max_callees: Some(8),
                             inline_outline_trial_clock_cap_percent: Some(2),
-                            // DEVIATE LATE-MEMCPYOPT-SIZE (owner x86-m32-b, exit 2026-12-12): see
-                            // Tuning. QB m64 Os -119 B (synth -63, dialog -56), no file worse.
+                            // DEVIATE LATE-MEMCPYOPT-SIZE (owner x86-m32-b,
+                            // exit 2026-12-12): see Tuning. QB m64 Os -119 B
+                            // (synth -63, dialog -56), no file worse.
                             late_memcpyopt_at_size: true,
-                            // DEVIATE SINK-COMMON-SIZE (owner w12, exit 2026-12-05; pin SimplifyCFG.cpp
-                            // sinkCommonCodeFromPredecessors in the late slot only, gcc cfgcleanup.c
-                            // try_crossjump_bb): the m32 entry; see `Tuning::sink_common_at_size`. QB synth.c m64 Os -23,386 B (`voice` 31,808 ->
-                            // 8,620; gcc 27,346). Phi cost 1: unpriced, 13 of 14 QB programs retire 1.4-8.9% more
-                            // instructions (row M64-SINK-COMMON-SIZE).
+                            // DEVIATE SINK-COMMON-SIZE (owner w12, exit
+                            // 2026-12-05; pin SimplifyCFG.cpp
+                            // sinkCommonCodeFromPredecessors in the late slot
+                            // only, gcc cfgcleanup.c try_crossjump_bb): the m32
+                            // entry; see `Tuning::sink_common_at_size`. QB
+                            // synth.c m64 Os
+                            // -23,386 B (`voice` 31,808 -> 8,620; gcc 27,346).
+                            // Phi cost 1: unpriced, 13 of 14 QB programs retire
+                            // 1.4-8.9% more instructions (row
+                            // M64-SINK-COMMON-SIZE).
                             sink_common_at_size: true,
                             sink_common_phi_cost: 1,
-                            // DEVIATE MEMSET-GAP (owner llrm-target-x86-m16-b, exit 2026-11-27): see Tuning.
+                            // DEVIATE MEMSET-GAP (owner llrm-target-x86-m16-b,
+                            // exit 2026-11-27): see Tuning.
                             memset_gap_merge_at_size: true,
-                            // DEVIATE LFTR-SIZE (owner llrm-target-x86-m64, exit 2026-11-24; gcc-bar only): see
-                            // Tuning. m64 -Os 22 files smaller (-189 B), sieve +1 cell, spill_store_order +16 B.
+                            // DEVIATE LFTR-SIZE (owner llrm-target-x86-m64,
+                            // exit 2026-11-24; gcc-bar only): see Tuning.
+                            // m64 -Os 22 files smaller (-189 B), sieve +1 cell,
+                            // spill_store_order +16 B.
                             lftr_size_budget: 1,
-                            // DEVIATE OS-INLINE-GROWTH (owner llrm-target-x86-m64, exit 2026-11-24; gcc-bar only): see
-                            // Tuning. m64 -Os sfm16_float_* -39 B each, vla_callee_constant +8 B.
+                            // DEVIATE OS-INLINE-GROWTH (owner
+                            // llrm-target-x86-m64, exit 2026-11-24; gcc-bar
+                            // only): see Tuning. m64 -Os sfm16_float_* -39 B
+                            // each, vla_callee_constant +8 B.
                             inline_trial_defers_to_shared_growth: true,
-                            // DEVIATE IPRA-OS-TRIAL (owner x87-cordic-2, exit 2026-12-05): see Tuning.
+                            // DEVIATE IPRA-OS-TRIAL (owner x87-cordic-2, exit
+                            // 2026-12-05): see Tuning.
                             ipra_trial_at_size: true,
-                            // DEVIATE PHIOPT-ARM (owner x87-cordic-2, exit 2026-11-28): see
-                            // `Tuning::phiopt_one_feeding_statement`; gcc's phiopt keeps a nested diamond.
+                            // DEVIATE PHIOPT-ARM (owner x87-cordic-2, exit
+                            // 2026-11-28): see
+                            // `Tuning::phiopt_one_feeding_statement`; gcc's
+                            // phiopt keeps a nested diamond.
                             phiopt_one_feeding_statement: true,
-                            // DEVIATE SD443 (owner w9, exit 2026-11-24: a constant-argument pass
-                            // after inlining, as gcc's IPA-CP): see the m32 entry; m64 -O2
+                            // DEVIATE SD443 (owner w9, exit 2026-11-24: a
+                            // constant-argument pass after inlining, as gcc's
+                            // IPA-CP): see the m32 entry; m64 -O2
                             // memory_expansion.c text -3281 B.
                             second_ipsccp: true,
-                            // DEVIATE SD-DIVMAG (owner w12, exit 2026-12-22): the m32
-                            // entry at m64; see `Tuning::sdiv_by_magnitude`.
+                            // DEVIATE SD-DIVMAG (owner w12, exit 2026-12-22):
+                            // the m32 entry at m64;
+                            // see `Tuning::sdiv_by_magnitude`.
                             sdiv_by_magnitude: true,
-                            // DEVIATE GVN-PRE-OPTSIZE, MERGEFUNC-OS, REP-MOVS-OS (owner w12,
-                            // exit 2026-12-22): m32's -Os entries, see their `Tuning` fields. QB -Os 11-24: m64 -778 /
+                            // DEVIATE GVN-PRE-OPTSIZE, MERGEFUNC-OS,
+                            // REP-MOVS-OS (owner w12, exit 2026-12-22):
+                            // m32's -Os entries, see their `Tuning` fields.
+                            // QB -Os 11-24: m64 -778 /
                             // -154 / -135 B, none crosses the best bar.
                             load_pre_off_at_size: true,
                             merge_functions_at_size: true,
                             rep_movs_at_size: true,
                             rep_movs_at_size_max: u64::MAX,
-                            // DEVIATE REP-MOVS-SPEED (owner llrm-target-x86-m64-b, exit 2026-11-30): see Tuning.
+                            // DEVIATE REP-MOVS-SPEED (owner
+                            // llrm-target-x86-m64-b, exit 2026-11-30): see
+                            // Tuning.
                             rep_movs_at_speed_max: 8192,
-                            // DEVIATE IU1 (owner llrm-target-x86-m64, exit 2026-11-24): see
+                            // DEVIATE IU1 (owner llrm-target-x86-m64, exit
+                            // 2026-11-24): see
                             // `Tti::lsr_users_in_use_list_order`.
                             lsr_users_in_use_list_order: true,
-                            // DEVIATE IU1 (owner llrm-target-x86-m64, exit 2026-11-24): see
+                            // DEVIATE IU1 (owner llrm-target-x86-m64, exit
+                            // 2026-11-24): see
                             // `Tti::lsr_phi_users_first`.
                             lsr_phi_users_first: true,
                             lsr_size_order: true,
-                            // DEVIATE X86V3 (owner llrm-target-x86-m64-b, exit 2026-11-30): see Tuning.
+                            // DEVIATE X86V3 (owner llrm-target-x86-m64-b, exit
+                            // 2026-11-30): see Tuning.
                             vector_float_costs: true,
-                            // DEVIATE LSR-DROP-AT-SIZE (owner llrm-target-x86-m64-b, exit 2026-11-30): see Tuning.
+                            // DEVIATE LSR-DROP-AT-SIZE (owner
+                            // llrm-target-x86-m64-b, exit 2026-11-30): see
+                            // Tuning.
                             lsr_drop_worse_at_size: true,
-                            // Pin order: visitADD's or-disjoint, then pushAddIntoCmovOfConsts; see Tuning.
+                            // Pin order: visitADD's or-disjoint, then
+                            // pushAddIntoCmovOfConsts; see Tuning.
                             add_to_or_disjoint: true,
-                            // DEVIATE LV-OS (owner llrm-target-x86-m64, exit 2026-11-24): see Tuning.
+                            // DEVIATE LV-OS (owner llrm-target-x86-m64, exit
+                            // 2026-11-24): see Tuning.
                             vectorize_at_size: false,
-                            // The selector has `pcmp*`, `cmpps`, `cmppd` and the mask select.
+                            // The selector has `pcmp*`, `cmpps`, `cmppd` and
+                            // the mask select.
                             vector_compares: true,
-                            // DEVIATE LV-BW (owner llrm-target-x86-m64-b, exit 2026-11-24): see Tuning.
+                            // DEVIATE LV-BW (owner llrm-target-x86-m64-b, exit
+                            // 2026-11-24): see Tuning.
                             maximize_vector_bandwidth: true,
-                            // DEVIATE LV-ACC (owner llrm-target-x86-m64-b, exit 2026-11-30): see Tuning.
+                            // DEVIATE LV-ACC (owner llrm-target-x86-m64-b, exit
+                            // 2026-11-30): see Tuning.
                             narrow_reduction_accumulators: true,
-                            // DEVIATE LV-BW-DIV (owner llrm-target-x86-m64-b, exit 2026-11-30): see Tuning.
+                            // DEVIATE LV-BW-DIV (owner llrm-target-x86-m64-b,
+                            // exit 2026-11-30): see Tuning.
                             bandwidth_vf_without_epilogue: true,
-                            // LI-18 (owner llrm-target-x86-m64-b): `bsr`/`bsf` are one instruction.
+                            // LI-18 (owner llrm-target-x86-m64-b): `bsr`/`bsf`
+                            // are one instruction.
                             shift_loop_counts: true,
                             lsr_size_x86_64: true,
-                            // DEVIATE X64-PIE-SCALE (owner llrm-target-x86-m64-b, exit 2026-12-12): see Tuning.
+                            // DEVIATE X64-PIE-SCALE (owner
+                            // llrm-target-x86-m64-b, exit 2026-12-12): see
+                            // Tuning.
                             pie_scaled_symbol: true,
-                            // DEVIATE X64-TRUTH-XOR (owner llrm-target-x86-m64-b, exit 2026-12-12): see Tuning.
+                            // DEVIATE X64-TRUTH-XOR (owner
+                            // llrm-target-x86-m64-b, exit 2026-12-12): see
+                            // Tuning.
                             truth_compare_xor: true,
-                            // DEVIATE MUL-OS64 (owner w9, exit 2026-11-20): the m32 MUL-OS entry
-                            // at m64; gcc keeps the 3-byte `imul` at -Os where the pin makes
-                            // `mov; shl; sub` (x * 31). select_of_constants -Os was +1519 B
-                            // against the old selector.
+                            // DEVIATE MUL-OS64 (owner w9, exit 2026-11-20): the
+                            // m32 MUL-OS entry at m64; gcc keeps the
+                            // 3-byte `imul` at -Os where the pin makes
+                            // `mov; shl; sub` (x * 31). select_of_constants -Os
+                            // was +1519 B against the old selector.
                             imul_at_size: true,
-                            // DEVIATE INLINE-BARS-M64 (owner llrm-target-x86-m64-b, exit 2026-12-20): see
-                            // `Tuning::inline_threshold_o1`. gcc's -O1 and -O2 inline less than the pin's 225: QB m64
-                            // text was over the best of gcc and clang by 43390 B (O1, 94 of 126 modules) and
-                            // 28798 B (O2, 76). Rule: the smallest DefaultThreshold at which no bench program newly
-                            // exceeds the best bar in instructions (the strict levels keep both axes at or under
-                            // it). O1 112: +4210 B, 78 cells, instructions 0.806 of best; O2 150: +4865 B, 59 cells,
-                            // 0.947. `strings` bounds both: O1 100 puts it 1.5% and O2 125 and 138 put it 4.8% over
-                            // best (its string calls are what the bar admits), though the bytes reach the bar there.
+                            // DEVIATE INLINE-BARS-M64 (owner
+                            // llrm-target-x86-m64-b, exit 2026-12-20): see
+                            // `Tuning::inline_threshold_o1`. gcc's -O1 and -O2
+                            // inline less than the pin's 225: QB m64 text was
+                            // over the best of gcc and clang by 43390 B (O1, 94
+                            // of 126 modules) and 28798 B (O2, 76). Rule: the
+                            // smallest DefaultThreshold at which no bench
+                            // program newly exceeds the best bar in
+                            // instructions (the strict levels keep both axes at
+                            // or under it). O1 112: +4210 B, 78 cells,
+                            // instructions 0.806 of best; O2 150: +4865 B, 59
+                            // cells, 0.947. `strings` bounds both: O1 100 puts
+                            // it 1.5% and O2 125 and 138 put it 4.8% over best
+                            // (its string calls are what the bar admits),
+                            // though the bytes reach the bar there.
                             inline_threshold_o1: Some(112),
                             inline_threshold_o2: Some(150),
                             rep_stos_at_size: true,
                             rep_stos_at_size_max: u64::MAX,
-                            // DEVIATE REP-STOS-UNIT (owner llrm-target-x86-m64, exit 2026-11-30): see
-                            // `Tuning::rep_stos_priced_unit`. gcc fills a frame object with `rep stosb`.
+                            // DEVIATE REP-STOS-UNIT (owner llrm-target-x86-m64,
+                            // exit 2026-11-30): see
+                            // `Tuning::rep_stos_priced_unit`. gcc fills a frame
+                            // object with `rep stosb`.
                             rep_stos_priced_unit: true,
-                            // DEVIATE UNROLL-OS-TRIAL (owner llrm-target-x86-m64, exit 2026-11-24): the
-                            // m32 entry, see `Tuning::unroll_trial_at_size`. gcc completely peels a
-                            // small loop at -Os when the code does not grow.
+                            // DEVIATE UNROLL-OS-TRIAL (owner
+                            // llrm-target-x86-m64, exit 2026-11-24): the m32
+                            // entry, see `Tuning::unroll_trial_at_size`. gcc
+                            // completely peels a small loop at -Os when the
+                            // code does not grow.
                             unroll_trial_at_size: Some(30),
                             unroll_trial_bytes_strict: true,
-                            // DEVIATE UNROLL-O1, UNROLL-O1-TRIAL (owner llrm-target-x86-m64, exit 2026-11-24): the
-                            // m32 entries, see `Tuning::unroll_never_grows_at_o1`, `unroll_trial_at_o1`.
+                            // DEVIATE UNROLL-O1, UNROLL-O1-TRIAL (owner
+                            // llrm-target-x86-m64, exit 2026-11-24): the m32
+                            // entries,
+                            // see
+                            // `Tuning::unroll_never_grows_at_o1`,
+                            // `unroll_trial_at_o1`.
                             unroll_never_grows_at_o1: true,
                             unroll_trial_at_o1: Some(150),
-                            // DEVIATE CARRY-SI (owner x86-m64, exit 2026-11-21): see Tuning.
+                            // DEVIATE CARRY-SI (owner x86-m64, exit
+                            // 2026-11-21): see Tuning.
                             carry_slot_indexes: false,
-                            // DEVIATE LSR-CONST (owner llrm-target-x86-m64-b, exit 2026-11-30): see Tuning.
+                            // DEVIATE LSR-CONST (owner llrm-target-x86-m64-b,
+                            // exit 2026-11-30): see Tuning.
                             lsr_constant_setup_is_one: true,
-                            // DEVIATE RU-REC (owner x86-m64, exit 2026-11-24): see Tuning.
+                            // DEVIATE RU-REC (owner x86-m64, exit 2026-11-24):
+                            // see Tuning.
                             unroll_recurrence_veto: true,
-                            // DEVIATE BACKTHREAD-REL (owner llrm-target-x86-m64-b, exit 2026-12-15): see Tuning.
+                            // DEVIATE BACKTHREAD-REL (owner
+                            // llrm-target-x86-m64-b, exit 2026-12-15): see
+                            // Tuning.
                             threads_by_relation: true,
-                            // DEVIATE SZ2 (owner m64, exit 2026-11-19): the bound holds a
-                            // callee with one site too; the pin copies it (crc, floats,
-                            // tile -Os: gcc keeps the call, +40 B each).
+                            // DEVIATE SZ2 (owner m64, exit 2026-11-19): the
+                            // bound holds a callee with one site too; the pin
+                            // copies it (crc, floats, tile -Os: gcc keeps the
+                            // call, +40 B each).
                             inline_size_guard_single_site: true,
-                            // The SZ1 guard yields where the pin's `updateThreshold` raises an `inlinehint`
-                            // callee to 325 at an `optsize` caller, as at m32 (QB operands.c `hot_operand`
-                            // into `hot_int`: 16,542 -> 11,101 B).
+                            // The SZ1 guard yields where the
+                            // pin's `updateThreshold` raises an `inlinehint`
+                            // callee to 325 at an `optsize` caller, as at m32
+                            // (QB operands.c `hot_operand` into `hot_int`:
+                            // 16,542 -> 11,101 B).
                             inline_size_guard_yields_to_inlinehint: true,
-                            // DEVIATE UP1-REG at m64 (owner m64, exit 2026-11-20): promoted
-                            // arrays that exceed the registers are not free (fpbench -O2
-                            // +815 B for -75 clocks). The byte rate follows the clock pricing.
-                            // UP1 is retired at m64: bytes are not counted at -O1..-O3
-                            // (ruling 2026-11-14), so a full unroll is the pin's threshold,
-                            // not a price. At 312 milliclocks a byte `rotate_small` kept its
-                            // 3-trip outer loop ("saves 18 clk, adds 241 B") and ran 6351
-                            // instructions; unrolled, 4442 (clang 5116 at -O3). The x86-m32 target
-                            // keeps its own rate.
+                            // DEVIATE UP1-REG at m64 (owner m64, exit
+                            // 2026-11-20): promoted arrays that exceed the
+                            // registers are not free (fpbench -O2
+                            // +815 B for -75 clocks). The byte rate follows the
+                            // clock pricing. UP1 is retired at m64: bytes are
+                            // not counted at -O1..-O3 (ruling 2026-11-14), so a
+                            // full unroll is the pin's threshold, not a price.
+                            // At 312 milliclocks a byte `rotate_small` kept its
+                            // 3-trip outer loop ("saves 18 clk, adds 241 B")
+                            // and ran 6351 instructions; unrolled, 4442 (clang
+                            // 5116 at -O3). The x86-m32 target keeps its own
+                            // rate.
                             unroll_milliclocks_per_byte: 0,
-                            // DEVIATE LASTCALL-COLD (owner x87-cordic-2, exit 2026-12-05): see `Tuning`.
+                            // DEVIATE LASTCALL-COLD (owner x87-cordic-2, exit
+                            // 2026-12-05): see `Tuning`.
                             inline_last_call_in_cold_site: true,
                             unroll_prices_nest: true,
                             unroll_promotion_fits_registers: true,
                             // `mov m64, imm32`: sign-extended.
                             unroll_store_immediate_bits: 32,
                             rotation_guard_must_fold_at_size: true,
-                            // DEVIATE SELOPT-C (owner m64-b, exit 2026-11-24): see
+                            // DEVIATE SELOPT-C (owner m64-b, exit 2026-11-24):
+                            // see
                             // `selectoptimize::SelectOptimizePass`.
                             branch_constant_arm_selects: true,
-                            // INL-O2 RATE is retired at m64: bytes are not counted at -O1..-O3
-                            // (ruling 2026-11-14), so a speed caller's inline is the pin's
-                            // threshold, not a price in bytes. At 312 milliclocks a byte
-                            // loop_fusion kept `clear` a call (22 calls against 11); inlined, it
-                            // runs fewer instructions at -O2 and -O3. -O1 and -Os unchanged.
+                            // INL-O2 RATE is retired at m64: bytes are not
+                            // counted at -O1..-O3 (ruling 2026-11-14), so a
+                            // speed caller's inline is the pin's threshold, not
+                            // a price in bytes. At 312 milliclocks a byte
+                            // loop_fusion kept `clear` a call (22 calls against
+                            // 11); inlined, it runs fewer instructions at -O2
+                            // and -O3. -O1 and -Os unchanged.
                             speed_inline_milliclocks_per_byte: 0,
                             inline_trial_keeps_shrinking_copy: true,
-                            // DEVIATE INL-O1-TRIAL-M64 (owner llrm-target-x86-m64, exit 2026-11-24): see Tuning.
+                            // DEVIATE INL-O1-TRIAL-M64 (owner
+                            // llrm-target-x86-m64, exit 2026-11-24): see
+                            // Tuning.
                             inline_trials_at_o1: true,
                             inline_chain_trial: true,
-                            // DEVIATE SD103-M64 (owner x86-m64, exit 2026-11-24), as x86-m32's SD103-M32:
-                            // the pin's cost rule, with the price of a merged `a && b` it omits taken
-                            // from the table: two `setcc`, a logic op and a `test`, less the branch
-                            // saved. sieve `i <= 31 && i*i < n` merged is `setb; setb; and; cmp 1; jne`.
+                            // DEVIATE SD103-M64 (owner x86-m64, exit
+                            // 2026-11-24), as x86-m32's SD103-M32: the pin's
+                            // cost rule, with the price of a merged `a && b` it
+                            // omits taken from the table: two `setcc`, a logic
+                            // op and a `test`, less the branch saved. sieve `i
+                            // <= 31 && i*i < n` merged is `setb; setb; and; cmp
+                            // 1; jne`.
                             merged_condition_clocks: 2 * prices.operations.set + 2 * prices.operations.add
                                 - prices.operations.branch,
-                            // DEVIATE ROTATION-TRIAL at m64 (owner x86-m64, exit 2026-12-05, as m32's
-                            // #9141): -Os rotates a counted loop whose copied guard does not fold, then
-                            // compiles the module again with those loops unrotated (gcc's `-Os` shape)
-                            // and keeps the smaller object.
+                            // DEVIATE ROTATION-TRIAL at m64 (owner x86-m64,
+                            // exit 2026-12-05, as m32's
+                            // #9141): -Os rotates a counted loop whose copied
+                            // guard does not fold, then compiles the module
+                            // again with those loops unrotated (gcc's `-Os`
+                            // shape) and keeps the smaller object.
                             rotation_trial_at_size: true,
-                            // DEVIATE ROTATION-HOT at m64 (owner x86-m64, exit 2026-12-05), as m32's: an
-                            // uncounted loop RS1 leaves is also tried rotated, as the pin rotates it, and
-                            // kept where the finished code executes less. -Os is strict on bytes: only
-                            // where the object does not grow.
+                            // DEVIATE ROTATION-HOT at m64 (owner x86-m64, exit
+                            // 2026-12-05), as m32's: an uncounted loop RS1
+                            // leaves is also tried rotated, as the pin rotates
+                            // it, and kept where the finished code executes
+                            // less. -Os is strict on bytes: only where the
+                            // object does not grow.
                             rotation_hot_at_size: true,
                             rotation_hot_bytes_per_loop: 0,
                             // No byte/clock rate is stated for m64 (oversight
@@ -580,64 +660,86 @@ impl llrm_target::Target for M64 {
                             // only where the chain is no larger than
                             // the `imul`.
                             price_pin_multiplies: true,
-                            // DEVIATE LFTR1 (owner w12, review 2026-12-20): see `Tuning::lftr_any_stride`.
+                            // DEVIATE LFTR1 (owner w12, review 2026-12-20):
+                            // see `Tuning::lftr_any_stride`.
                             lftr_any_stride: true,
                             // DEVIATE REC-2, as m32
                             recursive_inlining: Some((8, 450)),
-                            // gcc's 15/30 size units in `gcc_insns` (m64 counts the sext/gep of its IR).
+                            // gcc's 15/30 size units in `gcc_insns` (m64 counts
+                            // the sext/gep of its IR).
                             recursive_edge_growth: Some((16, 31)),
-                            // DEVIATE REC-2, as m32: -O2 takes gcc's 450 (fib 25941 -> 10793
-                            // clk, frames -20%, rectwo -12%; -O3 stays at 150). Owner m64,
-                            // exit 2026-11-20.
+                            // DEVIATE REC-2, as m32: -O2 takes gcc's 450 (fib
+                            // 25941 -> 10793 clk, frames -20%, rectwo -12%; -O3
+                            // stays at 150). Owner m64, exit 2026-11-20.
                             recursive_inlining_growth: Some((450, 150)),
-                            // DEVIATE REC-7 (owner m64-clocks, exit 2026-11-30), as m32: copies
-                            // are 2 deep at -O2 and -O3, not gcc's 8.
+                            // DEVIATE REC-7 (owner m64-clocks, exit
+                            // 2026-11-30), as m32: copies are 2 deep at -O2
+                            // and -O3, not gcc's 8.
                             recursive_inlining_depth: Some((2, 2)),
-                            // DEVIATE REC-2-LOSERS (owner m64, exit 2026-11-21): the copies cost
-                            // net (clk + 0.312 B) against none on recchop -O3 +1020 (2194 B),
-                            // bintree -O3 +134 (1160 B, 0 clk), recpow -O2 +4002 (peeled). Their
-                            // bodies are load chains the call overhead hides under (call share
-                            // 52%, 45%); fib/frames/rectwo are 83-93% and win 42k-250k.
-                            // A call-share bar costs queens -O3 -2492 (share 24%); the fix is a
-                            // trial copy priced by the sheet's latencies.
-                            // DEVIATE REC5-1 (owner w2, exit 2026-11-20), as m32.
+                            // DEVIATE REC-2-LOSERS (owner m64, exit
+                            // 2026-11-21): the copies cost net (clk + 0.312 B)
+                            // against none on recchop -O3 +1020 (2194 B),
+                            // bintree -O3 +134 (1160 B, 0 clk),
+                            // recpow -O2 +4002 (peeled). Their bodies are load
+                            // chains the call overhead hides under (call share
+                            // 52%, 45%); fib/frames/rectwo are 83-93% and win
+                            // 42k-250k. A call-share bar costs queens -O3 -2492
+                            // (share 24%); the fix is a trial copy priced by
+                            // the sheet's latencies. DEVIATE REC5-1 (owner w2,
+                            // exit 2026-11-20), as m32.
                             ipsccp_widen_keeps_sign: true,
                             ipsccp_widen_keeps_sign_at_size: true,
-                            // DEVIATE UJ2 (owner m64, exit 2026-11-14): BasicTTIImpl's
-                            // 28-micro-op loop buffer gave the jam of an outer loop
-                            // of that size a count of 0 (particle -O3: 15850 cycles,
-                            // gcc's jam 10262); the full-unroll threshold instead.
+                            // DEVIATE UJ2 (owner m64, exit 2026-11-14):
+                            // BasicTTIImpl's 28-micro-op loop buffer gave the
+                            // jam of an outer loop of that size a count of 0
+                            // (particle -O3: 15850 cycles, gcc's jam 10262);
+                            // the full-unroll threshold instead.
                             unroll_jam_partial_threshold: Some(300),
-                            // DEVIATE UJ3 (owner m64, exit 2026-11-20): the pin never jams
-                            // on X86; ours takes an exact divisor of a known outer trip
-                            // count (particle -O3: count 3 of 100 left a nest copy,
+                            // DEVIATE UJ3 (owner m64, exit 2026-11-20): the pin
+                            // never jams on X86; ours takes an exact divisor of
+                            // a known outer trip count (particle -O3: count 3
+                            // of 100 left a nest copy,
                             // +433 B, +8.6% clk).
                             unroll_jam_exact_count: true,
-                            // CH-STAGED (owner m64, exit 2026-11-20): the pin hoists
-                            // constants after LSR on every target; m64 first.
+                            // CH-STAGED (owner m64, exit 2026-11-20): the pin
+                            // hoists constants after LSR on every target; m64
+                            // first.
                             constant_hoisting: true,
-                            // DEVIATE ZIMM (owner m64, exit 2026-11-27): see Tuning.
+                            // DEVIATE ZIMM (owner m64, exit 2026-11-27): see
+                            // Tuning.
                             zext_imm_is_basic: true,
-                            // DEVIATE MEM-OS (owner anyisa, exit 2026-11-14): see Tuning.
-                            // A piece is a load and a store at `[reg+disp8]` (`movups` and a qword 4 + 4, a
-                            // dword and a byte 3 + 3, a word 4 + 4); the call is `mov edx, n` 5 and the
-                            // jump 5, 14 with the setup of a frame object's pointers.
-                            size_copy_price: Some(llrm_mir::target::CopyPrice { call: 14, wide_piece: 8, narrow_piece: 6 }),
-                            // DEVIATE IMM-1 (owner greedy-os-causes, exit 2026-11-20): see Tuning.
+                            // DEVIATE MEM-OS (owner anyisa, exit 2026-11-14):
+                            // see Tuning. A piece is a load and a store
+                            // at `[reg+disp8]` (`movups` and a qword 4 + 4, a
+                            // dword and a byte 3 + 3, a word 4 + 4); the call
+                            // is `mov edx, n` 5 and the jump 5, 14 with the
+                            // setup of a frame object's pointers.
+                            size_copy_price: Some(llrm_mir::target::CopyPrice {
+                                call: 14,
+                                wide_piece: 8,
+                                narrow_piece: 6,
+                            }),
+                            // DEVIATE IMM-1 (owner greedy-os-causes, exit
+                            // 2026-11-20): see Tuning.
                             immediate_forms_at_size: true,
-                            // DEVIATE IPACP-O3 (owner x86-m32-c, exit 2026-12-20): see Tuning; none at -O2.
+                            // DEVIATE IPACP-O3 (owner x86-m32-c, exit
+                            // 2026-12-20): see Tuning; none at -O2.
                             ipa_cp_clones_at_speed: true,
-                            // DEVIATE IPACP-O3-M64 (owner x87-cordic-2, exit 2026-12-20): gcc clones `place`
-                            // for each row of queens; 4 left rows 4.. generic (+4.3% clk). 8 clones grow
-                            // each body past the unroll threshold: queens -O3 +2% instructions, so 7.
+                            // DEVIATE IPACP-O3-M64 (owner x87-cordic-2, exit
+                            // 2026-12-20): gcc clones `place` for each row of
+                            // queens; 4 left rows 4.. generic (+4.3% clk). 8
+                            // clones grow each body past the unroll threshold:
+                            // queens -O3 +2% instructions, so 7.
                             ipa_cp_max_clones: 7,
-                            // DEVIATE UNROLL-O3 (owner llrm-target-x86-m64-b, exit 2026-11-30): see Tuning.
-                            unroll_threshold_at_o3: Some(400),
-                            // DEVIATE DIVCONST-SIZE (owner llrm-target-x86-m64-b, exit 2026-11-30): see Tuning.
+                            // DEVIATE DIVCONST-SIZE (owner
+                            // llrm-target-x86-m64-b, exit 2026-11-30): see
+                            // Tuning.
                             div_by_constant_size_cost: Some(4),
-                            // DEVIATE DIVVAR-SIZE (owner x87-cordic-2, exit 2026-11-30): see Tuning.
+                            // DEVIATE DIVVAR-SIZE (owner x87-cordic-2, exit
+                            // 2026-11-30): see Tuning.
                             div_by_variable_size_cost: Some(4),
-                            // DEVIATE SP-O3 (owner llrm-target-x86-m64-b, exit 2026-11-30): see Tuning.
+                            // DEVIATE SP-O3 (owner llrm-target-x86-m64-b, exit
+                            // 2026-11-30): see Tuning.
                             split_paths_at_o3: true,
                             ..llrm_mir::target::Tuning::PIN
                         })
@@ -659,9 +761,9 @@ impl llrm_target::Target for M64 {
 
 #[cfg(test)]
 mod tests {
-    /// A loop header's alignment pad had a 10 byte limit (gcc's `.p2align 4,,10`,
-    /// DEVIATE SD545) where the pin's X86 sets none: it left the header
-    /// misaligned and the layout off the pin's.
+    /// A loop header's alignment pad had a 10 byte limit (gcc's `.p2align
+    /// 4,,10`, DEVIATE SD545) where the pin's X86 sets none: it left the
+    /// header misaligned and the layout off the pin's.
     #[test]
     fn test_a_loop_header_pad_has_no_byte_limit_as_the_pin() {
         assert_eq!(llrm_target::Target::loop_alignment_max_skip(&super::M64), 0);
@@ -692,8 +794,37 @@ mod tests {
         assert!(!tti.carries_slot_indexes());
     }
 
-    /// REC-7 at m64: recursion copies went 8 deep (gcc's default), so rectwo -O2
-    /// ran 719563 instructions in 2120 B where depth 2 runs 161513 in 392 B.
+    /// spill_store_order -O3: a full-unroll threshold of 400 (the pin's is 300)
+    /// unrolled a 19-trip loop of 19 units that folds to nothing, 35 times
+    /// over an inlined nest: 650 to 2,609 instructions, 2,018 M compile
+    /// instructions against clang's 133 M, 8,113 B against 1,943 B. The pin
+    /// keeps it (325 over 300, too many trips to analyze).
+    #[test]
+    fn test_m64_keeps_the_pins_full_unroll_threshold() {
+        let layout = M64.layout();
+        let prices = llrm_target::CpuPrices {
+            costs: Vec::new(),
+            prefix: 1,
+            address_stall: 0,
+            registers: 6,
+            call_registers: 3,
+            float_registers: 0,
+            address_forms: Vec::new(),
+            operations: OperationCosts::default(),
+            spaces: layout.spaces.roles,
+            private: None,
+            calling: None,
+            foreign: llrm_target::Foreign::none(),
+            ports: M64.flat_ports(),
+        };
+        let tti = (M64.cost_model())(&prices).tti().expect("m64 states its cost model");
+        assert_eq!(tti.unroll_threshold_at_o3(), None);
+        assert_eq!(tti.unroll_threshold_overrides(), (None, None));
+    }
+
+    /// REC-7 at m64: recursion copies went 8 deep (gcc's default), so rectwo
+    /// -O2 ran 719563 instructions in 2120 B where depth 2 runs 161513 in
+    /// 392 B.
     #[test]
     fn test_m64_copies_a_recursion_two_deep_at_o2_and_o3() {
         let layout = M64.layout();
