@@ -34,8 +34,9 @@ fn a_callee_called_six_times_is_called_through_a_register() {
     assert_eq!(through, 6, "calls stay absolute:\n{}", out.join("\n"));
 }
 
-/// `-O1` is judged by clocks (user ruling 2026-11-14): the `lea` and the saved register are ~12 static
-/// clk in straight-line code, so six `jsr g` stay absolute; -Os, above, takes the register for its bytes.
+/// `-O1` is judged by clocks (user ruling 2026-11-14): the `lea` and the saved
+/// register are ~12 static clk in straight-line code, so six `jsr g` stay
+/// absolute; -Os, above, takes the register for its bytes.
 #[test]
 fn a_callee_called_six_times_stays_absolute_at_o1() {
     let plain = calls(6, "g").replace(" optsize", "");
@@ -135,4 +136,18 @@ fn a_fifth_callee_goes_in_a6() {
         "no call through %a6:\n{}",
         out.join("\n")
     );
+}
+
+/// `move.b g, %d0` was "not in the tables": a symbol read as data had no
+/// addressing mode, so any function holding one went unpriced and the module
+/// trial put back the smaller variant.
+#[test]
+fn a_symbol_read_as_data_has_a_price_on_every_cpu() {
+    use llrm_m68k::isa::Cpu;
+    use llrm_m68k::timing::cost_on;
+    for cpu in [Cpu::M68000, Cpu::M68010, Cpu::M68020, Cpu::M68030, Cpu::M68040, Cpu::M68060] {
+        for text in ["move.b\tg, %d0", "move.l\t%d0, g", "add.l\tg, %d0", "tst.b\tg"] {
+            assert!(cost_on(cpu, text, 6, false).is_ok(), "{cpu:?}: {text}");
+        }
+    }
 }
