@@ -442,14 +442,12 @@ fn a_zero_test_of_a_negated_value_reads_the_negs_carry() {
     assert_eq!(tests, 0, "the carry of `neg` answers `n == 0`\n{listing}");
 }
 
-/// gcc -Os copies or fills a length known at run time with one `rep
-/// movsb`/`stosb` (`decide_alg`); the pin and clang call `memcpy`/`memset`. m32
-/// -Os QB had 28 calls of them to gcc's 0, -638 B with them inline. In no loop
-/// it is the `rep`; in a loop and at -O2 it stays a call. m64 stays a call: QB
-/// `localarr` ran 51.0M clk against 44.1M (clang 40.2M) with `arry_dim`'s two
-/// small copies as `rep movsb`.
+/// A copy or fill of a length known at run time is the `memcpy`/`memset` call at every level and
+/// in or out of a loop, as the pin has it (`X86SelectionDAGInfo::EmitTargetCodeForMemcpy` and `...Memset`
+/// return no node for a non-constant size). m32 -Os had it as `rep movsb`/`stosb` outside loops
+/// (MEM-OS-REP): QB `arry_fill` ran 65.2M cycles against the call's 47.3M.
 #[test]
-fn a_variable_copy_or_fill_at_m32_os_is_rep_outside_loops_and_a_call_otherwise() {
+fn a_variable_copy_or_fill_at_m32_os_is_a_call_in_a_loop_or_not() {
     let ir = |target: &str, ty: &str, body: &str, attrs: &str| {
         let (layout, triple) = if target == "m32" {
             ("@m32-datalayout@", "i486-unknown-linux-gnu")
@@ -489,7 +487,7 @@ fn a_variable_copy_or_fill_at_m32_os_is_rep_outside_loops_and_a_call_otherwise()
     };
     for (kind, op) in [("copy", copy("i32")), ("fill", fill("i32"))] {
         let os = listing("m32", "-Os", &ir("m32", "i32", &op, "optsize"));
-        assert_eq!((reps(&os), calls(&os)), (1, 0), "{kind} outside a loop: one rep\n{os}");
+        assert_eq!((reps(&os), calls(&os)), (0, 1), "{kind} outside a loop: the call\n{os}");
         let os = listing("m32", "-Os", &ir("m32", "i32", &looped("i32", &op), "optsize"));
         assert_eq!((reps(&os), calls(&os)), (0, 1), "{kind} in a loop: the call\n{os}");
     }
