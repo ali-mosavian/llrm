@@ -2084,8 +2084,15 @@ pub fn constant_fold_integer_cast(
 enum Folded {
     Id(IntrinsicId),
     IsConstant,
-    /// `llvm.experimental.fp{to}{s,u}i.checked` (`Intrinsic::FpToIntChecked`): MIR's own.
-    FpToIntChecked { signed: bool },
+    /// `llvm.experimental.fp{to}{s,u}i.checked` (`Intrinsic::FpToIntChecked`):
+    /// MIR's own.
+    FpToIntChecked {
+        signed: bool,
+    },
+    /// `llvm.experimental.constrained.fp{ext,trunc}`; `extend` for `fpext`.
+    ConstrainedConvert {
+        extend: bool,
+    },
 }
 
 fn folded_intrinsic(name: &str) -> Option<Folded> {
@@ -2097,6 +2104,13 @@ fn folded_intrinsic(name: &str) -> Option<Folded> {
             return Some(Folded::FpToIntChecked { signed });
         }
     }
+    for (prefix, extend) in
+        [("llvm.experimental.constrained.fpext", true), ("llvm.experimental.constrained.fptrunc", false)]
+    {
+        if name.strip_prefix(prefix).is_some_and(|rest| rest.starts_with('.')) {
+            return Some(Folded::ConstrainedConvert { extend });
+        }
+    }
     intrinsic_id_of_name(name).map(Folded::Id)
 }
 
@@ -2106,7 +2120,7 @@ fn folded_intrinsic(name: &str) -> Option<Folded> {
 fn can_constant_fold_intrinsic(id: Folded) -> bool {
     use IntrinsicId::*;
     match id {
-        Folded::IsConstant | Folded::FpToIntChecked { .. } => true,
+        Folded::IsConstant | Folded::FpToIntChecked { .. } | Folded::ConstrainedConvert { .. } => true,
         Folded::Id(id) => matches!(
             id,
             Bswap
@@ -2412,9 +2426,36 @@ fn exact_rint(
     (-limit <= value && value < limit).then(|| int(context, width, (value as i128 as u128) & mask(width)))
 }
 
-/// `llvm.experimental.fp{to}{s,u}i.checked` of a float constant: the integer toward zero and
-/// `true`, or an unspecified value (poison) and `false` where the float is a
-/// NaN, an infinity or past the integer's range.
+/// `llvm.experimental.constrained.fp{ext,trunc}` of a float constant, the
+/// metadata operands after it.
+///
+/// Translation: `mayFoldConstrained`'s first arm
+/// ([ConstantFolding.cpp:2523](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/ConstantFolding.cpp#L2523)):
+/// an operation whose evaluation raises no exception status folds under any
+/// rounding mode and exception behaviour. DEVIATE CONSTRAINED-CONVERT (owner
+/// x87, exit 2026-12-31): the pin applies it to the arithmetic and comparison
+/// intrinsics and not to these two, so `fpext float 3.2767e4 to fp128` stayed
+/// a call (QB pfpu.c `scale10` +24 B at arm64 Os, gcc folds it). A widening
+/// of a finite value is exact; a narrowing is when it converts back to the
+/// same constant. A NaN is left (its payload and the invalid status).
+fn fold_constrained_convert(
+    context: &Context,
+    ty: TypeId,
+    ops: &[ConstantId],
+    extend: bool,
+) -> Option<ConstantId> {
+    let value = *ops.first()?;
+    let op = if extend { CastOp::FPExt } else { CastOp::FPTrunc };
+    let folded = constfold::cast(context, op, value, ty)?;
+    if !extend && constfold::cast(context, CastOp::FPExt, folded, ty_of(context, value))? != value {
+        return None;
+    }
+    Some(folded)
+}
+
+/// `llvm.experimental.fp{to}{s,u}i.checked` of a float constant: the integer
+/// toward zero and `true`, or an unspecified value (poison) and `false` where
+/// the float is a NaN, an infinity or past the integer's range.
 fn fold_fp_to_int_checked(
     context: &Context,
     ty: TypeId,
@@ -2750,6 +2791,9 @@ fn constant_fold_scalar_call(
     ops: &[ConstantId],
     caller: Option<&Function>,
 ) -> Option<ConstantId> {
+    if let Folded::ConstrainedConvert { extend } = id {
+        return fold_constrained_convert(context, ty, ops, extend);
+    }
     if ops.iter().any(|&one| is_poison(context, one)) && intrinsic_propagates_poison(id) {
         return Some(poison(context, ty));
     }
@@ -2799,3 +2843,7 @@ pub fn constant_fold_call(
     }
     constant_fold_scalar_call(context, id, returns, ops, caller)
 }
+
+#[cfg(test)]
+#[path = "constrained_fold_tests.rs"]
+mod constrained_fold_tests;
