@@ -2,10 +2,10 @@
 //! fewer bytes.
 //!
 //! # Switches
-//! Off: the `Request` pass `-fno-outline` (tests; `llrm-cc` and `llrm-6502-llc` do
-//! not take it) or `LLRM_6502_NO_OUTLINE=1` in the environment (an A/B of one
-//! binary). `LLRM_6502_OUTLINE_PLAIN=0` drops only the variant outlined before
-//! known constants move.
+//! Off: the `Request` pass `-fno-outline` (tests; `llrm-cc` and `llrm-6502-llc`
+//! do not take it) or `LLRM_6502_NO_OUTLINE=1` in the environment (an A/B of
+//! one binary). `LLRM_6502_OUTLINE_PLAIN=0` drops only the variant outlined
+//! before known constants move.
 //!
 //! # How it works
 //! Translation of the pin's `MachineOutliner` (`llvm/lib/CodeGen/
@@ -196,7 +196,8 @@ fn weights(lines: &[Line]) -> Vec<u64> {
 /// function called from a loop runs as often as that loop does, so its lines
 /// are scaled by the weight of its call sites (`staticlocals::call_weights`:
 /// each `jsr` counts the run of its own line, the callers' entry runs
-/// included). A call of a function by itself adds nothing.
+/// included). A call of a function by itself is one more loop level of its
+/// own lines: the recursion runs the body again for each depth.
 fn scaled_by_callers(
     lines: &[Line],
     in_function: Vec<u64>,
@@ -234,11 +235,13 @@ fn scaled_by_callers(
     }
     let most = LOOP_TRIPS.pow(MOST_LOOPS);
     let mut entry = vec![1u64; names.len()];
+    let mut recursive = vec![false; names.len()];
     for _ in 0..4 {
         let mut next = vec![0u64; names.len()];
         for (at, line) in lines.iter().enumerate() {
             let Some(callee) = calls(line).and_then(|name| at_name.get(name.as_str()).copied()) else { continue };
             if owner[at] == Some(callee) {
+                recursive[callee] = true;
                 continue;
             }
             let caller = owner[at].map_or(1, |function| entry[function]);
@@ -246,6 +249,11 @@ fn scaled_by_callers(
         }
         for (one, sum) in entry.iter_mut().zip(next) {
             *one = sum.max(1);
+        }
+    }
+    for (one, recursion) in entry.iter_mut().zip(&recursive) {
+        if *recursion {
+            *one = (*one * LOOP_TRIPS).min(most);
         }
     }
     in_function
