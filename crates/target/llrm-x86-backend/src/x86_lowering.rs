@@ -775,6 +775,52 @@ pub fn promotes_i16(tli: &TargetLowering) -> bool {
     !tli.types.has_far_pointer()
 }
 
+/// DEVIATE I8-LEA (owner llrm-target-x86-m64-b, exit 2026-12-15, m64 only: at
+/// m32 -Os the extra zero-extends and moves cost +86 B on QB): `(x << 1) + C`
+/// at `i8`, and the shift feeding only it, is done in `i32` so it selects one
+/// `lea C(x, x)`. gcc's `ix86_expand_int_movcc` does the same for a constant
+/// difference of 2; the pin keeps `i8` shift and add in `i8`, which has no
+/// `lea`. The `lea` leaves EFLAGS alone, where shift and add clobber them.
+fn is_i8_doubled_plus_constant(
+    dag: &SelectionDAG,
+    op: SDValue,
+) -> bool {
+    let doubles = |v: SDValue| {
+        dag.opcode(v) == ISD::Shl
+            && dag.constant(dag.operand(v, 1)) == Some(1)
+            && dag.value_type(v) == EVT::I8
+            && dag.users(v).count() == 1
+    };
+    // The shift already promoted: `trunc (shl i32 x, 1)`.
+    let widened = |v: SDValue| {
+        dag.opcode(v) == ISD::Truncate && {
+            let wide = dag.operand(v, 0);
+            dag.opcode(wide) == ISD::Shl
+                && dag.constant(dag.operand(wide, 1)) == Some(1)
+                && dag.value_type(wide) == EVT::I32
+        }
+    };
+    let doubled = |v: SDValue| doubles(v) || widened(v);
+    match dag.opcode(op) {
+        ISD::Add => {
+            let (n0, n1) = (dag.operand(op, 0), dag.operand(op, 1));
+            (doubled(n0) && dag.constant(n1).is_some()) || (doubled(n1) && dag.constant(n0).is_some())
+        }
+        ISD::Shl => {
+            if !doubles(op) {
+                return false;
+            }
+            let mut users = dag.users(op);
+            let (Some(user), None) = (users.next(), users.next()) else { return false };
+            let user = SDValue { node: user, res: 0 };
+            dag.opcode(user) == ISD::Add
+                && dag.value_type(user) == EVT::I8
+                && (0..2).any(|i| dag.constant(dag.operand(user, i)).is_some())
+        }
+        _ => false,
+    }
+}
+
 /// `isTypeDesirableForOp` (undesirable) and `IsDesirableToPromoteOp`: an `i16`
 /// operation, or an `i8` multiply by a constant, is done in `i32` unless an
 /// operand is a load the operation could fold.
@@ -793,6 +839,9 @@ fn is_desirable_to_promote_op(
     let opcode = dag.opcode(op);
     if !promotes_i16(tli) || !tli.types.is_type_legal(vt) {
         return None;
+    }
+    if vt == EVT::I8 && tli.types.is_type_legal(EVT::I64) && is_i8_doubled_plus_constant(dag, op) {
+        return Some(EVT::I32);
     }
     let is8_mul_by_constant = vt == EVT::I8 && opcode == ISD::Mul && dag.constant(dag.operand(op, 1)).is_some();
     let undesirable = match vt {
