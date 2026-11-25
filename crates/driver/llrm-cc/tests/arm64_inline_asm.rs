@@ -73,4 +73,33 @@ fn test_a_block_may_clobber_callee_saved_registers_and_the_frame_saves_them() {
         let ran = Command::new("qemu-aarch64").arg(&program).output().unwrap();
         assert_eq!(String::from_utf8_lossy(&ran.stdout), "12 1001 3.0 1.5\n", "{level}");
     }
+
+/// A block was a call to the allocator, so a pointer kept across `udiv`/`msub`
+/// moved from `x2` to the callee-saved `x19` and the function saved and
+/// restored it (`divmod`: `str x19`, `ldr x19`). The block now destroys what
+/// it declares (here nothing but its outputs), as the pin's `INLINEASM` does.
+#[test]
+fn test_a_value_kept_across_an_asm_block_stays_in_its_register() {
+    let clang = clang::clang().expect("this test needs the pin clang built with AArch64");
+    let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/c/a64_inline_asm.c");
+    let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("a64asm-keep-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let listing = dir.join("a.s");
+    let done = Command::new(env!("CARGO_BIN_EXE_llrm-cc-bin"))
+        .env("LLRM_CC_TARGET", "arm64-linux")
+        .env("LLRM_A64_CLANG", &clang)
+        .args(["-O2", "-w", "-S", "-o"])
+        .arg(&listing)
+        .arg(&source)
+        .output()
+        .unwrap();
+    assert!(done.status.success(), "{}", String::from_utf8_lossy(&done.stderr));
+    let text = std::fs::read_to_string(&listing).unwrap();
+    let body: Vec<&str> = text
+        .lines()
+        .skip_while(|line| !line.starts_with("divmod:"))
+        .take_while(|line| !line.starts_with("swap32:"))
+        .collect();
+    assert!(!body.iter().any(|line| line.contains("x19")), "{}", body.join("\n"));
 }
