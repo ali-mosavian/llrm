@@ -319,6 +319,11 @@ pub struct DagConfig {
     /// libcall for the wide one (the 68000's `divs.w` against `__divsi3`).
     /// DEVIATE: the pin's hooks answer for every width at once. Owner m68k.
     pub int_div_cheap_narrow: u32,
+    /// DEVIATE EXACT-DIV-OS: where `int_div_cheap` keeps divides, an `exact`
+    /// divide by a constant is still `BuildExactSDIV`'s shift and multiply
+    /// (the multiply by the odd part's inverse costs no more bytes than the
+    /// divide's operand setup and clocks far fewer). Owner x86-m32.
+    pub exact_div_inverse: bool,
     /// DEVIATE DIV-LIVE: see `Tuning::narrow_divide_live_limit`; 0 is off.
     pub div_live_limit: u32,
     /// The widest divide `div_live_limit` governs.
@@ -411,6 +416,7 @@ impl Default for DagConfig {
             pointer: EVT::I32,
             int_div_cheap: false,
             int_div_cheap_narrow: 0,
+            exact_div_inverse: false,
             div_live_limit: 0,
             div_live_max_bits: 31,
             div_live: 0,

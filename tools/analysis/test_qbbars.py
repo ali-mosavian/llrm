@@ -149,7 +149,8 @@ def test_arm64_bars_are_the_arm64_compilers_with_the_arm64_flags(tmp_path):
     assert len(lines) == 3, (lines, err)
     ours, gcc, clang = lines
     assert 'aarch64-linux-gnu-gcc-15' in gcc and '--target=aarch64-linux-gnu' in clang.split() and '--target=aarch64-linux-gnu' not in gcc.split()
-    assert '/sys/root/usr/aarch64-linux-gnu/include' in clang.split() and '/sys/root/usr/aarch64-linux-gnu/include' not in ours
+    w = clang.split()
+    assert '-nostdinc' in w and w[w.index('-idirafter') + 1] == '/sys/root/usr/aarch64-linux-gnu/include' and '-isystem' not in w[w.index('-idirafter') - 1:w.index('-idirafter')] and '/sys/root/usr/aarch64-linux-gnu/include' not in ours, clang
     for line in lines:
         w = line.split()
         assert '-mbranch-protection=none' in w and '-fPIE' in w, line

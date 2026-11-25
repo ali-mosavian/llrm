@@ -413,6 +413,16 @@ impl BuilderTarget {
         self
     }
 
+    /// This target with an `exact` divide by a constant a multiply where
+    /// divides are kept (`DagConfig::exact_div_inverse`).
+    pub fn with_exact_div_inverse(
+        mut self,
+        on: bool,
+    ) -> BuilderTarget {
+        self.dag.exact_div_inverse = on;
+        self
+    }
+
     /// This target with divides by constants of at most `bits` bits kept as
     /// divides (`isIntDivCheap`, per width; see
     /// `DagConfig::int_div_cheap_narrow`).
