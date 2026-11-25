@@ -925,12 +925,13 @@ impl Builder<'_> {
     /// (`MaxStoresPerMemsetOptSize`), so a 128-byte clear is eight `movaps`
     /// there (pattern_fill -Os +50 B, huffman_decode +12 B over the `rep stosq`
     /// this port had). The sizes are the encodings at a `[rsp+disp8]` address:
-    /// `xorps` 3, the splat's `movaps` load 7, `movaps` store 5, `mov qword
-    /// [m], 0` 8, and the fill: the value in `rax` (`xor eax, eax` 2, `mov
-    /// rax, -1` 7, `movabs` 10), `lea rdi`, `mov ecx` and `rep stosq` 13.
-    /// Owner m64. Exit 2026-11-20: a store-cost hook on the target
-    /// description, as for SD223. The pin: [`getMemset`][memset] tries the
-    /// stores first, within [`MaxStoresPerMemsetOptSize = 8`][limit].
+    /// `xorps` 3, the splat's `movaps` load 7, `movaps` store 5, `mov [m], 0` 4
+    /// (byte), 6 (word), 7 (dword), 8 (qword), and the fill: the value in `rax`
+    /// (`xor eax, eax` 2, `mov rax, -1` 7, `movabs` 10), `lea rdi`, `mov
+    /// ecx` and `rep stosq` 13. Owner m64. Exit 2026-12-22: a store-cost
+    /// hook on the target description, as for SD223. The pin:
+    /// [`getMemset`][memset] tries the stores first, within
+    /// [`MaxStoresPerMemsetOptSize = 8`][limit].
     ///
     /// [memset]:
     /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/SelectionDAG.cpp#L10376
@@ -954,7 +955,18 @@ impl Builder<'_> {
             (_, 0) => 3,
             _ => 7,
         };
-        setup + wide * 5 + (ops.len() as u64 - wide) * 8 > fill
+        // `mov [m], imm`: byte 4, word 6, dword 7, qword 8 B.
+        let immediates: u64 = ops
+            .iter()
+            .filter(|width| **width != 16)
+            .map(|width| match width {
+                1 => 4,
+                2 => 6,
+                4 => 7,
+                _ => 8,
+            })
+            .sum();
+        setup + wide * 5 + immediates > fill
     }
 
     /// DEVIATE MEM-OS (`Tuning::size_copy_price`, x86-64 tuned for size):
