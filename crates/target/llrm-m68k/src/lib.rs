@@ -9,6 +9,7 @@ pub mod ariform;
 pub mod amiga;
 pub mod atari;
 pub mod callpush;
+pub mod crossjump;
 pub mod calltarget;
 pub mod ccr;
 pub mod chain;

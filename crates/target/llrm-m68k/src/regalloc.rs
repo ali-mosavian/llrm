@@ -469,12 +469,19 @@ pub fn shared_licm(
     })
 }
 
-/// `BranchFolder` over the m68k function.
+/// `BranchFolder` over the m68k function. With `size`, a shared tail leaves a
+/// call's arguments in the block that made them: they are pushed there and
+/// [`crate::crossjump`] shares what the paths close with.
 pub fn branch_fold(
     function: &mut MFunction,
     assignment: &Assignment,
+    size: bool,
 ) -> bool {
-    llrm_spike_mf::branch_fold_hoisting::<M68kRegisters>(function, assignment)
+    if size {
+        llrm_spike_mf::branch_fold_hoisting_keeping_call_areas::<M68kRegisters>(function, assignment)
+    } else {
+        llrm_spike_mf::branch_fold_hoisting::<M68kRegisters>(function, assignment)
+    }
 }
 
 /// `MachineBlockPlacement` over the m68k function. M68kPassConfig does not
@@ -611,6 +618,14 @@ impl<const ADDRESS_FIRST: bool, const ARGUMENT_REMAT: bool, const GLOBAL_COPIES:
                 },
             )?;
         Some(llrm_spike_mf::Inst { kind: Kind::Op(opposite), ..branch.clone() })
+    }
+
+    fn call_area(inst: &llrm_spike_mf::Inst) -> Option<bool> {
+        match inst.kind {
+            Kind::Op("ADJCALLSTACKDOWN") => Some(true),
+            Kind::Op("ADJCALLSTACKUP") => Some(false),
+            _ => None,
+        }
     }
 
     fn jump(block: u32) -> llrm_spike_mf::Inst {

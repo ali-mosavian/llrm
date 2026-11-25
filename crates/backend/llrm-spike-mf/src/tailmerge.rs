@@ -86,6 +86,15 @@ pub trait TailMergeFunction {
         &self,
         inst: &Self::Inst,
     ) -> bool;
+    /// How many leading instructions of a candidate tail to leave out so it
+    /// does not end a call area it did not open (`ADJCALLSTACKUP` without its
+    /// `ADJCALLSTACKDOWN`): the arguments stay in the block that made them.
+    fn call_area_split(
+        &self,
+        _tail: &[Self::Inst],
+    ) -> usize {
+        0
+    }
     fn is_call(
         &self,
         inst: &Self::Inst,
@@ -299,6 +308,7 @@ impl<F: TailMergeFunction> Merger<'_, F> {
             }
             length += 1;
         }
+        length -= self.function.call_area_split(&a[a.len() - length..]);
         (length, a.len() - length, b.len() - length)
     }
 
@@ -633,6 +643,9 @@ struct Mf<'a, C, J> {
     /// Block id to its place in the layout: rebuilt only when a block is
     /// inserted, not after every branch edit that drops [`Mf::graph`].
     positions: std::cell::RefCell<Option<Vec<usize>>>,
+    /// Whether a tail stops short of a call area it did not open
+    /// ([`Jump::call_area`]).
+    keep_areas: bool,
     jump: std::marker::PhantomData<J>,
 }
 
@@ -853,6 +866,25 @@ impl<C, J: Jump> TailMergeFunction for Mf<'_, C, J> {
         inst.barrier
     }
 
+    fn call_area_split(
+        &self,
+        tail: &[Inst],
+    ) -> usize {
+        if !self.keep_areas {
+            return 0;
+        }
+        let (mut open, mut cut) = (0usize, 0usize);
+        for (at, inst) in tail.iter().enumerate() {
+            match J::call_area(inst) {
+                Some(true) => open += 1,
+                Some(false) if open == 0 => cut = at + 1,
+                Some(false) => open -= 1,
+                None => {}
+            }
+        }
+        cut
+    }
+
     fn is_call(
         &self,
         inst: &Inst,
@@ -1049,6 +1081,7 @@ pub fn merge_tails_across_loops<J: Jump, C>(
         assignment,
         if across_loops { Crossing::Always } else { Crossing::Never },
         None,
+        false,
     )
 }
 
@@ -1060,6 +1093,7 @@ pub fn merge_tails_crossing<J: Jump, C>(
     assignment: Option<&Assignment>,
     crossing: Crossing<'_>,
     frequencies: Option<&mut HashMap<u32, f64>>,
+    keep_areas: bool,
 ) -> bool {
     if function.blocks.iter().any(|block| !block.phis.is_empty()) {
         return false;
@@ -1077,6 +1111,7 @@ pub fn merge_tails_crossing<J: Jump, C>(
         },
         graph: std::cell::RefCell::new(None),
         positions: std::cell::RefCell::new(None),
+        keep_areas,
         jump: std::marker::PhantomData,
     };
     if !matches!(crossing, Crossing::Always) {
