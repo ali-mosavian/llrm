@@ -348,16 +348,8 @@ impl ProgramPass for Walk {
             last_call_when_growth_barred: program.target.tti().is_some_and(|tti| tti.inline_last_call_when_growth_barred()),
             ..crate::inlinecost::InlineParams::from_level(if self.inline.limit >= 250 { 3 } else { 2 })
         };
-        // The target's tuning table.
-        let level = if !matches!(self.inline.caller_size(), crate::inlinecost::CallerSize::Speed) {
-            None
-        } else if !self.speed_rate {
-            Some(1)
-        } else if self.inline.limit >= 250 {
-            Some(3)
-        } else {
-            Some(2)
-        };
+        // The target's tuning table, at the level the pass runs at.
+        let level = self.inline.level();
         if let Some(threshold) = threshold_override(program.target.tti().as_deref(), level) {
             params.default_threshold = threshold;
         }

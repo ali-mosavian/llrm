@@ -103,6 +103,19 @@ fn tuning(costs: &llrm_mir::target::OperationCosts) -> llrm_mir::target::Tuning 
     let per_byte = llrm_target::timings::derived_byte_rate(costs.cache_line, costs.line_fill_clocks);
     llrm_mir::target::Tuning {
         multiply_by_clocks: true,
+        // DEVIATE INLINE-BARS-M32 (owner llrm-target-x86-m32-b, exit
+        // 2026-12-20): see `Tuning::inline_threshold_o1`. gcc's -O1 and -O2
+        // inline less than the pin's 225: QB m32 text sat over the best of gcc
+        // and clang by 111028 B (O1, 82 of 126 modules) and 6828 B (O2, 50).
+        // Rule as m64's: the smallest sampled bar at which no bench program
+        // newly exceeds the best in instructions and none already over gets
+        // worse. O1 125: -5512 B (80 cells), instructions 0.8192 of best (225:
+        // 0.8186); O2 125: -12657 B (net -5829, under the best bar), 0.9094
+        // (0.9078). `strings` bounds both: O1 100 puts it 1.004 over best, O2
+        // 100 puts it 1.039 over (225: 1.020). O1's gap is mostly SPEED-O1's
+        // table module, not the bar.
+        inline_threshold_o1: Some(125),
+        inline_threshold_o2: Some(125),
         // DEVIATE MEMSET-PATTERN-SPEED (owner w10, exit 2026-11-24): fill_nest
         // -O2 filled 4096 words by a loop, 5 clk a word, where `rep stosw`
         // is 4.
@@ -918,6 +931,16 @@ impl llrm_target::Target for M32 {
 
 #[cfg(test)]
 mod tests {
+    /// m32's inline bars are 125 at -O1 and -O2 and the pin's at -O3: gcc's -O1 and -O2 inline less than the
+    /// pin's 225 (QB m32 text +111028 B and +6828 B over the best bar).
+    #[test]
+    fn test_m32_inlines_below_the_pins_bar_at_o1_and_o2_only() {
+        use llrm_mir::tti::Tti;
+        let tuning = super::tuning(&llrm_mir::target::OperationCosts::default());
+        let tti = llrm_x86::tti::X86::of_cpu("i486").unwrap().with_tuning(tuning);
+        assert_eq!([1, 2, 3].map(|level| tti.inline_threshold_at_level(level)), [Some(125), Some(125), None]);
+    }
+
     /// A loop header's alignment pad had a 10 byte limit (gcc's `.p2align
     /// 4,,10`, DEVIATE SD545) where the pin's X86 sets none: it left the
     /// header misaligned and the layout off the pin's.

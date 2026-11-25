@@ -426,7 +426,7 @@ impl Options {
     /// (docs/reference/levels.md).
     pub fn basic() -> Self {
         Self {
-            inline: inline::Threshold::default(),
+            inline: inline::Threshold { at_o1: true, ..inline::Threshold::default() },
             // gcc runs each pass once: the third round changed five passes of
             // d_faces and the fourth none, 253 of 3,084 Minstr at -O1.
             pre: false,

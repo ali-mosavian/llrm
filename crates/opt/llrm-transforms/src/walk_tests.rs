@@ -4037,3 +4037,16 @@ fn test_a_level_bar_replaces_the_flat_bar_for_its_level_only() {
     let none = tti(None, None);
     assert_eq!([Some(1), Some(2), Some(3), None].map(|level| bar(&none, level)), [None; 4]);
 }
+
+/// x86_32 prices bytes at -O1 (`speed_rate_at_o1`), and the bar's level was read from that flag: its -O1 ran
+/// level 2, so a bar stated for -O1 was never read and one for -O2 moved both (QB m32 -O1 sat +111 KB over the
+/// best bar with `inline_threshold_o1` set to anything). The level is the pass's own -O level.
+#[test]
+fn test_a_target_that_prices_bytes_at_o1_still_reads_its_o1_bar_there() {
+    let calls = |top: &str| top.contains("call i16 @f");
+    let low = Some(-1000);
+    let o1 = || crate::pipeline::Options { speed_rate: true, ..crate::pipeline::Options::basic() };
+    assert!(calls(&top_at(o1(), [low, None, None])), "-O1's own bar did not apply");
+    assert!(!calls(&top_at(o1(), [None, low, None])), "-O2's bar moved -O1");
+    assert!(calls(&top_at(crate::pipeline::Options::standard(), [None, low, None])), "-O2's own bar did not apply");
+}
