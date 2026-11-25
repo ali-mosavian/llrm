@@ -442,10 +442,12 @@ fn a_zero_test_of_a_negated_value_reads_the_negs_carry() {
     assert_eq!(tests, 0, "the carry of `neg` answers `n == 0`\n{listing}");
 }
 
-/// A copy or fill of a length known at run time is the `memcpy`/`memset` call at every level and
-/// in or out of a loop, as the pin has it (`X86SelectionDAGInfo::EmitTargetCodeForMemcpy` and `...Memset`
-/// return no node for a non-constant size). m32 -Os had it as `rep movsb`/`stosb` outside loops
-/// (MEM-OS-REP): QB `arry_fill` ran 65.2M cycles against the call's 47.3M.
+/// A copy or fill of a length known at run time is the `memcpy`/`memset` call
+/// at every level and in or out of a loop, as the pin has it
+/// (`X86SelectionDAGInfo::EmitTargetCodeForMemcpy` and `...Memset`
+/// return no node for a non-constant size). m32 -Os had it as `rep
+/// movsb`/`stosb` outside loops (MEM-OS-REP): QB `arry_fill` ran 65.2M cycles
+/// against the call's 47.3M.
 #[test]
 fn a_variable_copy_or_fill_at_m32_os_is_a_call_in_a_loop_or_not() {
     let ir = |target: &str, ty: &str, body: &str, attrs: &str| {
@@ -6584,6 +6586,31 @@ fn the_os_trials_compile_each_dimension_against_the_base_once() {
     compiled(&flags(&["-m32", "-Os", "-march=i486"]), text, "bench_recchop").unwrap();
     let selections = llrm_mir::counts::get(llrm_mir::counts::Event::Selections) - before;
     assert!(selections <= 6, "{selections} selections of two functions: more than three compiles");
+}
+
+/// TRIAL-CAP-M32: -Os on a module with a 2,000+ instruction function beside a rotated loop
+/// ran the -Os trials, each a mid-end over the whole module: 4.3x the
+/// compile time of the one build. A module with a function over
+/// `TRIAL_INSTS_MAX` is built once: fewer selections than the same module with
+/// a small second function.
+#[test]
+fn a_module_with_a_function_over_the_trial_cap_takes_no_os_trial() {
+    let one = include_str!("tests_data/prefix_sums.ll");
+    let chain = |links: usize| {
+        let body: String = (0..links).map(|i| format!("  %v{} = add i32 %v{}, {}\n", i + 1, i, i + 1)).collect();
+        format!("define dso_local i32 @other(i32 %v0) {{\n{body}  ret i32 %v{links}\n}}\n")
+    };
+    let selections = |text: String| {
+        let before = llrm_mir::counts::get(llrm_mir::counts::Event::Selections);
+        compiled(&flags(&["-m32", "-Os", "-march=i486"]), &text, "bench_prefix").unwrap();
+        llrm_mir::counts::get(llrm_mir::counts::Event::Selections) - before
+    };
+    let with_trials = selections(format!("{one}\n{}", chain(10)));
+    let over_cap = selections(format!("{one}\n{}", chain(llrm_x86_m32::TRIAL_INSTS_MAX + 100)));
+    assert!(
+        over_cap < with_trials,
+        "a module over the cap ran its trials: {over_cap} selections against {with_trials} for the same loop beside a small function"
+    );
 }
 
 /// x86-m32 x_bubble -Os: the unrotated trial module was 16 B shorter as an
