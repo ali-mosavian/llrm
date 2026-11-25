@@ -951,7 +951,10 @@ impl Collection<'_, '_> {
             return;
         }
         f.canonicalize(se, self.l);
-        let _ = self.insert_formula(se, lu_idx, &f);
+        // The narrowed registers may leave the mode the use cannot fold.
+        if self.legal(se, lu_idx, &f) {
+            let _ = self.insert_formula(se, lu_idx, &f);
+        }
     }
 
     /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/LoopStrengthReduce.cpp#L4608
@@ -1059,6 +1062,11 @@ impl Collection<'_, '_> {
                         }
                     }
                     new_f.canonicalize(se, self.l);
+                    // The register now carries the immediate: its width is
+                    // the one the mode is judged by (llvm-mos's typed modes).
+                    if !self.legal(se, lu_idx, &new_f) {
+                        continue;
+                    }
                     let _ = self.insert_formula(se, lu_idx, &new_f);
                 } else {
                     // The immediate in a base register.
@@ -1103,6 +1111,9 @@ impl Collection<'_, '_> {
                             continue;
                         }
                         new_f.canonicalize(se, self.l);
+                        if !self.legal(se, lu_idx, &new_f) {
+                            continue;
+                        }
                         let _ = self.insert_formula(se, lu_idx, &new_f);
                         break;
                     }
