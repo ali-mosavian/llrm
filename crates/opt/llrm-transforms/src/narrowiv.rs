@@ -59,6 +59,9 @@ struct Plan {
     step: Operand,
     narrow_bits: u32,
     signed: bool,
+    /// The step is the same number in the narrow width, so the narrow
+    /// increment wraps exactly where the wide one leaves its range: no wrap.
+    exact: bool,
 }
 
 /// [`narrowed_in`] over a session of its own.
@@ -177,7 +180,13 @@ fn plan_loop(
             (None, Some(s)) => (s, true),
             (None, None) => continue,
         };
-        plans.push(Plan { preheader, phi, increment, step, narrow_bits, signed });
+        let step_scev = se.get_scev(cx, step);
+        let exact = if signed {
+            se.get_signed_range(cx, step_scev).get_min_signed_bits() <= narrow_bits
+        } else {
+            se.get_unsigned_range(cx, step_scev).get_active_bits() <= narrow_bits
+        };
+        plans.push(Plan { preheader, phi, increment, step, narrow_bits, signed, exact });
     }
 }
 
@@ -243,7 +252,15 @@ fn narrow(
     );
     function.insert(phi, Position::Before(plan.phi)).expect("a placed phi");
     let phi_value = Operand::Value(result_of(function, phi));
-    let increment = function.create_instruction(opcode, small, vec![phi_value, step], Flags::default(), None);
+    // Both values of the counter lie in the narrow range, so with a step
+    // that fits it the narrow add or sub does not wrap: ScalarEvolution
+    // then sees `zext` of the narrow counter as a recurrence of the wide type.
+    let no_wrap = match (plan.exact, plan.signed) {
+        (false, _) => Flags::default(),
+        (true, true) => Flags::NSW,
+        (true, false) => Flags::NUW,
+    };
+    let increment = function.create_instruction(opcode, small, vec![phi_value, step], no_wrap, None);
     function.insert(increment, Position::Before(plan.increment)).expect("a placed increment");
     let increment_value = Operand::Value(result_of(function, increment));
     function.set_operand(phi, 2, increment_value);
