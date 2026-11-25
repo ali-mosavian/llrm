@@ -218,8 +218,10 @@ fn can_fall_through<C>(
 }
 
 /// The blocks that name `id` in a terminator, and the block before it when
-/// that falls into it (`predecessors`).
-fn predecessors<C>(
+/// that falls into it (`predecessors`): the scan the kept lists are checked
+/// against in a debug build.
+#[cfg(debug_assertions)]
+fn scanned_predecessors<C>(
     function: &MFunction<C>,
     id: u32,
 ) -> Vec<usize> {
@@ -294,8 +296,74 @@ enum Step {
     Done(bool),
 }
 
-struct Folder<'a, C, J> {
+/// The function being folded, and the predecessors of its blocks, kept until
+/// the function is borrowed to change (`MachineBasicBlock::predecessors` is
+/// kept current by the pin; each query here scanned every block).
+struct Tracked<'a, C> {
     function: &'a mut MFunction<C>,
+    preds: std::cell::RefCell<Option<HashMap<u32, Vec<usize>>>>,
+}
+
+impl<'a, C> Tracked<'a, C> {
+    fn new(function: &'a mut MFunction<C>) -> Self {
+        Tracked { function, preds: std::cell::RefCell::new(None) }
+    }
+
+    /// The blocks that name `id` in a terminator, and the block before it when
+    /// that falls into it, in layout order (`predecessors`).
+    fn predecessors(
+        &self,
+        id: u32,
+    ) -> Vec<usize> {
+        let mut cached = self.preds.borrow_mut();
+        let map = cached.get_or_insert_with(|| {
+            let function: &MFunction<C> = &*self.function;
+            let mut map: HashMap<u32, Vec<usize>> = HashMap::default();
+            for (other, block) in function.blocks.iter().enumerate() {
+                let mut named: Vec<u32> = Vec::new();
+                for inst in terminators(&block.insts) {
+                    if inst.terminator {
+                        named.extend(inst.operands.iter().filter_map(|operand| match operand {
+                            Operand::Block(id) => Some(*id),
+                            _ => None,
+                        }));
+                    }
+                }
+                if can_fall_through(function, other) {
+                    named.push(function.blocks[other + 1].id);
+                }
+                named.sort_unstable();
+                named.dedup();
+                for id in named {
+                    map.entry(id).or_default().push(other);
+                }
+            }
+            map
+        });
+        let kept = map.get(&id).cloned().unwrap_or_default();
+        #[cfg(debug_assertions)]
+        assert_eq!(kept, scanned_predecessors(&*self.function, id), "stale predecessors of block {id}");
+        kept
+    }
+}
+
+impl<C> std::ops::Deref for Tracked<'_, C> {
+    type Target = MFunction<C>;
+
+    fn deref(&self) -> &MFunction<C> {
+        self.function
+    }
+}
+
+impl<C> std::ops::DerefMut for Tracked<'_, C> {
+    fn deref_mut(&mut self) -> &mut MFunction<C> {
+        *self.preds.get_mut() = None;
+        self.function
+    }
+}
+
+struct Folder<'a, C, J> {
+    function: Tracked<'a, C>,
     /// Where the registers are, for `HoistCommonCodeInSuccs`.
     assignment: Option<&'a Assignment>,
     /// `getNumber` of each block, by id, as the sweep began.
@@ -316,18 +384,18 @@ impl<C, J: Jump> Folder<'_, C, J> {
         &mut self,
         id: u32,
     ) -> Step {
-        let at = position(self.function, id);
+        let at = position(&self.function, id);
         let fall_through = (at + 1 < self.function.blocks.len()).then(|| self.function.blocks[at + 1].id);
-        let current = analyze(self.function, at);
+        let current = analyze(&self.function, at);
 
-        if self.function.blocks[at].insts.is_empty() && !address_taken(self.function, id) {
-            let preds = predecessors(self.function, id);
+        if self.function.blocks[at].insts.is_empty() && !address_taken(&self.function, id) {
+            let preds = self.function.predecessors(id);
             if preds.is_empty() {
                 return Step::Done(false);
             }
             let Some(next) = fall_through else { return Step::Done(false) };
             for pred in preds {
-                replace_uses(self.function, pred, id, next);
+                replace_uses(&mut self.function, pred, id, next);
             }
             // nothing names it now, and what fell into it falls into `next`
             self.function.blocks.remove(at);
@@ -335,71 +403,71 @@ impl<C, J: Jump> Folder<'_, C, J> {
         }
 
         let prev = at - 1;
-        let prior = analyze(self.function, prev);
+        let prior = analyze(&self.function, prev);
         if let Some(prior) = &prior {
             if let (Some(taken), Some(other)) = (prior.taken, prior.other) {
                 if taken == other {
-                    remove_branch(self.function, prev);
+                    remove_branch(&mut self.function, prev);
                     if taken != id {
-                        insert_branch::<C, J>(self.function, prev, taken, None, None);
+                        insert_branch::<C, J>(&mut self.function, prev, taken, None, None);
                     }
                     return Step::Again;
                 }
             }
             if prior.cond.is_none()
                 && prior.taken.is_none()
-                && predecessors(self.function, id).len() == 1
-                && prior_successors(self.function, prev) == 1
-                && is_successor(self.function, prev, id)
-                && !address_taken(self.function, id)
+                && self.function.predecessors(id).len() == 1
+                && prior_successors(&self.function, prev) == 1
+                && is_successor(&self.function, prev, id)
+                && !address_taken(&self.function, id)
             {
                 let block = self.function.blocks.remove(at);
                 self.function.blocks[prev].insts.extend(block.insts);
                 return Step::Done(true);
             }
             if prior.taken == Some(id) && prior.other.is_none() {
-                remove_branch(self.function, prev);
+                remove_branch(&mut self.function, prev);
                 return Step::Again;
             }
             if prior.other == Some(id) {
-                remove_branch(self.function, prev);
-                insert_branch::<C, J>(self.function, prev, prior.taken.unwrap(), None, prior.cond.as_ref());
+                remove_branch(&mut self.function, prev);
+                insert_branch::<C, J>(&mut self.function, prev, prior.taken.unwrap(), None, prior.cond.as_ref());
                 return Step::Again;
             }
             if prior.taken == Some(id) {
                 if let Some(reversed) = prior.cond.as_ref().and_then(|cond| J::reverse(cond)) {
-                    remove_branch(self.function, prev);
-                    insert_branch::<C, J>(self.function, prev, prior.other.unwrap(), None, Some(&reversed));
+                    remove_branch(&mut self.function, prev);
+                    insert_branch::<C, J>(&mut self.function, prev, prior.other.unwrap(), None, Some(&reversed));
                     return Step::Again;
                 }
             }
             if self.function.blocks[at].insts.len() == 1
-                && can_fall_through(self.function, prev)
+                && can_fall_through(&self.function, prev)
                 && current.as_ref().is_some_and(|cur| {
                     cur.taken.is_some()
                         && cur.taken == prior.taken
                         && cur.cond.as_ref().zip(prior.cond.as_ref()).is_some_and(|(a, b)| same_branch(a, b))
                 })
             {
-                remove_branch(self.function, prev);
+                remove_branch(&mut self.function, prev);
                 return Step::Again;
             }
             if self.function.blocks[at].insts.last().is_some_and(|last| last.barrier)
-                && !is_branching(self.function, at)
+                && !is_branching(&self.function, at)
                 && prior.cond.is_some()
                 && prior.other.is_none()
                 && prior.taken == fall_through
             {
                 let mut transform = true;
-                if at + 2 == self.function.blocks.len() && !better_fallthrough(self.function, prior.taken.unwrap(), id)
+                if at + 2 == self.function.blocks.len() && !better_fallthrough(&self.function, prior.taken.unwrap(), id)
                 {
                     transform = false;
                 }
                 if transform {
                     if let Some(reversed) = prior.cond.as_ref().and_then(|cond| J::reverse(cond)) {
-                        remove_branch(self.function, prev);
-                        insert_branch::<C, J>(self.function, prev, id, None, Some(&reversed));
-                        move_to(self.function, id, |function| function.blocks.len());
+                        remove_branch(&mut self.function, prev);
+                        insert_branch::<C, J>(&mut self.function, prev, id, None, Some(&reversed));
+                        move_to(&mut self.function, id, |function| function.blocks.len());
                         return Step::Done(true);
                     }
                 }
@@ -410,8 +478,8 @@ impl<C, J: Jump> Folder<'_, C, J> {
             if let (Some(taken), Some(other)) = (cur.taken, cur.other) {
                 if other == id && taken != id {
                     if let Some(reversed) = cur.cond.as_ref().and_then(|cond| J::reverse(cond)) {
-                        remove_branch(self.function, at);
-                        insert_branch::<C, J>(self.function, at, other, Some(taken), Some(&reversed));
+                        remove_branch(&mut self.function, at);
+                        insert_branch::<C, J>(&mut self.function, at, other, Some(taken), Some(&reversed));
                         return Step::Again;
                     }
                 }
@@ -422,13 +490,13 @@ impl<C, J: Jump> Folder<'_, C, J> {
                     .first()
                     .is_some_and(|first| first.terminator && target(first).is_some() && !names_many(first))
                     && taken != id
-                    && !address_taken(self.function, id)
+                    && !address_taken(&self.function, id)
                 {
-                    remove_branch(self.function, at);
-                    let prev_falls = can_fall_through(self.function, prev);
-                    if !prev_falls || prior.is_some() || !is_successor(self.function, prev, id) {
+                    remove_branch(&mut self.function, at);
+                    let prev_falls = can_fall_through(&self.function, prev);
+                    if !prev_falls || prior.is_some() || !is_successor(&self.function, prev, id) {
                         if prev_falls
-                            && is_successor(self.function, prev, id)
+                            && is_successor(&self.function, prev, id)
                             && let Some(prior) = &prior
                             && prior.taken != Some(id)
                             && prior.other != Some(id)
@@ -437,22 +505,22 @@ impl<C, J: Jump> Folder<'_, C, J> {
                                 None => (id, None),
                                 Some(taken) => (taken, Some(id)),
                             };
-                            remove_branch(self.function, prev);
-                            insert_branch::<C, J>(self.function, prev, new_taken, new_other, prior.cond.as_ref());
+                            remove_branch(&mut self.function, prev);
+                            insert_branch::<C, J>(&mut self.function, prev, new_taken, new_other, prior.cond.as_ref());
                         }
                         let mut changed = false;
                         let mut to_self = false;
-                        for pred in predecessors(self.function, id) {
+                        for pred in self.function.predecessors(id) {
                             if self.function.blocks[pred].id == id {
                                 to_self = true;
                                 continue;
                             }
                             changed = true;
-                            replace_uses(self.function, pred, id, taken);
-                            if let Some(after) = analyze(self.function, pred) {
+                            replace_uses(&mut self.function, pred, id, taken);
+                            if let Some(after) = analyze(&self.function, pred) {
                                 if after.taken.is_some() && after.taken == after.other {
-                                    remove_branch(self.function, pred);
-                                    insert_branch::<C, J>(self.function, pred, after.taken.unwrap(), None, None);
+                                    remove_branch(&mut self.function, pred);
+                                    insert_branch::<C, J>(&mut self.function, pred, after.taken.unwrap(), None, None);
                                 }
                             }
                         }
@@ -460,29 +528,29 @@ impl<C, J: Jump> Folder<'_, C, J> {
                             return Step::Done(true);
                         }
                     }
-                    insert_branch::<C, J>(self.function, at, taken, None, None);
+                    insert_branch::<C, J>(&mut self.function, at, taken, None, None);
                 }
             }
         }
 
-        if !can_fall_through(self.function, prev) {
-            let current_falls = can_fall_through(self.function, at);
+        if !can_fall_through(&self.function, prev) {
+            let current_falls = can_fall_through(&self.function, at);
             let here = *self.number.get(&id).unwrap_or(&at);
-            for pred in predecessors(self.function, id) {
-                let Some(branches) = analyze(self.function, pred) else { continue };
+            for pred in self.function.predecessors(id) {
+                let Some(branches) = analyze(&self.function, pred) else { continue };
                 let pred_id = self.function.blocks[pred].id;
                 let pred_number = *self.number.get(&pred_id).unwrap_or(&pred);
                 if pred_id != id
-                    && !can_fall_through(self.function, pred)
+                    && !can_fall_through(&self.function, pred)
                     && (branches.taken == Some(id) || branches.other == Some(id))
                     && (!current_falls || current.as_ref().is_none_or(|cur| cur.taken.is_none() || cur.other.is_none()))
                     && (!current_falls || here >= pred_number)
                 {
                     if current_falls {
                         let next = self.function.blocks[at + 1].id;
-                        insert_branch::<C, J>(self.function, at, next, None, None);
+                        insert_branch::<C, J>(&mut self.function, at, next, None, None);
                     }
-                    move_to(self.function, id, |function| position(function, pred_id) + 1);
+                    move_to(&mut self.function, id, |function| position(function, pred_id) + 1);
                     return Step::Again;
                 }
             }
@@ -492,22 +560,22 @@ impl<C, J: Jump> Folder<'_, C, J> {
                     // to, else the one it branches to;
                     // trying both moved it back and forth forever
                     if let Some(succ) = cur.other.or(cur.taken) {
-                        let succ_at = position(self.function, succ);
+                        let succ_at = position(&self.function, succ);
                         if succ != id
                             && succ_at > 0
                             && self.function.blocks[succ_at - 1].id != id
-                            && !can_fall_through(self.function, succ_at - 1)
+                            && !can_fall_through(&self.function, succ_at - 1)
                         {
-                            move_to(self.function, id, |function| position(function, succ));
+                            move_to(&mut self.function, id, |function| position(function, succ));
                             return Step::Again;
                         }
                     }
                 }
                 if let Some(next) = fall_through
-                    && analyze(self.function, prev).is_some()
-                    && is_successor(self.function, prev, next)
+                    && analyze(&self.function, prev).is_some()
+                    && is_successor(&self.function, prev, next)
                 {
-                    move_to(self.function, id, |function| function.blocks.len());
+                    move_to(&mut self.function, id, |function| function.blocks.len());
                     return Step::Done(true);
                 }
             }
@@ -534,7 +602,7 @@ impl<C, J: Jump> Folder<'_, C, J> {
             }
             // dead: nothing branches to it and nothing falls into it
             if let Some(now) = self.function.blocks.iter().position(|block| block.id == id) {
-                if now > 0 && predecessors(self.function, id).is_empty() && !address_taken(self.function, id) {
+                if now > 0 && self.function.predecessors(id).is_empty() && !address_taken(&self.function, id) {
                     self.function.blocks.remove(now);
                     changed = true;
                 }
@@ -760,10 +828,10 @@ impl<C, T: Target<Class = C> + Jump> Folder<'_, C, T> {
         at: usize,
         assignment: &Assignment,
     ) -> bool {
-        let Some(branches) = analyze(self.function, at) else { return false };
+        let Some(branches) = analyze(&self.function, at) else { return false };
         let (Some(taken), Some(_)) = (branches.taken, &branches.cond) else { return false };
         let Some(other) =
-            branches.other.or_else(|| can_fall_through(self.function, at).then(|| self.function.blocks[at + 1].id))
+            branches.other.or_else(|| can_fall_through(&self.function, at).then(|| self.function.blocks[at + 1].id))
         else {
             return false;
         };
@@ -771,11 +839,11 @@ impl<C, T: Target<Class = C> + Jump> Folder<'_, C, T> {
             return false;
         }
         // only this block enters either: an obvious win
-        if predecessors(self.function, taken).len() > 1 || predecessors(self.function, other).len() > 1 {
+        if self.function.predecessors(taken).len() > 1 || self.function.predecessors(other).len() > 1 {
             return false;
         }
         let Some((loc, effects)) = self.hoisting_position(at, assignment) else { return false };
-        let (one, two) = (position(self.function, taken), position(self.function, other));
+        let (one, two) = (position(&self.function, taken), position(&self.function, other));
         let mut run = 0;
         loop {
             let same = {
@@ -884,7 +952,7 @@ fn fold<T: Target + Jump>(
     keep_areas: bool,
 ) -> bool {
     let mut folder = Folder::<T::Class, T> {
-        function,
+        function: Tracked::new(function),
         assignment,
         number: HashMap::default(),
         crossing,
@@ -895,7 +963,7 @@ fn fold<T: Target + Jump>(
     let mut ever = false;
     loop {
         let mut changed = crate::tailmerge::merge_tails_crossing::<T, _>(
-            folder.function,
+            &mut folder.function,
             folder.assignment,
             folder.crossing,
             folder.frequencies.as_deref_mut(),
