@@ -1870,3 +1870,18 @@ fn a_scope_declaration_prints_its_node_as_the_argument_and_reads_back() {
     let again = parse::module(&printed).unwrap();
     assert_eq!(crate::print::module(&again), printed);
 }
+
+/// An AArch64 block (`llrm.a64.asm.`) keeps its tag through its name and takes `i64` (`x`), `i32` (`w`) and
+/// vector (`v`) registers.
+#[test]
+fn an_aarch64_inline_assembly_block_keeps_its_isa_and_takes_x_w_and_v_registers() {
+    // udiv x9, x10, x11 ; msub x12, x9, x11, x10
+    let name = "llrm.a64.asm.490ac89b2cc9ab9b.x10_x11.x9_x12.-.n";
+    let block = crate::intrinsics::asm(name).expect("parses");
+    assert_eq!(block.bits, crate::intrinsics::AARCH64);
+    assert_eq!(crate::intrinsics::asm_name(&block), name);
+    let problems = |text: &str| crate::verify::verify(&parse::module(text).unwrap_or_else(|error| panic!("{error}")));
+    assert_eq!(problems(&format!("declare {{i64, i64}} @{name}(i64, i64)\n")), Vec::<String>::new());
+    let wrong = problems(&format!("declare {{i64, i64}} @{name}(i64)\n"));
+    assert!(wrong.first().is_some_and(|one| one.contains("incorrect argument type")), "{wrong:?}");
+}
