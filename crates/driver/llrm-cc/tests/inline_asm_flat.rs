@@ -88,7 +88,7 @@ fn test_a_constraint_that_has_no_register_alternative_is_refused_by_name() {
     let (done, _) = compile("refused", &source, "-O2", "x86_32-linux");
     assert!(!done.status.success());
     let message = String::from_utf8_lossy(&done.stderr);
-    assert!(message.contains("constraint K is not carried"), "{message}");
+    assert!(message.contains("constraint K takes a constant it accepts"), "{message}");
 }
 
 #[test]
@@ -147,6 +147,49 @@ fn test_x86_64_register_class_constraints_take_registers_of_the_pool() {
 /// The pool registers are fixed places, so the allocator keeps what is live
 /// out of them: values live across a block, a clobber naming a register the
 /// pool would take, two blocks in a function and in a loop, doubles live in
+/// At -O0 the selector took an asm block for a C call: the inputs went in the
+/// ABI registers, not the ones the block names, and `add1(3, 4)` was not 7.
+/// Compiled at each level for both x86 targets, linked and run on the host.
+#[test]
+fn test_x86_blocks_of_each_shape_run_at_every_level_on_both_targets() {
+    if !cfg!(target_arch = "x86_64") {
+        return;
+    }
+    let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/c/x86_inline_asm_shapes.c");
+    let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("flatasm-shapes-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
+    for (target, flags, link) in [
+        ("x86_64-linux", vec![], vec!["-static", "-no-pie"]),
+        ("x86_32-linux", vec!["-march=i486", "-mabi=sysv"], vec!["-m32", "-static", "-no-pie"]),
+    ] {
+        for level in ["-O0", "-O1", "-O2", "-Os"] {
+            let object = dir.join(format!("{target}{level}.o"));
+            let built = Command::new(env!("CARGO_BIN_EXE_llrm-cc-bin"))
+                .env("LLRM_CC_TARGET", target)
+                .env(
+                    "LLRM_LLC",
+                    std::env::var_os("LLRM_LLC")
+                        .unwrap_or_else(|| target_dir::of(&root).join("release/llrm-llc").into()),
+                )
+                .args([level, "-w", "-c"])
+                .args(&flags)
+                .arg("-o")
+                .arg(&object)
+                .arg(&source)
+                .output()
+                .unwrap();
+            assert!(built.status.success(), "{target} {level}: {}", String::from_utf8_lossy(&built.stderr));
+            let exe = dir.join(format!("{target}{level}.out"));
+            let linked = Command::new("gcc").args(&link).arg("-o").arg(&exe).arg(&object).output().unwrap();
+            assert!(linked.status.success(), "{target} {level}: {}", String::from_utf8_lossy(&linked.stderr));
+            let ran = Command::new(&exe).output().unwrap();
+            assert_eq!(ran.status.code(), Some(0), "{target} {level}: wrong blocks");
+        }
+    }
+}
+
 /// the vector registers an `x` operand takes. Compiled at each level, linked
 /// and run on the host: the results are the C ones.
 #[test]
@@ -159,7 +202,7 @@ fn test_x86_64_register_class_blocks_run_with_their_values_live_across() {
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
-    for level in ["-O1", "-O2", "-Os"] {
+    for level in ["-O0", "-O1", "-O2", "-Os"] {
         let object = dir.join(format!("run{level}.o"));
         let built = Command::new(env!("CARGO_BIN_EXE_llrm-cc-bin"))
             .env("LLRM_CC_TARGET", "x86_64-linux")
@@ -224,4 +267,51 @@ fn test_two_blocks_alike_but_for_their_operand_types_are_two_functions() {
         let (done, _) = compile("types", &source, "-O2", target);
         assert!(done.status.success(), "{target}: {}", String::from_utf8_lossy(&done.stderr));
     }
+}
+
+/// An immediate constraint (`i`, `n`, `I`..`O`, `e`, `Z`) was refused by name
+/// ("constraint I is not carried"): the constant is the block's text, as LLVM's
+/// `LowerAsmOperandForConstraint` makes it (`$3` in AT&T, `3` bare with `%c`).
+#[test]
+fn test_a_block_with_an_immediate_constraint_runs() {
+    if !cfg!(target_arch = "x86_64") {
+        return;
+    }
+    let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/c/x86_inline_asm_imm.c");
+    let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("flatasm-imm-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
+    for level in ["-O0", "-O1", "-O2", "-Os"] {
+        let object = dir.join(format!("imm{level}.o"));
+        let built = Command::new(env!("CARGO_BIN_EXE_llrm-cc-bin"))
+            .env("LLRM_CC_TARGET", "x86_64-linux")
+            .env(
+                "LLRM_LLC",
+                std::env::var_os("LLRM_LLC").unwrap_or_else(|| target_dir::of(&root).join("release/llrm-llc").into()),
+            )
+            .args([level, "-w", "-c", "-o"])
+            .arg(&object)
+            .arg(&source)
+            .output()
+            .unwrap();
+        assert!(built.status.success(), "{level}: {}", String::from_utf8_lossy(&built.stderr));
+        let exe = dir.join(format!("a{level}.out"));
+        let linked = Command::new("gcc").args(["-static", "-no-pie", "-o"]).arg(&exe).arg(&object).output().unwrap();
+        assert!(linked.status.success(), "{level}: {}", String::from_utf8_lossy(&linked.stderr));
+        let ran = Command::new(&exe).output().unwrap();
+        assert_eq!(
+            ran.status.code(),
+            Some(0),
+            "{level}: {} blocks computed a wrong value",
+            ran.status.code().unwrap_or(-1)
+        );
+    }
+}
+
+#[test]
+fn test_an_immediate_block_compiles_for_x86_32() {
+    let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/c/x86_inline_asm_imm.c");
+    let (done, _) = compile("imm32", &source, "-O2", "x86_32-linux");
+    assert!(done.status.success(), "{}", String::from_utf8_lossy(&done.stderr));
 }

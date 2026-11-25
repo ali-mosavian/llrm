@@ -37,6 +37,11 @@ fn fixture() -> Vec<(Semantics, usize)> {
     let floats: Vec<usize> = ops
         .iter()
         .map(|op| {
+            // A raw word names no operand: every register is its implicit def
+            // and use (`Inst::visit`), none a floating-point operand of a row.
+            if matches!(op, Op::I(Inst::Word { .. })) {
+                return 0;
+            }
             let (defs, uses) = op.defs_and_uses();
             defs.iter().chain(&uses).filter(|one| matches!(one, Reg::Fpr(_))).count()
         })
