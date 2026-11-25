@@ -38,6 +38,13 @@ pub fn tuning() -> llrm_mir::target::Tuning {
     llrm_mir::target::Tuning {
         max_stores_per_memset: 8,
         max_stores_per_memset_opt_size: 4,
+        // DEVIATE INLINE-O1 (owner m68k, exit 2026-12-20): half the pin's 225
+        // at -O1, as m64's 112. QB 68020 -O1 bytes against gcc: +23,414 at
+        // 225, -978 at 112; 68000: +25,384 -> +1,298; no module newly over.
+        // 68020 bench clocks +0.005% on the one program that moves. QB clocks
+        // are not measurable on m68k: the clock side is that thin set.
+        // -O2, -O3 and -Os are under gcc already and keep the pin's bars.
+        inline_threshold_o1: Some(112),
         ..llrm_mir::target::Tuning::PIN
     }
 }
