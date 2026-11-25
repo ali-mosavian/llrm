@@ -79,7 +79,6 @@ fn test_a_short_constant_copy_of_unaligned_pointers_stays_for_the_selector() {
     assert!(expanded(1, "36").contains("call void @memcpy("), "nine moves");
 }
 
-
 /// A 700-byte copy at m32 -Os was a call of `memcpy` (push x3, call, add) where
 /// the pin's llc at `minsize` writes `rep movsb`: memory_expansion +1110 B of
 /// the 2192 B by which 88 cells were worse. A target that takes `rep movsb` at
@@ -97,9 +96,11 @@ fn test_a_constant_copy_stays_for_rep_movsb_where_the_target_takes_it() {
     assert!(run(true).contains("call void @llvm.memcpy"), "rep movsb at -Os where the target says so");
 }
 
-/// A 4000-byte copy of 16-aligned blocks at -O2 was a call of `memcpy` where gcc writes `rep movsq` (scroll O2,
-/// +163 instructions a round). A target with a `rep movs` limit (DEVIATE REP-MOVS-SPEED) leaves it to the selector up
-/// to that size; a function marked `optsize` and a copy past the limit keep the call.
+/// A 4000-byte copy of 16-aligned blocks at -O2 was a call of `memcpy` where
+/// gcc writes `rep movsq` (scroll O2, +163 instructions a round). A target with
+/// a `rep movs` limit (DEVIATE REP-MOVS-SPEED) leaves it to the selector up
+/// to that size; a function marked `optsize` and a copy past the limit keep the
+/// call.
 #[test]
 fn test_an_aligned_constant_copy_stays_for_rep_movs_up_to_the_speed_limit() {
     let run = |bytes: &str, speed_max: u64, sized: bool| {
@@ -115,9 +116,11 @@ fn test_an_aligned_constant_copy_stays_for_rep_movs_up_to_the_speed_limit() {
     assert!(run("4000", 8192, true).contains("call void @memcpy("), "-Os keeps the call");
 }
 
-/// The pin lowers a copy of a length known at run time to a `memcpy` call at every level, in a loop or
-/// not (`EmitTargetCodeForMemcpy` only inlines a constant size). m32 -Os had it as two `rep movsb` outside
-/// loops (MEM-OS-REP): QB `arry_fill` ran 65.2M cycles against the call's 47.2M.
+/// The pin lowers a copy of a length known at run time to a `memcpy` call at
+/// every level, in a loop or not (`EmitTargetCodeForMemcpy` only inlines a
+/// constant size). m32 -Os had it as two `rep movsb` outside
+/// loops (MEM-OS-REP): QB `arry_fill` ran 65.2M cycles against the call's
+/// 47.2M.
 #[test]
 fn test_a_variable_copy_is_a_call_at_size_in_a_loop_or_not() {
     let cold = "declare void @llvm.memcpy.p0.p0.i32(ptr, ptr, i32, i1)\n\

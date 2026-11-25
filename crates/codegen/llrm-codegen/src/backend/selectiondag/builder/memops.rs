@@ -459,8 +459,9 @@ impl Builder<'_> {
             || (self.has_opt_size() && self.target.tti.as_ref().is_some_and(|tti| tti.0.rep_movs_at_size()))
     }
 
-    /// The largest constant copy done with `rep movs` where the blocks are aligned: the pin's 128 bytes
-    /// (`emitConstantSizeRepmov`), or the target's DEVIATE REP-MOVS-SPEED limit at -O2 and -O3.
+    /// The largest constant copy done with `rep movs` where the blocks are
+    /// aligned: the pin's 128 bytes (`emitConstantSizeRepmov`), or the
+    /// target's DEVIATE REP-MOVS-SPEED limit at -O2 and -O3.
     fn rep_movs_inline_limit(
         &self,
         opt_size: bool,

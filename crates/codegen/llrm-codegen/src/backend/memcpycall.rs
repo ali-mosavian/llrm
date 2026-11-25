@@ -107,21 +107,15 @@ pub fn expanded(
         .map_or(4, |layout| if layout.pointer(0).bits == 64 { 16 } else { 4 });
     let mut any = false;
     expansion::expand_calls(module, needs, |context, function, call, ()| {
-        any |= calls(
-            context,
-            function,
-            call,
-            widest,
-            rep_movsb,
-            rep_movs_speed_max,
-        );
+        any |= calls(context, function, call, widest, rep_movsb, rep_movs_speed_max);
         Ok(())
     })?;
     if !any {
         return Ok(());
     }
-    // The routine's result is dropped, as `getMemcpy`'s void `RetTy` has it: a copy ending the function is then a
-    // sibling call (the caller's void return matches).
+    // The routine's result is dropped, as `getMemcpy`'s void `RetTy` has it: a
+    // copy ending the function is then a sibling call (the caller's void
+    // return matches).
     let (pointer, word, returns) = {
         let types = &module.context.types;
         (types.ptr(0), types.int(32), types.void())
@@ -142,14 +136,7 @@ pub fn expanded(
     };
     let reference = module.reference(id);
     expansion::expand_calls(module, needs, |context, function, call, ()| {
-        if !calls(
-            context,
-            function,
-            call,
-            widest,
-            rep_movsb,
-            rep_movs_speed_max,
-        ) {
+        if !calls(context, function, call, widest, rep_movsb, rep_movs_speed_max) {
             return Ok(());
         }
         let instruction = function.instruction(call).clone();
@@ -167,7 +154,8 @@ pub fn expanded(
                 Operand::Value(function.instruction(made).result.expect("a value"))
             }
         };
-        // `EmitTargetCodeForMemcpy`'s `isTailCall`: the call is a tail call as the intrinsic was.
+        // `EmitTargetCodeForMemcpy`'s `isTailCall`: the call is a tail call as
+        // the intrinsic was.
         let tail = match &instruction.opcode {
             Opcode::Call(original) => original.tail,
             _ => Default::default(),
@@ -236,8 +224,9 @@ fn calls(
         if u64::try_from(bytes).is_ok_and(|bytes| inline_widths(bytes, widest, limit, volatile).is_some()) {
             return false;
         }
-        // DEVIATE REP-MOVS-SPEED (`Tuning::rep_movs_at_speed_max`): at speed, aligned blocks up to the target's limit
-        // are `rep movs`, as gcc's generic strategy has them.
+        // DEVIATE REP-MOVS-SPEED (`Tuning::rep_movs_at_speed_max`): at speed,
+        // aligned blocks up to the target's limit are `rep movs`, as
+        // gcc's generic strategy has them.
         if !at_size && align(0) >= 4 && align(1) >= 4 && bytes <= u128::from(rep_movs_speed_max) {
             return false;
         }
