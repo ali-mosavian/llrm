@@ -2434,9 +2434,8 @@ fn exact_rint(
 /// an operation whose evaluation raises no exception status folds under any
 /// rounding mode and exception behaviour. DEVIATE CONSTRAINED-CONVERT (owner
 /// x87, exit 2026-12-31): the pin applies it to the arithmetic and comparison
-/// intrinsics and not to these two, so `fpext float 3.2767e4 to fp128` stayed
-/// a call (QB pfpu.c `scale10` +24 B at arm64 Os, gcc folds it). A widening
-/// of a finite value is exact; a narrowing is when it converts back to the
+/// intrinsics and not to these two, so an exact constant conversion stayed
+/// a call and its operand a pool load (gcc folds it). A widening of a finite value is exact; a narrowing is when it converts back to the
 /// same constant. A NaN is left (its payload and the invalid status).
 fn fold_constrained_convert(
     context: &Context,

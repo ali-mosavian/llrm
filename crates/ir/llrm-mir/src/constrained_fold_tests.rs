@@ -35,9 +35,8 @@ fn folded(body: &str) -> Option<ConstantKind> {
 const STRICT: &str = "metadata !\"fpexcept.strict\"";
 const DYNAMIC: &str = "metadata !\"round.dynamic\"";
 
-/// QB pfpu.c `scale10`, arm64 Os, +24 B against gcc:
-/// `constrained.fpext.f128.f32(float 3.2767e4)` stayed a call (and its
-/// libcall-free expansion) although the widening raises no exception.
+/// A constrained widening of a constant stayed a call (and the constant a pool
+/// load) although the conversion is exact and raises no exception.
 #[test]
 fn a_widening_of_a_constant_folds_under_strict_exceptions() {
     let kind = folded(&format!(
