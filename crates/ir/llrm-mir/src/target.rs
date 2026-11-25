@@ -399,8 +399,9 @@ pub struct Tuning {
     pub unroll_max_percent_threshold_boost: Option<u32>,
     /// `Threshold` of the full unroll at `-O3` alone (the pin's is 300): a
     /// loop of 32 trips and a dozen operations is unrolled where the pin
-    /// keeps it, as gcc and clang 20 do. DEVIATE UNROLL-O3 (owner
-    /// llrm-target-x86-m64-b, exit 2026-11-30); none: the pass's own.
+    /// keeps it, as gcc and clang 20 do. No target sets it: x86_64's 400
+    /// grew spill_store_order -O3's compile 15x (row X64-UNROLL-O3); none:
+    /// the pass's own.
     pub unroll_threshold_at_o3: Option<u32>,
     /// The code-size cost of a scalar divide or remainder by a constant
     /// (`X86TTIImpl::getArithmeticInstrCost`: 5 or 6, and 2 more for size, in
