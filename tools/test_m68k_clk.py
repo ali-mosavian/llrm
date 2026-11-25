@@ -143,3 +143,17 @@ def test_a_cycles_binary_of_this_checkouts_sources_is_accepted(tmp_path):
 
     _fake_cycles(tmp_path / "cycles", m68k_clk.sources_stamp(m68k_clk.ROOT))
     m68k_clk.verify_cycles(tmp_path / "cycles", m68k_clk.ROOT, tmp_path)
+
+
+def test_the_link_of_the_ours_column_finds_external_flags_without_a_gcc_compile():
+    """`external_flags` was imported inside `gcc_command`: a program gcc could not take never ran it, and the link of ours raised NameError (every m68k bench cell of an A/B died)."""
+    import m68k_clk
+
+    assert m68k_clk.external_flags.gcc_float("m68k") is not None
+
+
+def test_ours_only_measures_one_column():
+    import m68k_clk
+
+    assert m68k_clk.columns(True) == ("ours",)
+    assert m68k_clk.columns(False) == ("ours", "gcc")
