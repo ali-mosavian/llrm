@@ -173,6 +173,7 @@ thread_local! {
     static LOOP_CALLED: std::cell::RefCell<Vec<String>> = const { std::cell::RefCell::new(Vec::new()) };
     static CALL_CANDIDATES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     static CALL_MULTIPLY_HERE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    static TUNED_FOR_SIZE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     static LONG_STEPS: std::cell::Cell<bool> = const { std::cell::Cell::new(true) };
     static STEP_SITES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
@@ -226,6 +227,14 @@ pub(super) fn note_call_candidate() {
     CALL_CANDIDATES.with(|count| count.set(count.get() + 1));
 }
 
+/// Whether the function being selected is tuned for size (at -O1 and -Os every
+/// function is: no level that prices a clock above a byte is running), whatever
+/// the module-level re-selection of `mulimage` makes of `sized` (it clears it,
+/// to expand multiplies).
+pub(super) fn tuned_for_size() -> bool {
+    TUNED_FOR_SIZE.with(std::cell::Cell::get) || widen_products() == Widen::Off
+}
+
 /// Whether the block being selected prices its multiplies as a call.
 pub(super) fn call_multiply_here() -> bool {
     CALL_MULTIPLY_HERE.with(std::cell::Cell::get)
@@ -268,6 +277,7 @@ pub fn select_function_with(
     let mut locals = alloca_sizes(module, function, &layout, &info)?;
     let mut selected = Vec::new();
     let sized = is_sized(function) && !inline_multiplies;
+    TUNED_FOR_SIZE.with(|flag| flag.set(is_sized(function)));
     CALL_CANDIDATES.with(|count| count.set(0));
     // static loop depth, as `driver::cheaper` weighs a block: a place in a loop
     // runs ten times a level

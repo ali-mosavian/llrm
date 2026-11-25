@@ -27,6 +27,10 @@ pub struct MosCombines {
     /// The block is outside every loop and a multiply by a constant is priced
     /// as in a function tuned for size (`mulimage::call_when_it_pays`).
     pub call_multiply: bool,
+    /// The function is tuned for size, also while `mulimage` re-selects it
+    /// with `sized` cleared: a long shifted by 3 to 7 bits is a chain only
+    /// where it is not (`long_shift_in_bytes`).
+    pub tuned_for_size: bool,
 }
 
 /// The combines after legalization: only the shared-shift answer, which every
@@ -224,9 +228,11 @@ impl CombineHooks for MosCombines {
             ISD::Sub => borrow_of_ult(dag, node)
                 .or_else(|| negated_high_byte_minus(dag, node))
                 .or_else(|| word_with_loaded_byte(dag, node)),
-            ISD::Srl => half_of_pair(dag, node).or_else(|| long_shift_in_bytes(dag, node)),
+            ISD::Srl => half_of_pair(dag, node).or_else(|| long_shift_in_bytes(dag, node, self.tuned_for_size)),
             ISD::Truncate => half_of_pair(dag, node),
-            ISD::Shl => shifted_byte_in_pieces(dag, node).or_else(|| long_shift_in_bytes(dag, node)),
+            ISD::Shl => {
+                shifted_byte_in_pieces(dag, node).or_else(|| long_shift_in_bytes(dag, node, self.tuned_for_size))
+            }
             ISD::Or => funnel_by_one(dag, node),
             ISD::SetCC => range_on_low_byte(dag, node),
             ISD::Mul => decompose_mul(dag, node, self.sized || self.call_multiply, self.synthesize),
@@ -768,26 +774,42 @@ fn shifted_byte_in_pieces(
 /// legalizer shifted each word by the whole count and joined the words with
 /// `ora` (`x << 2` 34 B, the chain 25; `x << 9` 36 B, 24).
 ///
-/// Translation: llvm-mos `MOSLegalizerInfo::legalizeShiftRotate`
-/// (`llvm/lib/Target/MOS/MOSLegalizerInfo.cpp`): bytes first, then one bit at
-/// a time (`G_SHLE`/`G_LSHRE`). DEVIATE 6502-LONG-SHIFT (owner
-/// llrm-target-6502, exit 2026-12-15): only up to two bits. From three a
+/// Pass: the pin's `ExpandShiftByConstant` splits a long into two word shifts
+/// and an `srl` of the other (a loop of word shifts for each, `x << 4` 220
+/// clocks). Translation: llvm-mos `MOSLegalizerInfo::legalizeShiftRotate`
+/// ([MOSLegalizerInfo.cpp](https://github.com/llvm-mos/llvm-mos/blob/main/llvm/lib/Target/MOS/MOSLegalizerInfo.cpp)):
+/// bytes first, then one bit at a time (`G_SHLE`/`G_LSHRE`) through all the
+/// bytes, or from 5 bits a byte more the other way (`shouldOverCorrect`).
+///
+/// DEVIATE 6502-LONG-SHIFT (owner x87, exit 2026-12-15): up to two bits at
+/// every level, and the over-corrected form (5 to 7 bits) only in a function a
+/// speed level tunes (-O2, -O3).
+///
+/// The inequality is `shouldOverCorrect`'s with the form's own cost: `bits`
+/// steps over the four bytes against `8 - bits` the other way (the same four
+/// bytes: the dropped byte is shifted alone, not in a widened fifth), so the
+/// byte move pays from 5 bits. llvm-mos also chains 3 and 4 bits; here the
+/// word shifts of the pin's expansion are as short there and the chain adds
+/// temporaries and a text the outliner shares less (measured over the 81
+/// programs: nothing gained, bytes and clocks lost in two). At -Os and -O1 a
 /// step is 8 B unrolled where `shift_forms` makes a loop of the words' shifts
-/// (13 B whatever the count), and the 81 programs got 56 to 213 B larger
-/// (`mul_constants`, `div_constants_short`); the steps the other way for 5 to
-/// 7 bits (`shouldOverCorrect`) are the same chain and wait for a loop form of
-/// it.
+/// (13 B whatever the count), and the 81 programs got 56 to 213 B larger;
+/// those levels wait for a loop form of the chain. After a byte (9 to 15 bits)
+/// the words' own shifts are shorter than the chain for 5 to 7 bits.
 fn long_shift_in_bytes(
     dag: &mut SelectionDAG,
     node: SDValue,
+    sized: bool,
 ) -> Option<SDValue> {
     if dag.value_type(node) != EVT::I32 {
         return None;
     }
     let c = dag.constant(dag.operand(node, 1))?;
     let (bytes, bits) = (c / 8, c % 8);
-    // one step is the funnel `funnel_by_one` makes
-    if c < 2 || bytes > 1 || !(1..=2).contains(&bits) {
+    // one step is the funnel `funnel_by_one` makes; in a function tuned for
+    // size only up to two bits are chains (see above)
+    let most = if sized || bytes == 1 || !should_over_correct(bits) { 2 } else { 7 };
+    if c < 2 || bytes > 1 || !(1..=most).contains(&bits) {
         return None;
     }
     let left = dag.opcode(node) == ISD::Shl;
@@ -798,7 +820,67 @@ fn long_shift_in_bytes(
         let eight = dag.get_constant(8, EVT::I8);
         dag.get_node(if left { ISD::Shl } else { ISD::Srl }, EVT::I32, &[x, eight])
     };
+    if should_over_correct(bits) {
+        return Some(over_corrected_shift(dag, moved, left, bits));
+    }
     Some(shifted_by_single_steps(dag, moved, left, bits))
+}
+
+/// Whether a long shifted by `bits` (under eight) is a byte move and `8 -
+/// bits` steps the other way, with the byte that leaves put back, rather than
+/// `bits` steps: `shouldOverCorrect`, `bits * 4 > (8 - bits) * 5` for four
+/// bytes (5 to 7).
+///
+/// Translation: llvm-mos `shouldOverCorrect`
+/// ([MOSLegalizerInfo.cpp](https://github.com/llvm-mos/llvm-mos/blob/main/llvm/lib/Target/MOS/MOSLegalizerInfo.cpp)).
+fn should_over_correct(bits: u128) -> bool {
+    bits * 4 > (8 - bits) * 5
+}
+
+/// `x << n` as `((x << 8) >> (8 - n)) | ((b3 << n) << 24)` and `x >> n` as
+/// `((x >> 8) << (8 - n)) | (b0 >> n)`: the byte move is free, the steps the
+/// other way are `8 - n`, and the byte the move dropped is shifted alone
+/// (llvm-mos widens the long by a byte to keep it in the chain: the same
+/// bytes, the last of them in `a`). The move comes first: a shift by a byte
+/// after the steps is folded into the step's own word shift by the generic
+/// combine, which made one word shift of seven passes (`ldx #7; asl; rol`).
+fn over_corrected_shift(
+    dag: &mut SelectionDAG,
+    x: SDValue,
+    left: bool,
+    bits: u128,
+) -> SDValue {
+    let back = 8 - bits;
+    // the long moved a byte, its words made of the bytes of `x`
+    let byte = |dag: &mut SelectionDAG, at: u128| {
+        let shifted = if at == 0 {
+            x
+        } else {
+            let by = dag.get_constant(8 * at, EVT::I8);
+            dag.get_node(ISD::Srl, EVT::I32, &[x, by])
+        };
+        dag.get_node(ISD::Truncate, EVT::I8, &[shifted])
+    };
+    let zero = dag.get_constant(0, EVT::I8);
+    let (b0, b1, b2, b3) = (byte(dag, 0), byte(dag, 1), byte(dag, 2), byte(dag, 3));
+    let (low, high) = if left {
+        (dag.get_node(ISD::BuildPair, EVT::I16, &[zero, b0]), dag.get_node(ISD::BuildPair, EVT::I16, &[b1, b2]))
+    } else {
+        (dag.get_node(ISD::BuildPair, EVT::I16, &[b1, b2]), dag.get_node(ISD::BuildPair, EVT::I16, &[b3, zero]))
+    };
+    let steps = stepped_words(dag, low, high, !left, back);
+    let amount = dag.get_constant(bits, EVT::I8);
+    if left {
+        let top = dag.get_constant(24, EVT::I8);
+        let high = dag.get_node(ISD::Shl, EVT::I8, &[b3, amount]);
+        let high = dag.get_node(ISD::ZeroExtend, EVT::I32, &[high]);
+        let high = dag.get_node(ISD::Shl, EVT::I32, &[high, top]);
+        dag.get_node(ISD::Or, EVT::I32, &[steps, high])
+    } else {
+        let low = dag.get_node(ISD::Srl, EVT::I8, &[b0, amount]);
+        let low = dag.get_node(ISD::ZeroExtend, EVT::I32, &[low]);
+        dag.get_node(ISD::Or, EVT::I32, &[steps, low])
+    }
 }
 
 /// `value` of a long shifted `by` times one bit, as its two words: each step
@@ -813,8 +895,19 @@ fn shifted_by_single_steps(
 ) -> SDValue {
     let sixteen = dag.get_constant(16, EVT::I8);
     let upper = dag.get_node(ISD::Srl, EVT::I32, &[value, sixteen]);
-    let mut low = dag.get_node(ISD::Truncate, EVT::I16, &[value]);
-    let mut high = dag.get_node(ISD::Truncate, EVT::I16, &[upper]);
+    let low = dag.get_node(ISD::Truncate, EVT::I16, &[value]);
+    let high = dag.get_node(ISD::Truncate, EVT::I16, &[upper]);
+    stepped_words(dag, low, high, left, by)
+}
+
+/// [`shifted_by_single_steps`] of the long whose words are `low` and `high`.
+fn stepped_words(
+    dag: &mut SelectionDAG,
+    mut low: SDValue,
+    mut high: SDValue,
+    left: bool,
+    by: u128,
+) -> SDValue {
     let one = dag.get_constant(1, EVT::I8);
     for _ in 0..by {
         (low, high) = if left {
