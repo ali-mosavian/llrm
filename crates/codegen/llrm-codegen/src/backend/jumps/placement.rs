@@ -58,6 +58,13 @@ fn above(
 /// to be placed over a block that other blocks also reach.
 const HOT: f64 = llrm_analysis::branchprob::LIKELY;
 
+#[cfg(test)]
+thread_local! {
+    /// `(calls, membership probes)` of `has_same_successors`, for the test that
+    /// keeps a call to the successors it has, not their square.
+    pub(super) static SUCCESSOR_PROBES: std::cell::Cell<(usize, usize)> = const { std::cell::Cell::new((0, 0)) };
+}
+
 struct Chain {
     blocks: Vec<usize>,
     /// Predecessors outside the chain not yet placed
@@ -603,12 +610,16 @@ impl Placer {
         (best, dup)
     }
 
-    /// `hasSameSuccessors`.
+    /// `hasSameSuccessors`: `successors` is the set the pin keeps (a
+    /// `SmallPtrSet`), so a test is one probe per successor, not a scan of the
+    /// list.
     fn has_same_successors(
         &self,
         block: usize,
-        successors: &[usize],
+        successors: &HashSet<usize>,
     ) -> bool {
+        #[cfg(test)]
+        SUCCESSOR_PROBES.with(|one| one.set((one.get().0 + 1, one.get().1 + 1 + self.succ[block].len())));
         self.succ[block].len() == successors.len()
             && !successors.contains(&block)
             && self.succ[block].iter().all(|to| successors.contains(to))
@@ -626,6 +637,7 @@ impl Placer {
             return false;
         }
         let successors = &self.succ[block];
+        let successor_set: HashSet<usize> = successors.iter().copied().collect();
         let mut seen: HashSet<usize> = HashSet::default();
         for &to in viable {
             if self.pred[to].len() > PREDECESSOR_LIMIT {
@@ -647,7 +659,7 @@ impl Placer {
                 if !seen.insert(from) {
                     continue;
                 }
-                if !self.has_same_successors(from, successors) {
+                if !self.has_same_successors(from, &successor_set) {
                     return false;
                 }
             }
