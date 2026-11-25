@@ -700,6 +700,15 @@ fn compiled(
     dumping.set(false);
     let mut best = once((false, false, false, false, 0))?;
     let notes = std::mem::take(&mut best.3);
+    // DEVIATE TRIAL-CAP (`Tuning::trial_insts_max`): a module with a function
+    // over the bound is built once; each trial below builds the whole module
+    // again.
+    let cap = crate::dag::function::tuning().trial_insts_max;
+    if cap.is_some_and(|most| {
+        best.1.iter().any(|function| function.blocks.iter().map(crate::emit::words).sum::<usize>() > most)
+    }) {
+        return Ok((best.0, best.1));
+    }
     let mut state = (false, false, false, 0u8);
     let mut try_one = |best: &mut Built,
                        other: (bool, bool, bool, bool, u8),
