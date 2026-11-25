@@ -2435,8 +2435,9 @@ fn exact_rint(
 /// rounding mode and exception behaviour. DEVIATE CONSTRAINED-CONVERT (owner
 /// x87, exit 2026-12-31): the pin applies it to the arithmetic and comparison
 /// intrinsics and not to these two, so an exact constant conversion stayed
-/// a call and its operand a pool load (gcc folds it). A widening of a finite value is exact; a narrowing is when it converts back to the
-/// same constant. A NaN is left (its payload and the invalid status).
+/// a call and its operand a pool load (gcc folds it). A widening of a finite
+/// value is exact; a narrowing is when it converts back to the same constant. A
+/// NaN is left (its payload and the invalid status).
 fn fold_constrained_convert(
     context: &Context,
     ty: TypeId,
@@ -2473,8 +2474,11 @@ fn fold_fp_to_int_checked(
         return None;
     }
     let value = value.trunc();
-    let (low, high) =
-        if signed { (-(2f64.powi(width as i32 - 1)), 2f64.powi(width as i32 - 1)) } else { (0.0, 2f64.powi(width as i32)) };
+    let (low, high) = if signed {
+        (-(2f64.powi(width as i32 - 1)), 2f64.powi(width as i32 - 1))
+    } else {
+        (0.0, 2f64.powi(width as i32))
+    };
     let members = if value.is_finite() && low <= value && value < high {
         vec![int(context, width, (value as i128 as u128) & mask(width)), int(context, 1, 1)]
     } else {
