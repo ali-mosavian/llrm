@@ -717,6 +717,12 @@ pub fn finish_with(
                 }
                 return Ok(crate::callpush::address_push(base, offset));
             }
+            Some(crate::callpush::Address::Symbol(lea)) => {
+                let [_, mc::Operand::Symbol(name, addend)] = &convert(insts[lea], pushed)?[..] else {
+                    return Err("a symbol address is a symbol".to_owned());
+                };
+                return Ok(crate::callpush::symbol_push(name, *addend));
+            }
             None => {}
         }
         match pushes.folded_load(store) {

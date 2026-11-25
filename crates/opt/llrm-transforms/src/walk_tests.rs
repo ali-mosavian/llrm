@@ -3955,3 +3955,85 @@ fn test_a_credit_gate_refuses_a_count_accepted_copy_that_grows_the_bytes_at_a_si
     assert!(super::trial_accepted(false, true, false, false, false, false, 68, 60, 9, 0, 102, 0, 321, true), "a speed caller keeps the count");
     assert!(super::trial_accepted(false, false, false, false, false, false, 68, 60, 9, 0, 102, 0, 321, false), "off the gate the count decides");
 }
+
+/// `@top` after the pipeline at `options` on a target with `levels` as its
+/// per-level inline bars, calling an external callee of about 90 units twice.
+fn top_at(
+    options: crate::pipeline::Options,
+    levels: [Option<i64>; 3],
+) -> String {
+    let mut module = parsed(
+        "define i16 @f(i16 %x, i16 %y) {
+b0:
+  %a = mul i16 %x, %y
+  %b = add i16 %a, %x
+  %l = xor i16 %b, %y
+  ret i16 %l
+}
+
+define i16 @top(i16 %x, i16 %y) {
+b0:
+  %p = call i16 @f(i16 %x, i16 %y)
+  %q = call i16 @f(i16 %y, i16 %p)
+  %r = add i16 %p, %q
+  ret i16 %r
+}
+",
+    );
+    let applied = crate::pipeline::Applied { options, ..Default::default() };
+    llrm_mir::program::Program::lend(
+        &mut module,
+        std::rc::Rc::new(llrm_x86_m16::Dos { inline_levels: levels, ..llrm_x86_m16::Dos::pin_tuned() }),
+        |program: &mut llrm_mir::program::Program| {
+            program.exports.entries.insert("top".to_owned());
+            crate::pipeline::applied(program, &applied)
+        },
+    )
+    .and_then(|done| done)
+    .expect("the pipeline runs");
+    let text = llrm_mir::print::module(&module);
+    text.split("define").find(|one| one.contains("@top(")).expect("@top").to_owned()
+}
+
+/// The inline bar was one number per target for every speed level: a target
+/// could not copy more at -O1 than at -O2 or -O3 (gcc's inliner does: the m64
+/// QB -O1 and -O2 text sat +42911 B and +27910 B over the best bar). A bar
+/// stated for -O2 moves the -O2 decision and leaves -O1 and -O3 on the pin's.
+#[test]
+fn test_a_per_level_inline_bar_moves_the_decision_of_its_level_only() {
+    let calls = |top: &str| top.contains("call i16 @f");
+    let pin = [None; 3];
+    for (level, options) in [
+        (1, crate::pipeline::Options::basic as fn() -> crate::pipeline::Options),
+        (2, crate::pipeline::Options::standard),
+        (3, crate::pipeline::Options::speed),
+    ] {
+        let top = top_at(options(), pin);
+        assert!(!calls(&top), "the pin's bar keeps `f` a call at -O{level}:\n{top}");
+    }
+    let low = Some(-1000);
+    assert!(calls(&top_at(crate::pipeline::Options::standard(), [None, low, None])), "-O2's own bar did not apply");
+    assert!(!calls(&top_at(crate::pipeline::Options::basic(), [None, low, None])), "-O2's bar moved -O1");
+    assert!(!calls(&top_at(crate::pipeline::Options::speed(), [None, low, None])), "-O2's bar moved -O3");
+    assert!(calls(&top_at(crate::pipeline::Options::basic(), [low, None, None])), "-O1's own bar did not apply");
+    assert!(calls(&top_at(crate::pipeline::Options::speed(), [None, None, low])), "-O3's own bar did not apply");
+}
+
+/// A target stating one flat bar (m16's 50) kept it at every level; a level's
+/// own bar replaces it for that level only, and a size caller (no level) keeps
+/// the flat one. A target stating neither leaves the pass's own.
+#[test]
+fn test_a_level_bar_replaces_the_flat_bar_for_its_level_only() {
+    let tti = |flat, o2| {
+        llrm_x86::tti::X86::of_cpu("i486").unwrap().with_tuning(llrm_mir::target::Tuning {
+            inline_threshold: flat,
+            inline_threshold_o2: o2,
+            ..llrm_mir::target::Tuning::PIN
+        })
+    };
+    let bar = |tti: &llrm_x86::tti::X86, level| super::threshold_override(Some(tti), level);
+    let both = tti(Some(50), Some(300));
+    assert_eq!([Some(1), Some(2), Some(3), None].map(|level| bar(&both, level)), [Some(50), Some(300), Some(50), Some(50)]);
+    let none = tti(None, None);
+    assert_eq!([Some(1), Some(2), Some(3), None].map(|level| bar(&none, level)), [None; 4]);
+}

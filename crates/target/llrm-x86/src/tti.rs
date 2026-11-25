@@ -892,6 +892,18 @@ impl Tti for X86 {
         self.tuning.inline_threshold
     }
 
+    fn inline_threshold_at_level(
+        &self,
+        level: u8,
+    ) -> Option<i64> {
+        match level {
+            1 => self.tuning.inline_threshold_o1,
+            2 => self.tuning.inline_threshold_o2,
+            3 => self.tuning.inline_threshold_o3,
+            _ => None,
+        }
+    }
+
     fn fills_pattern_at_speed(&self) -> bool {
         self.tuning.fills_pattern_at_speed
     }
