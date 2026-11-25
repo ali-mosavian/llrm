@@ -14,8 +14,13 @@
 //! uses allow.
 //!
 //! DEVIATE: the pin keeps the DAG's order. Reason: a second register and two
-//! copies per loop (seed 210: +62 B with the pin's 0-based counter). Exit:
-//! review 2026-11-20.
+//! copies per loop (seed 210: +62 B with the pin's 0-based counter). Measured
+//! 2026-11-25 with the pass off, QB 126 modules: +212 B (68000 Os), +316 B
+//! (68000 O1), +200 B (68020 Os), +360 B (68020 O1), larger in 18-20 modules
+//! each and smaller in 2 at most; bench cells at O1 (clocks): sieve 68000
+//! 142,062 -> 171,714, shellsort 81,870 -> 99,882, ring 539,240 -> 611,240,
+//! nbody and fpbench +0.1%. Exit: review 2026-12-22, or when the pin's
+//! `SelectARII` orders base and index by role.
 
 use llrm_spike_mf::{Kind, Operand, Reg};
 
