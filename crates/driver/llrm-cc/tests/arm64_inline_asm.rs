@@ -22,7 +22,7 @@ fn test_arm64_asm_blocks_compute_what_the_source_says_at_every_level() {
         .expect("this test needs the pin clang built with AArch64, aarch64-linux-gnu-gcc and qemu-aarch64");
     assert!(tool_present("aarch64-linux-gnu-objcopy"), "this test needs aarch64-linux-gnu-objcopy");
     let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/c/a64_inline_asm.c");
-    for level in ["-O1", "-O2", "-Os"] {
+    for level in ["-O0", "-O1", "-O2", "-Os"] {
         let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("a64asm-{level}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
@@ -53,7 +53,7 @@ fn test_arm64_asm_blocks_compute_what_the_source_says_at_every_level() {
 fn test_a_block_may_clobber_callee_saved_registers_and_the_frame_saves_them() {
     let clang = clang::clang().expect("this test needs the pin clang built with AArch64 and qemu-aarch64");
     let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/c/a64_inline_asm_csr.c");
-    for level in ["-O1", "-O2", "-Os"] {
+    for level in ["-O0", "-O1", "-O2", "-Os"] {
         let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("a64asm-csr{level}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
@@ -73,6 +73,7 @@ fn test_a_block_may_clobber_callee_saved_registers_and_the_frame_saves_them() {
         let ran = Command::new("qemu-aarch64").arg(&program).output().unwrap();
         assert_eq!(String::from_utf8_lossy(&ran.stdout), "12 1001 3.0 1.5\n", "{level}");
     }
+}
 
 /// A block was a call to the allocator, so a pointer kept across `udiv`/`msub`
 /// moved from `x2` to the callee-saved `x19` and the function saved and
@@ -102,4 +103,36 @@ fn test_a_value_kept_across_an_asm_block_stays_in_its_register() {
         .take_while(|line| !line.starts_with("swap32:"))
         .collect();
     assert!(!body.iter().any(|line| line.contains("x19")), "{}", body.join("\n"));
+}
+
+/// At -O0 two stores around a block that loads and stores the first were
+/// paired into one `stp` after the block: the block's raw words read no
+/// registers and touched no memory as far as the pairing pass could see, so
+/// `s[1]` was written before the block read `s[0]` (printed `6 6`, not `6 5`),
+/// and a load that feeds a block moved after it (`0.00` for `sqrt(2.25)`). A
+/// block is opaque to every pass that scans the instructions after the frame.
+#[test]
+fn test_accesses_around_an_asm_block_are_not_paired_across_it() {
+    let clang = clang::clang().expect("this test needs the pin clang built with AArch64 and qemu-aarch64");
+    let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/c/a64_inline_asm_pair.c");
+    for level in ["-O0", "-O1", "-O2", "-Os"] {
+        let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("a64asm-pair{level}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let (object, program) = (dir.join("a.o"), dir.join("a.out"));
+        let done = Command::new(env!("CARGO_BIN_EXE_llrm-cc-bin"))
+            .env("LLRM_CC_TARGET", "arm64-linux")
+            .env("LLRM_A64_CLANG", &clang)
+            .args([level, "-w", "-c", "-o"])
+            .arg(&object)
+            .arg(&source)
+            .output()
+            .unwrap();
+        assert!(done.status.success(), "{level}: {}", String::from_utf8_lossy(&done.stderr));
+        let linked =
+            Command::new("aarch64-linux-gnu-gcc").arg("-static").arg("-o").arg(&program).arg(&object).output().unwrap();
+        assert!(linked.status.success(), "{level}: {}", String::from_utf8_lossy(&linked.stderr));
+        let ran = Command::new("qemu-aarch64").arg(&program).output().unwrap();
+        assert_eq!(String::from_utf8_lossy(&ran.stdout), "111 6 5\n", "{level}");
+    }
 }
