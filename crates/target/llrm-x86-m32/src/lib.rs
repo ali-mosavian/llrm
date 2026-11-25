@@ -359,10 +359,10 @@ fn tuning(costs: &llrm_mir::target::OperationCosts) -> llrm_mir::target::Tuning 
         // `inlinehint` callee to 325 at an `optsize` caller (QuickrBasic
         // operands.c: `hot_int` into its wrappers).
         inline_size_guard_yields_to_inlinehint: true,
-        // DEVIATE INLINE-HINT-UNCAPPED (owner llrm-target-x86-m64-b, exit
-        // 2026-12-15): see `Tti::opt_size_inline_hint_trial_uncapped` (QB m32 Os
-        // -333 B, executed instructions +0.014%).
-        inline_hint_trial_uncapped: true,
+        // DEVIATE INLINE-HINT-RATE (owner llrm-target-x86-m64-b, exit
+        // 2026-12-15): see `Tti::opt_size_inline_hint_trial_limits`.
+        inline_hint_trial_clock_cap_percent: Some(20),
+        inline_hint_trial_clocks_per_byte: Some(1),
         // DEVIATE SZ1-HOT (owner x86-m32-b, exit 2026-12-05): see `Tuning`.
         inline_size_hot_growth_percent: Some(100),
         // DEVIATE MEMSET-GAP (owner llrm-target-x86-m16-b, exit 2026-11-27):

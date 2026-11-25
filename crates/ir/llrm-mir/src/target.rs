@@ -636,9 +636,12 @@ pub struct Tuning {
     /// `os_trial_clock_cap_percent`.
     pub inline_outline_trial_clock_cap_percent: Option<i64>,
     /// With `inline_size_guard_yields_to_inlinehint`: the trials that keep the
-    /// calls of a hinted callee (`Tti::opt_size_inline_hint_trial_uncapped`)
-    /// take the smaller object whatever it costs in clocks.
-    pub inline_hint_trial_uncapped: bool,
+    /// calls of a hinted callee keep the smaller object when the work it adds
+    /// is within `inline_hint_trial_clock_cap_percent` of the module's, or at
+    /// most `inline_hint_trial_clocks_per_byte` for each byte saved
+    /// (`Tti::opt_size_inline_hint_trial_limits`). None: the shared cap.
+    pub inline_hint_trial_clocks_per_byte: Option<i64>,
+    pub inline_hint_trial_clock_cap_percent: Option<i64>,
     /// With `inline_size_guard_at_size`, the bound also holds an -O1 caller.
     /// false: -O1 keeps the pin's threshold alone, where clang inlines a small
     /// callee that grows the code and clocks are the bar.
@@ -1067,7 +1070,8 @@ impl Tuning {
         inline_size_guard_at_o1: false,
         inline_size_guard_single_site: false,
         inline_size_guard_yields_to_inlinehint: false,
-        inline_hint_trial_uncapped: false,
+        inline_hint_trial_clocks_per_byte: None,
+        inline_hint_trial_clock_cap_percent: None,
         inline_size_hot_growth_percent: None,
         memset_gap_merge_at_size: false,
         inline_chain_trial: false,

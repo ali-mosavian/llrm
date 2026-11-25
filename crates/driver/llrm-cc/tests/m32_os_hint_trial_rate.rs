@@ -1,7 +1,8 @@
 //! x86-32 -Os: the keep-hinted-calls trial found the smaller object (-428 B of
 //! 717 in all) and put it back because the calls add work over the 2% clock cap
-//! of `os_trial_clock_cap_percent`. Bytes decide for a hinted callee, as in
-//! gcc, which keeps the calls. Needs `LLRM_LLC`.
+//! of `os_trial_clock_cap_percent`: +180 clocks on a module of 217 (+83%), 0.42
+//! a byte saved. Bytes decide for a hinted callee at up to a clock a byte, as
+//! in gcc, which keeps the calls. Needs `LLRM_LLC`.
 
 use std::path::Path;
 use std::process::Command;

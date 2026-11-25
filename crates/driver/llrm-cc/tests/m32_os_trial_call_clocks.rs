@@ -1,8 +1,8 @@
 //! x86-32 -Os: bytes decide the keep-hinted-calls trial. On `x_sf_add` the kept
 //! calls to `sf_shr_sticky32` and `unpack` are 35 B smaller (1,528 against
 //! 1,563) and +3.7% clk (78,166 against 75,410), the clocks the counted wrapped
-//! cell already runs and under gcc's 81,200. The cap that put the calls back is
-//! off for this trial. Needs `LLRM_LLC`.
+//! cell already runs and under gcc's 81,200. The trial keeps the calls at up to
+//! a clock a byte saved (here 0.1). Needs `LLRM_LLC`.
 
 use std::path::Path;
 use std::process::Command;
