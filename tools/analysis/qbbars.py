@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""QB_TREE=<QB checkout> qbbars.py ARCH LEVEL DIST: per-module bytes (.text, and whole = .text+.rodata*+.data*) of every module the QB product build compiles, ours (DIST/llrm-cc) vs gcc-15 vs the pin's clang.
+"""QB_TREE=<QB checkout> qbbars.py ARCH LEVEL DIST: per-module bytes (code = every executable section, and whole = code+.rodata*+.data*) of every module the QB product build compiles, ours (DIST/llrm-cc) vs gcc-15 vs the pin's clang.
 The module set and each module's own -D/-I/-isystem are read from `make -n -B $QB_MAKE_TARGET` (default build/hostperf/basic, the perf build: no EXEC_COUNT) in QB_TREE; the shared external flags, -march=i486 at m32 and the level are appended for all three."""
-import sys,os,shlex,subprocess,tempfile,shutil
+import sys,os,re,shlex,subprocess,tempfile,shutil
 from concurrent.futures import ThreadPoolExecutor
 A,L,D=sys.argv[1:4]; T=os.environ['QB_TREE']; b=os.environ.get('QB_SCRATCH',tempfile.gettempdir())
 m,tgt=('-m64','x86_64-linux') if A=='m64' else ('-m32','x86_32-linux'); extra=['-isystem','/usr/include/x86_64-linux-gnu'] if A=='m32' else []
@@ -41,10 +41,18 @@ GCC_CF=['-std=c2x','-D__cdecl=',*FAST,*BASE,*bar_flags('x86',RELOC,gcc_major())]
 def sizes(o,prefixes):
     r=subprocess.run(['size','-A',o],capture_output=True,text=True).stdout
     return sum(int(l.split()[1]) for l in r.splitlines() if l.split() and any(l.split()[0]==p or l.split()[0].startswith(p+'.') for p in prefixes))
-def text(o): return sizes(o,('.text',))
+def executable(o):
+    """Bytes of every section the object marks executable (SHF_EXECINSTR): .text, .text.* (unlikely, startup, hot, exit), .init, .fini and any named one, the same on every side. A name prefix misses a section a compiler puts code in under another name."""
+    r=subprocess.run(['readelf','-SW',o],capture_output=True,text=True).stdout
+    total=0
+    for l in r.splitlines():
+        m=re.match(r'\s*\[\s*\d+\]\s+(\S+)\s+\S+\s+\S+\s+\S+\s+([0-9a-f]+)\s+\S+\s+(\S*)',l)
+        if m and 'X' in m.group(3): total+=int(m.group(2),16)
+    return total
+def text(o): return executable(o)
 def whole(o):
-    """.text plus the tables in .rodata*/.data* (no .bss): ours puts jump tables in .data, gcc and clang in .rodata, so .text alone mis-ranks."""
-    return sizes(o,('.text','.rodata','.data'))
+    """The executable sections plus the tables in .rodata*/.data* (no .bss): ours puts jump tables in .data, gcc and clang in .rodata, so code alone mis-ranks."""
+    return executable(o)+sizes(o,('.rodata','.data'))
 def one(mod):
     f,own=mod
     out={}
