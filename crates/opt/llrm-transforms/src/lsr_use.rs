@@ -496,13 +496,8 @@ pub fn scaling_factor_cost(
             let mode = f.mode_in(se).expect("a folded formula has a mode");
             let at = |offset: Immediate| {
                 let offset = f.base_offset.add_unsigned(offset).0;
-                let cost = tti.scaling_factor_cost_at(
-                    lu.access_ty.bytes,
-                    mode.global,
-                    offset,
-                    mode.has_base_reg,
-                    mode.scale,
-                );
+                let cost =
+                    tti.scaling_factor_cost_at(lu.access_ty.bytes, mode.global, offset, mode.has_base_reg, mode.scale);
                 // llvm-mos's `getScalingFactorCost` reads the widths too: a
                 // mode legal for them is free, not invalid.
                 if !cost.valid
@@ -987,11 +982,8 @@ impl Cost {
             // +42 B at -Os, switch_peeled_table; the 6502 prices base adds
             // by width itself).
             let reg_ty = r.se.type_of(reg);
-            let mut loop_cost = if r.cx.layout.is_illegal_width(r.se.get_type_size_in_bits(r.cx, reg_ty)) {
-                2
-            } else {
-                1
-            };
+            let mut loop_cost =
+                if r.cx.layout.is_illegal_width(r.se.get_type_size_in_bits(r.cx, reg_ty)) { 2 } else { 1 };
             // A pointer that steps by a constant from an invariant start is a
             // post-indexed access's own increment: free where every fixup of
             // the use runs each trip.
