@@ -474,9 +474,10 @@ impl llrm_mir::passes::FunctionPass for AsksForMemorySsa {
     }
 }
 
-/// MemCpyOpt keeps the graph its updater edited (`PA.preserve<MemorySSAAnalysis>()`);
-/// it was dropped, and the next pass built it again: memexp -O2 built 613
-/// memory graphs, 57 of them after a memcpyopt that had kept one right.
+/// MemCpyOpt keeps the graph its updater edited
+/// (`PA.preserve<MemorySSAAnalysis>()`); it was dropped, and the next pass
+/// built it again: memexp -O2 built 613 memory graphs, 57 of them after a
+/// memcpyopt that had kept one right.
 #[test]
 fn test_a_memcpyopt_that_changed_the_body_keeps_the_memory_graph() {
     let before = body(&[memcpy("@b", "@a", 16), memcpy("@c", "@b", 16)]);
@@ -490,4 +491,69 @@ fn test_a_memcpyopt_that_changed_the_body_keeps_the_memory_graph() {
     manager.run_module(&mut module, std::rc::Rc::new(llrm_mir::target::Neutral)).expect("runs");
     assert_ne!(llrm_mir::print::module(&module), unchanged, "memcpyopt changed nothing");
     assert_eq!(llrm_mir::counts::analysed("mssa").1 - built, 1, "the graph was built again after memcpyopt");
+}
+
+const SLOT: &str = "declare void @use(ptr)\n";
+
+fn slot_after(body: &str) -> String {
+    let mut module = parsed(&format!("{DECLARES}\n{SLOT}\n{body}"));
+    let text = managed(&mut module, MemCpyOpt);
+    text[text.find("define void @f").expect("@f")..].to_owned()
+}
+
+/// `*d = (T){.head = d->head}`: the slot is the old head and zeros, copied
+/// back whole. Before: a 80-byte copy back (its head a copy of what `d`
+/// held, `rep movs` and `rep stos` each way at x86 -Os, 2,319 B against gcc's
+/// 2,078 in `blok_pair`). Now: the zeros alone are written to `d`.
+#[test]
+fn test_a_copy_back_of_a_slot_built_from_its_own_bytes_writes_only_the_new_ones() {
+    let after = slot_after(
+        "define void @f(ptr %d) {\nb0:\n  %t = alloca [80 x i8], align 8\n  \
+         call void @llvm.memcpy.p0.p0.i64(ptr %t, ptr %d, i64 32, i1 false)\n  \
+         %z = getelementptr i8, ptr %t, i64 32\n  \
+         call void @llvm.memset.p0.i64(ptr %z, i8 0, i64 48, i1 false)\n  \
+         call void @llvm.memcpy.p0.p0.i64(ptr %d, ptr %t, i64 80, i1 false)\n  ret void\n}\n",
+    );
+    assert!(!after.contains("ptr %d, ptr %t, i64 80"), "the copy back stays: {after}");
+    assert!(after.contains("call void @llvm.memset.p0.i64(ptr %") && after.contains("i8 0, i64 48"), "{after}");
+}
+
+/// A slot of two other objects' bytes is a copy of each straight into `d`.
+#[test]
+fn test_a_copy_of_a_slot_built_from_two_sources_reads_the_sources() {
+    let after = slot_after(
+        "define void @f(ptr noalias %d, ptr noalias %x, ptr noalias %y) {\nb0:\n  %t = alloca [16 x i8], align 8\n  \
+         call void @llvm.memcpy.p0.p0.i64(ptr %t, ptr %x, i64 8, i1 false)\n  \
+         %h = getelementptr i8, ptr %t, i64 8\n  \
+         call void @llvm.memcpy.p0.p0.i64(ptr %h, ptr %y, i64 8, i1 false)\n  \
+         call void @llvm.memcpy.p0.p0.i64(ptr %d, ptr %t, i64 16, i1 false)\n  ret void\n}\n",
+    );
+    assert!(!after.contains("ptr %d, ptr %t"), "{after}");
+    assert!(after.contains("ptr %x, i64 8") && after.contains("ptr %y, i64 8"), "{after}");
+}
+
+/// A write to memory between the slot's writes may change what the copy
+/// reads: the copy stays.
+#[test]
+fn test_a_store_between_the_slot_writes_keeps_the_copy_back() {
+    let before = "define void @f(ptr %d) {\nb0:\n  %t = alloca [16 x i8], align 8\n  \
+         call void @llvm.memcpy.p0.p0.i64(ptr %t, ptr %d, i64 8, i1 false)\n  \
+         store i8 1, ptr %d\n  \
+         %h = getelementptr i8, ptr %t, i64 8\n  \
+         call void @llvm.memset.p0.i64(ptr %h, i8 0, i64 8, i1 false)\n  \
+         call void @llvm.memcpy.p0.p0.i64(ptr %d, ptr %t, i64 16, i1 false)\n  ret void\n}\n";
+    assert!(slot_after(before).contains("ptr %d, ptr %t, i64 16"), "a store in between was ignored");
+}
+
+/// A slot whose address escaped before the writes may be read by anyone: the
+/// copy stays.
+#[test]
+fn test_a_slot_that_escapes_keeps_the_copy_back() {
+    let before = "define void @f(ptr %d) {\nb0:\n  %t = alloca [16 x i8], align 8\n  \
+         call void @use(ptr %t)\n  \
+         call void @llvm.memcpy.p0.p0.i64(ptr %t, ptr %d, i64 8, i1 false)\n  \
+         %h = getelementptr i8, ptr %t, i64 8\n  \
+         call void @llvm.memset.p0.i64(ptr %h, i8 0, i64 8, i1 false)\n  \
+         call void @llvm.memcpy.p0.p0.i64(ptr %d, ptr %t, i64 16, i1 false)\n  ret void\n}\n";
+    assert!(slot_after(before).contains("ptr %d, ptr %t, i64 16"), "an escaping slot was forwarded");
 }

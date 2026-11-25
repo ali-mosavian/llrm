@@ -162,7 +162,10 @@ impl FunctionPass for MemCpyOpt {
             &*unit.function,
             Ok(Rc::new(llrm_analysis::manager::MssaGraph::new(mssa, Some(Rc::new(accesses))))),
         );
-        PreservedAnalyses::none().preserve::<Dominators>().preserve::<Loops>().preserve_updated::<llrm_analysis::manager::MemorySsa>()
+        PreservedAnalyses::none()
+            .preserve::<Dominators>()
+            .preserve::<Loops>()
+            .preserve_updated::<llrm_analysis::manager::MemorySsa>()
     }
 }
 
@@ -624,6 +627,12 @@ impl State<'_> {
                 return true;
             }
         }
+        // A copy of a slot built from copies and fills goes piece by piece.
+        if self.perform_assembled_slot_forward(&m) {
+            *bbi = self.function.next_in_block(m.inst);
+            self.erase_instruction(m.inst);
+            return true;
+        }
         // A copy of one stack slot to another may merge the two.
         if let Some(size) = self.constant_length(m.length)
             && self.perform_stack_move_optzn(m.inst, m.inst, m.dest, m.other, size)
@@ -978,6 +987,195 @@ impl State<'_> {
             }
         }
         Some((forward, copy_length))
+    }
+
+    /// DEVIATE 10 (beats the pin; gcc's SRA/FRE/DSE do it): `memcpy(D <- S, n)`
+    /// where `S` is a local slot that the instructions right before the copy
+    /// wrote with memsets and memcpys only, and nothing else wrote memory in
+    /// between. Each byte of the copy has one writer, so the copy is those
+    /// writers' pieces aimed at `D`: a piece copied out of `D` itself is a copy
+    /// back of bytes nothing changed and is dropped, a fill is a fill of `D`,
+    /// any other copy reads its own source. The caller erases `m`; the
+    /// slot's writes are left to dead store elimination.
+    ///
+    /// ```text
+    ///  memcpy(%tmp, %d, 32)               memset(%d+32, 0, 48)
+    ///  memset(%tmp+32, 0, 48)     ==>
+    ///  memcpy(%d, %tmp, 80)
+    /// ```
+    fn perform_assembled_slot_forward(
+        &mut self,
+        m: &Mem,
+    ) -> bool {
+        struct Writer {
+            /// Where the slot's bytes it writes start, from the slot.
+            at: i64,
+            length: i64,
+            /// The value a fill writes, or the first byte a copy reads.
+            other: Operand,
+            fill: bool,
+        }
+        let Some(size) = self.constant_length(m.length).filter(|size| *size > 0 && *size <= 4096) else {
+            return false;
+        };
+        let size = size as i64;
+        let Operand::Value(slot) = get_underlying_object(&self.query(), m.other, 0) else { return false };
+        let llrm_mir::module::ValueDef::Instruction(slot_inst) = self.function.value(slot).def else { return false };
+        if !matches!(
+            self.function.instruction(slot_inst).opcode,
+            Opcode::Alloca { .. }
+        ) {
+            return false;
+        }
+        let slot_ptr = Operand::Value(slot);
+        let Some(start) = get_pointer_offset_from(&self.query(), m.other, slot_ptr).filter(|at| *at >= 0) else {
+            return false;
+        };
+        if self.may_be_captured(slot_ptr) {
+            return false;
+        }
+        // Walk back over the block: the last writer of each byte.
+        let mut owner: Vec<Option<usize>> = vec![None; size as usize];
+        let mut writers: Vec<Writer> = Vec::new();
+        let mut cursor = self.function.prev_in_block(m.inst);
+        while let Some(inst) = cursor {
+            if owner.iter().all(Option::is_some) {
+                break;
+            }
+            cursor = self.function.prev_in_block(inst);
+            if let Some(one) = self.mem(inst).filter(|one| one.kind != Kind3::Move) {
+                if one.volatile {
+                    return false;
+                }
+                let (Some(length), Some(at)) =
+                    (self.constant_length(one.length), get_pointer_offset_from(&self.query(), one.dest, slot_ptr))
+                else {
+                    return false;
+                };
+                let fill = one.kind == Kind3::Set;
+                if !fill && get_underlying_object(&self.query(), one.other, 0) == slot_ptr {
+                    return false;
+                }
+                let index = writers.len();
+                writers.push(Writer { at, length: length as i64, other: one.other, fill });
+                for byte in at.max(start)..(at + length as i64).min(start + size) {
+                    let cell = &mut owner[(byte - start) as usize];
+                    cell.get_or_insert(index);
+                }
+                continue;
+            }
+            match self.function.instruction(inst).opcode {
+                Opcode::GetElementPtr { .. } | Opcode::Cast { .. } => {}
+                Opcode::Call(_)
+                    if matches!(
+                        self.intrinsic_of(inst),
+                        Some(Intrinsic::LifetimeStart | Intrinsic::LifetimeEnd)
+                    ) => {}
+                _ => return false,
+            }
+        }
+        if owner.iter().any(Option::is_none) {
+            return false;
+        }
+        // The pieces: runs of one writer.
+        let mut pieces: Vec<(i64, i64, usize)> = Vec::new();
+        for (byte, who) in owner.iter().enumerate() {
+            let who = who.expect("every byte has a writer");
+            match pieces.last_mut() {
+                Some((from, length, last)) if *last == who && *from + *length == byte as i64 => *length += 1,
+                _ => pieces.push((byte as i64, 1, who)),
+            }
+        }
+        let identity = |this: &Self, writer: &Writer| {
+            // Reading `D` at the offset it is written to: nothing changes.
+            get_pointer_offset_from(&this.query(), writer.other, m.dest) == Some(writer.at - start)
+        };
+        let whole = {
+            let view = self.view();
+            let aa = AliasQuery::new(&view, &self.accesses);
+            let unit = aa.unit();
+            aa.location_for(&self.reference_at(unit, m.dest, size as u32), false)
+        };
+        for (_, _, who) in &pieces {
+            let writer = &writers[*who];
+            if writer.fill || identity(self, writer) {
+                continue;
+            }
+            // A copy from elsewhere must not meet any byte of `D`: the pieces
+            // are made one after another.
+            let view = self.view();
+            let aa = AliasQuery::new(&view, &self.accesses);
+            let unit = aa.unit();
+            let read = aa.location_for(&self.reference_at(unit, writer.other, writer.length as u32), false);
+            if aa.alias(&read, &whole) != llrm_analysis::mssa::alias::AliasResult::No {
+                return false;
+            }
+        }
+        let i8 = self.context.types.int(8);
+        let i64_ty = self.context.types.int(64);
+        let dest_align = self.align_of(m.inst, 0);
+        let offset = |this: &mut Self, base: Operand, bytes: i64| -> Operand {
+            if bytes == 0 {
+                return base;
+            }
+            let ptr_ty = this.function.operand_type(this.context, base).expect("a typed pointer");
+            let by = Operand::Constant(this.context.int(i64_ty, i128::from(bytes)));
+            let made = this
+                .function
+                .create_instruction(
+                    Opcode::GetElementPtr { source: i8 },
+                    ptr_ty,
+                    vec![base, by],
+                    Flags::default(),
+                    None,
+                );
+            this.function.insert(made, llrm_mir::edit::Position::Before(m.inst)).expect("a placed copy");
+            Operand::Value(this.function.instruction(made).result.expect("an address"))
+        };
+        let Some(m_access) = self.mssa.get_memory_access(m.inst) else { return false };
+        let mut after = Created::After(m_access);
+        for (from, length, who) in pieces {
+            let (fill, at, other) = {
+                let writer = &writers[who];
+                (writer.fill, writer.at, writer.other)
+            };
+            if !fill && identity(self, &writers[who]) {
+                continue;
+            }
+            let ty = self.function.operand_type(self.context, m.length).expect("a typed length");
+            let count = Operand::Constant(self.context.int(ty, i128::from(length)));
+            let to = offset(self, m.dest, from);
+            let align = dest_align.map(|align| common_alignment(align, from as u64));
+            let made = if fill {
+                create_mem_set(
+                    &mut *self.context,
+                    &mut *self.declared,
+                    &mut *self.function,
+                    m.inst,
+                    to,
+                    other,
+                    count,
+                    align,
+                )
+            } else {
+                let source = offset(self, other, start + from - at);
+                create_mem_copy(
+                    &mut *self.context,
+                    &mut *self.declared,
+                    &mut *self.function,
+                    m.inst,
+                    Copy::Memcpy,
+                    to,
+                    align,
+                    source,
+                    None,
+                    count,
+                )
+            };
+            self.insert_def(made, after, true);
+            after = Created::After(self.mssa.get_memory_access(made).expect("a made access"));
+        }
+        true
     }
 
     /// `performMemCpyToMemSetOptzn`: `memcpy` reads bytes a `memset` wrote:
