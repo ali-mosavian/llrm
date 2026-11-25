@@ -242,6 +242,7 @@ impl Dimension {
         (kept_sizes, kept_work): (Sizes, Option<f64>),
         (other_sizes, other_work): (Sizes, Option<f64>),
         cap: Option<i64>,
+        hint_limits: Option<(i64, i64)>,
     ) -> bool {
         // A bytes-strict unroll trial compares the code alone: the constants a
         // loop's removal frees are data, which a code-size column does
@@ -254,6 +255,10 @@ impl Dimension {
         let saved = (work(kept_work) - work(other_work)).round() as i64;
         let base_work = work(kept_work).round() as i64;
         let measured = kept_work.is_some() && other_work.is_some();
+        let hinted = |added: i64, saved: i64, base_work: i64| match hint_limits {
+            Some(limits) => trial::keeps_smaller_at_rate(added, saved, base_work, limits),
+            None => trial::keeps_smaller_at_size(added, saved, base_work, cap),
+        };
         let (what, pays) = match self {
             // The unrotated object is smaller; the rotated one stays if it
             // executes less for a few bytes a loop.
@@ -272,10 +277,8 @@ impl Dimension {
             // (priced at the loop's own trip weight, see `library_cycles`) do
             // not beat it past the cap.
             Dimension::KeepCopyLoop => ("keep-copy-loop", trial::keeps_smaller_at_size(added, saved, base_work, cap)),
-            Dimension::KeepHintedCalls => {
-                ("keep-hinted-calls", trial::keeps_smaller_at_size(added, saved, base_work, cap))
-            }
-            Dimension::KeepLoopCalls => ("keep-loop-calls", trial::keeps_smaller_at_size(added, saved, base_work, cap)),
+            Dimension::KeepHintedCalls => ("keep-hinted-calls", hinted(added, saved, base_work)),
+            Dimension::KeepLoopCalls => ("keep-loop-calls", hinted(added, saved, base_work)),
             Dimension::KeepHotCalls => ("keep-hot-calls", trial::keeps_smaller_at_size(added, saved, base_work, cap)),
             Dimension::OutlineCalls => ("outline-calls", trial::keeps_smaller_at_size(added, saved, base_work, cap)),
             Dimension::Unroll { bytes_strict, .. } => {
@@ -634,6 +637,8 @@ fn compiled_module_at_size(
         .and_then(|cpu| cpu.target().tti())
         .and_then(|tti| tti.opt_size_inline_outline_clock_cap_percent())
         .or(cap);
+    let hint_limits =
+        options.cpu().ok().and_then(|cpu| cpu.target().tti()).and_then(|tti| tti.opt_size_inline_hint_trial_limits());
     let cap_of = |dimension: Dimension| if dimension == Dimension::OutlineCalls { outline_cap } else { cap };
     let mut again = options.clone();
     again.dump = None;
@@ -674,7 +679,7 @@ fn compiled_module_at_size(
             let variant = built(program, name, &again)?;
             let pays = matches!(
                 (price(&base.built), price(&variant.built)),
-                (Some(a), Some(b)) if dimension.keeps(&noted, a, b, cap_of(dimension))
+                (Some(a), Some(b)) if dimension.keeps(&noted, a, b, cap_of(dimension), hint_limits)
             );
             if pays {
                 kept.push((dimension, Ok(variant)));
@@ -685,7 +690,7 @@ fn compiled_module_at_size(
         let (Some(first), Some(second)) = (each(&base.program), each(&program)) else { continue };
         let pays = matches!(
             (price(&first), price(&second)),
-            (Some(a), Some(b)) if dimension.keeps(&noted, a, b, cap_of(dimension))
+            (Some(a), Some(b)) if dimension.keeps(&noted, a, b, cap_of(dimension), hint_limits)
         );
         if pays {
             kept.push((dimension, Err(program)));
@@ -721,7 +726,7 @@ fn compiled_module_at_size(
         };
         let pays = matches!(
             (price(&chosen.built), price(&together.built)),
-            (Some(a), Some(b)) if dimension.keeps(&noted, a, b, cap_of(dimension))
+            (Some(a), Some(b)) if dimension.keeps(&noted, a, b, cap_of(dimension), hint_limits)
         );
         if pays {
             if dimension == Dimension::OutlineCalls {
