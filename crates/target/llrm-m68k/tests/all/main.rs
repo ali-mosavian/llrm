@@ -360,4 +360,5 @@ mod wide_mul_chain;
 mod wide_mul_cost;
 mod wide_shift;
 mod widemul;
+mod wordmul_source;
 mod zext_mask;

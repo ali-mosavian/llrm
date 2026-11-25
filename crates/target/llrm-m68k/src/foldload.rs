@@ -101,6 +101,11 @@ fn fold_one(
     if !name.contains(bits) || !twin.contains(bits) {
         return false;
     }
+    // a word multiply or divide reads 16 bits of memory whatever its register
+    // width says: a long load there would be read at the wrong half
+    if crate::dagisel::wordmul::twin_stem(name).is_some() && bits != crate::dagisel::wordmul::WIDTH {
+        return false;
+    }
     let loaded = Operand::Use(Reg::Virt(v));
     let mut operands;
     let mut readers = Vec::new();
