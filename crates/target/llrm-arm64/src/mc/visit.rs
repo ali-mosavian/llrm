@@ -241,10 +241,20 @@ impl Inst {
             | Inst::BranchCond { .. }
             | Inst::Svc { .. }
             | Inst::Brk { .. }
-            | Inst::Word { .. }
             | Inst::Dmb { .. }
             | Inst::Nop => {}
             Inst::CompareBranch { rt, .. } | Inst::TestBranch { rt, .. } => f(G(rt), Role::Use),
+            // Words an assembly block wrote: what they read and write is
+            // not known, so every register is both, and (`pairs::ordered`)
+            // no memory access moves across them.
+            Inst::Word { .. } => {
+                for n in 0..31 {
+                    f(G(&mut Gpr(n)), Role::UseDef);
+                }
+                for n in 0..32 {
+                    f(RegRef::Fpr(&mut Vreg(n)), Role::UseDef);
+                }
+            }
             Inst::Cfi(_) | Inst::Mark(_) | Inst::Label(_) => {}
             Inst::BranchReg { rn, .. } | Inst::Ret { rn } => f(G(rn), Role::Use),
             Inst::Load { mem, addr, .. } => {

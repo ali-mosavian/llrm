@@ -131,7 +131,7 @@ pub(crate) fn is_memory(inst: &Inst) -> bool {
 fn ordered(inst: &Inst) -> bool {
     matches!(
         inst,
-        Inst::Atomic { .. } | Inst::Dmb { .. } | Inst::VectorStoreLane { .. } | Inst::VectorLoadReplicate { .. } | Inst::VectorLoadLane { .. }
+        Inst::Atomic { .. } | Inst::Dmb { .. } | Inst::Word { .. } | Inst::VectorStoreLane { .. } | Inst::VectorLoadReplicate { .. } | Inst::VectorLoadLane { .. }
             | Inst::VectorLoadStructure { .. }
             | Inst::VectorStoreStructure { .. }
     )
