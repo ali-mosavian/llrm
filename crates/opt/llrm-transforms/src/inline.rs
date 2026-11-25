@@ -217,7 +217,18 @@ pub struct Threshold {
 
 impl Threshold {
     pub fn new(limit: i64) -> Self {
-        Self { limit, single: false, min_size: false, last: true, cp_clone: None, cp_hint_clones: true, cp_peel_limited: false, cp_max_clones: crate::ipacp::DEFAULT_MAX_CLONES, recursive: None, at_o1: false }
+        Self {
+            limit,
+            single: false,
+            min_size: false,
+            last: true,
+            cp_clone: None,
+            cp_hint_clones: true,
+            cp_peel_limited: false,
+            cp_max_clones: crate::ipacp::DEFAULT_MAX_CLONES,
+            recursive: None,
+            at_o1: false,
+        }
     }
 
     /// The -O level (1, 2, 3) of a speed caller, the pin's
