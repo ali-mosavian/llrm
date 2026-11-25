@@ -1139,6 +1139,27 @@ impl Tti for X86 {
         Cost::BASIC * (arguments + 1)
     }
 
+    /// DEVIATE INLINE-BODY-CALL (owner llrm-target-x86-m64-b, exit 2026-12-15;
+    /// the m68k and z80 entries; the pin prices a call as one instruction and
+    /// inlines these wrappers): a call inside an inlined body costs what the
+    /// site's own call does, its argument setup and `call_code_size_percent`.
+    /// Priced flat, a one-call wrapper looked smaller than the call it replaced
+    /// and was copied into every caller at -Os (gcc: growth <= 0 only).
+    fn body_call_cost(
+        &self,
+        shape: &llrm_mir::tti::CallShape,
+        kind: CostKind,
+    ) -> Option<Cost> {
+        if kind != CostKind::CodeSize {
+            return None;
+        }
+        let arguments = shape.arguments.len() as i64;
+        if self.size_bytes {
+            return Some(crate::sizes::call(arguments, self.quad));
+        }
+        Some(Cost::of((Cost::BASIC.value * (arguments + 1) * self.call_code_size_percent() + 50) / 100))
+    }
+
     fn inline_never_grows_without_rate(&self) -> bool {
         self.tuning.inline_never_grows_without_rate
     }
