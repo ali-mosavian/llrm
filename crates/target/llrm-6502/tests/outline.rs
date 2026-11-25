@@ -218,6 +218,19 @@ fn a_sequence_in_a_loop_pays_for_each_run_of_the_loop() {
     assert!(run_at(&looped, None).contains("jsr __outl_0"), "bytes alone do not outline them");
 }
 
+/// A function that calls itself runs its lines once per depth: frameless -O1
+/// outlined the 4-instruction frame release of `descend(10)`, 24 clocks for
+/// each of eleven runs. The copies are outlined where the function does not
+/// recurse and given up where it does.
+#[test]
+fn a_sequence_in_a_recursive_function_pays_for_each_depth() {
+    let sum = "  lda rc16\n  clc\n  adc rc17\n  sta rc18\n";
+    let once = format!(".export down\ndown:\n{}  rts\n", sum.repeat(4));
+    assert!(run(&once).contains("jsr __outl_0"), "the copies are not outlined where they run once");
+    let recursive = format!(".export down\ndown:\n{}  jsr down\n  rts\n", sum.repeat(4));
+    assert_eq!(run(&recursive), recursive, "the copies are outlined in a recursion");
+}
+
 /// Six copies of a 2-instruction move save 1 byte for 72 clocks: priced at
 /// 12 clocks a byte, the first rule gave them up in straight-line code, where
 /// they run once and the program is no slower for more than a byte of them.
