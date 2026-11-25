@@ -614,6 +614,20 @@ pub fn keeps_smaller_at_size(
     }
 }
 
+/// DEVIATE INLINE-HINT-RATE: whether a trial that keeps a smaller shape at -Os
+/// is kept: the object is smaller (`added` < 0) and the work it adds
+/// (`-saved`) is within `percent` of the module's (`base`), or at most
+/// `per_byte` for each byte it saves.
+pub fn keeps_smaller_at_rate(
+    added: i64,
+    saved: i64,
+    base: i64,
+    (percent, per_byte): (i64, i64),
+) -> bool {
+    keeps_smaller_at_size(added, saved, base, Some(percent))
+        || (added < 0 && -i128::from(saved) <= i128::from(per_byte) * -i128::from(added))
+}
+
 /// DEVIATE UNROLL-OS-TRIAL: whether the -Os unroll trial is kept: the object is
 /// smaller, or it grows by at most `ROTATION_HOT_BYTES_PER_LOOP` for each
 /// function the trial took and the code runs less. `bytes_strict`

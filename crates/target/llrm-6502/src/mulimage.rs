@@ -388,9 +388,10 @@ fn module_bytes(
 /// tuned for size expands in line is a call of `__mulsi3` when the module is
 /// written in fewer bytes so: the routine is linked once, for every call
 /// (compound_assignment_types at -O2: twelve expansions of `check * 7` of
-/// 22 B against twelve calls of 8 B and one routine). Bytes first at every
-/// level (user ruling 2026-11-14); a place in a loop keeps the expansion, a
-/// call is some 1,900 clocks a multiply.
+/// 22 B against twelve calls of 8 B and one routine). Bytes first at -O1
+/// (user ruling 2026-11-14); -O2 and -O3 at the judge's rate: a call is some
+/// 2,200 clocks a multiply, so the bytes it saves must repay them at
+/// `CLOCKS_PER_BYTE`; a place in a loop keeps the expansion.
 ///
 /// DEVIATE 6502-MUL-CALL-TRIAL (owner 6502, exit 2026-11-24, with
 /// 6502-MUL-IMAGE): translation of the repo's module-level re-selections
@@ -426,6 +427,9 @@ pub fn call_when_it_pays(
         .cloned()
         .collect();
     let mut again = Vec::new();
+    // The clocks the calls add, a call at `CALL_CLOCKS` for each time the
+    // function is called (`call_weights`; one where nothing calls it).
+    let mut added_clocks = 0;
     for (at, (name, selection)) in names.iter().zip(selections.iter()).enumerate() {
         let function = module.named(name).and_then(|id| module.global(id).function());
         if selection.call_candidates == 0 || !from_module[at] || function.is_some_and(is_sized) {
@@ -436,6 +440,8 @@ pub fn call_when_it_pays(
         other.zero_page = request.platform.zero_page;
         other.tuning = request.level.tuning();
         if other.mul_calls() > selection.mul_calls() {
+            let runs = module.named(name).and_then(|id| calls.get(&(id.0 as usize))).copied().unwrap_or(1.0).max(1.0);
+            added_clocks += ((other.mul_calls() - selection.mul_calls()) as f64 * runs * CALL_CLOCKS as f64) as i64;
             again.push((at, other));
         }
     }
@@ -453,7 +459,14 @@ pub fn call_when_it_pays(
     if std::env::var_os("LLRM_DEBUG_TRIAL").is_some() {
         eprintln!("trial mul call: {} functions, {tried} B against {kept} B kept", again.len());
     }
-    if tried < kept {
+    // -O1: bytes strict, clocks free. -O2/-O3: the judge's rate: the bytes the
+    // calls save must repay the clocks they add (`expand_when_unshared`'s
+    // rule, seen from the other side).
+    let pays = match request.level {
+        Level::O1 => tried < kept,
+        _ => tried < kept && (kept - tried) * CLOCKS_PER_BYTE >= added_clocks,
+    };
+    if pays {
         for (at, other) in again {
             selections[at] = other;
         }

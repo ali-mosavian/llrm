@@ -1624,6 +1624,10 @@ impl Tti for X86 {
         self.tuning.inline_outline_trial_clock_cap_percent
     }
 
+    fn opt_size_inline_hint_trial_limits(&self) -> Option<(i64, i64)> {
+        Some((self.tuning.inline_hint_trial_clock_cap_percent?, self.tuning.inline_hint_trial_clocks_per_byte?))
+    }
+
     fn opt_size_inline_outline_max_callees(&self) -> Option<usize> {
         self.tuning.inline_outline_trial_max_callees
     }

@@ -374,7 +374,7 @@ impl LIRTransform for LowerCallFrame {
             // The indirect call of the frame open now, to be told what its
             // callee pops.
             let mut open_call: Option<i64> = None;
-            for one in block.insns.iter() {
+            for (index, one) in block.insns.iter().enumerate() {
                 if one.what.as_ref().is_some_and(|what| what.op == Operation::Call && what.indirect) {
                     open_call = Some(one.at);
                 }
@@ -382,6 +382,16 @@ impl LIRTransform for LowerCallFrame {
                     && let Some(call) = open_call.take()
                 {
                     Arc::make_mut(&mut out.call_pops).insert(call, imm_of(one, 1).unwrap_or(0));
+                }
+                // `blockEndIsUnreachable` (X86FrameLowering.cpp,
+                // eliminateCallFramePseudoInstr): no dead adjustment where
+                // the block has no successor and nothing runs after the
+                // call, a noreturn call's.
+                if name_of(one) == Some("call_frame_destroy")
+                    && block.succ.is_empty()
+                    && block.insns.iter().skip(index + 1).all(|later| later.what.is_none())
+                {
+                    continue;
                 }
                 let (verb, count) = match name_of(one) {
                     Some("call_frame_setup") => (
@@ -1106,6 +1116,15 @@ mod tests {
     }
 
     fn body(insns: Vec<Arc<Insn>>) -> LirBody {
+        // A block with a successor: one that ends the function is `exit_body`.
+        let mut block = LirBlock::new(0, insns);
+        block.succ = vec![1].into();
+        let mut body = LirBody::new("g", 0, vec![block.into()], IndexMap::default(), IndexMap::default());
+        body.bits = 32;
+        body
+    }
+
+    fn exit_body(insns: Vec<Arc<Insn>>) -> LirBody {
         let mut body =
             LirBody::new("g", 0, vec![LirBlock::new(0, insns).into()], IndexMap::default(), IndexMap::default());
         body.bits = 32;
@@ -1343,6 +1362,23 @@ mod tests {
             .iter()
             .map(|one| (name_of(one).unwrap().to_owned(), imm_of(one, 1).unwrap_or(0)))
             .collect()
+    }
+
+    /// `abort()`-like call at the end of a block with no successor: the `add
+    /// esp` after `call g` (g noreturn) was emitted, 3 B dead per site (87
+    /// sites in QuickrBasic m32 -Os, fault_raise 14 B against 11; clang and
+    /// gcc emit none). A call a `ret` follows keeps it.
+    #[test]
+    fn no_cleanup_follows_a_call_that_ends_a_block_with_no_successor() {
+        let ret = || insn(10, Operation::Return, "ret", vec![], vec![], vec![], vec![]);
+        let run = |insns: Vec<Arc<Insn>>| -> Vec<String> {
+            let mut lowering = LowerCallFrame { stack: RegId::SP, width: 4, call_alignment: 1, phase: 0, defer: false };
+            let after = lowering.transform(exit_body(insns)).expect("lowers");
+            names(&after)
+        };
+        assert_eq!(run(vec![setup(8), call(), destroy(8)]), ["sub", "call"]);
+        assert_eq!(run(vec![setup(8), call(), destroy(8), ret()]), ["sub", "call", "add", "ret"]);
+        assert_eq!(lower(vec![setup(8), call(), destroy(8)]), ["sub", "call", "add"], "a block with a successor");
     }
 
     /// A 16-aligned call padded an 8-byte push block by 8 whatever the frame
