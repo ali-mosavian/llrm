@@ -1,7 +1,6 @@
 //! x86-64 -Os: three bytes of zero (an initializer's padding) are a word and a
 //! byte store, 10 B, not a `rep stos` fill, 15 B. The stores were priced 8 B
-//! each whatever their width, so the fill won (13 B against 10 in QuickrBasic's
-//! `sugg_probe`). Needs `LLRM_LLC`.
+//! each whatever their width, so the fill won (13 B against 10). Needs `LLRM_LLC`.
 
 use std::path::Path;
 use std::process::Command;
