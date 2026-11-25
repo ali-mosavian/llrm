@@ -783,15 +783,19 @@ fn shifted_byte_in_pieces(
 ///
 /// DEVIATE 6502-LONG-SHIFT (owner x87, exit 2026-12-15): up to two bits at
 /// every level, and the over-corrected form (5 to 7 bits) only in a function a
-/// speed level tunes (-O2, -O3). llvm-mos also steps 3 and 4 bits in the same
-/// direction, but the pin's word shifts are as good there: three or four steps
-/// were +9 B and +9.5% clocks in switch_table_holes and +86 B in
-/// volatile_bitfield for nothing in the 81 programs. At -Os and -O1 a step is
-/// 8 B unrolled where `shift_forms` makes a loop of the words' shifts (13 B
-/// whatever the count), and the 81 programs got 56 to 213 B larger; those
-/// levels wait for a loop form of the chain. After a byte (9 to 15 bits) the
-/// words' own shifts are shorter than the chain for 5 to 7 bits (`x << 15`
-/// 107k clocks for 1000 calls, the chain 126k).
+/// speed level tunes (-O2, -O3).
+///
+/// The inequality is `shouldOverCorrect`'s with the form's own cost: `bits`
+/// steps over the four bytes against `8 - bits` the other way (the same four
+/// bytes: the dropped byte is shifted alone, not in a widened fifth), so the
+/// byte move pays from 5 bits. llvm-mos also chains 3 and 4 bits; here the
+/// word shifts of the pin's expansion are as short there and the chain adds
+/// temporaries and a text the outliner shares less (measured over the 81
+/// programs: nothing gained, bytes and clocks lost in two). At -Os and -O1 a
+/// step is 8 B unrolled where `shift_forms` makes a loop of the words' shifts
+/// (13 B whatever the count), and the 81 programs got 56 to 213 B larger;
+/// those levels wait for a loop form of the chain. After a byte (9 to 15 bits)
+/// the words' own shifts are shorter than the chain for 5 to 7 bits.
 fn long_shift_in_bytes(
     dag: &mut SelectionDAG,
     node: SDValue,
