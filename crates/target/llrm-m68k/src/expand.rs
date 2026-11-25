@@ -60,6 +60,46 @@ pub(crate) fn sp_adjust(
     }
 }
 
+/// gcc's `combine-stack-adjustments` (`combine_stack_adjustments_for_block`):
+/// the `owed` bytes of finished calls' arguments are taken by the epilogue's
+/// own stack adjustment, as one `adda`, a frame pointer's `unlk` drops them
+/// (it reloads `%sp`), and a slot read from `%sp` before the adjustment is
+/// that much further. Any other closing step finds them paid first.
+fn merged_closing(
+    closing: &[FrameOp],
+    owed: i64,
+) -> Vec<FrameOp> {
+    let mut carry = owed;
+    let mut merged = Vec::with_capacity(closing.len() + 1);
+    for op in closing {
+        match op {
+            FrameOp::AddSp(bytes) if carry > 0 => {
+                merged.push(FrameOp::AddSp(bytes + carry));
+                carry = 0;
+            }
+            FrameOp::Restore { registers, base: Base::Sp, offset } if carry > 0 => {
+                merged.push(FrameOp::Restore { registers: registers.clone(), base: Base::Sp, offset: offset + carry });
+            }
+            FrameOp::Restore { base: Base::Fp, .. } => merged.push(op.clone()),
+            FrameOp::Unlink => {
+                carry = 0;
+                merged.push(op.clone());
+            }
+            _ => {
+                if carry > 0 {
+                    merged.push(FrameOp::AddSp(carry));
+                    carry = 0;
+                }
+                merged.push(op.clone());
+            }
+        }
+    }
+    if carry > 0 {
+        merged.push(FrameOp::AddSp(carry));
+    }
+    merged
+}
+
 fn frame_op(
     op: &FrameOp,
     out: &mut Vec<mc::Inst>,
@@ -819,13 +859,12 @@ pub fn finish_with(
         }
         // an instruction that reads the stack pointer as the frame has it, or
         // leaves the block, finds the cleanups done
+        let closes = matches!(inst.kind, Kind::Op("RET" | "TCRETURNq"));
         if owed > 0
+            && !closes
             && (inst.terminator
                 || inst.barrier
-                || matches!(
-                    inst.kind,
-                    Kind::Op("RET" | "TCRETURNq" | "UNREACHABLE" | "ADJCALLSTACKDOWN")
-                )
+                || matches!(inst.kind, Kind::Op("UNREACHABLE" | "ADJCALLSTACKDOWN"))
                 || crate::callpush::names_sp(inst, assignment))
         {
             frame_op(&FrameOp::AddSp(owed), &mut out, short);
@@ -920,12 +959,12 @@ pub fn finish_with(
             }
             Kind::Op("UNREACHABLE") => {}
             Kind::Op("RET") => {
-                closing.iter().for_each(|op| frame_op(op, &mut out, short));
+                merged_closing(&closing, std::mem::take(&mut owed)).iter().for_each(|op| frame_op(op, &mut out, short));
                 out.push(mc::Inst { opcode: "RTS", operands: vec![] });
             }
             Kind::Op("TCRETURNq") => {
                 let [target, _] = &operands[..] else { return Err("TCRETURNq operands".to_owned()) };
-                closing.iter().for_each(|op| frame_op(op, &mut out, short));
+                merged_closing(&closing, std::mem::take(&mut owed)).iter().for_each(|op| frame_op(op, &mut out, short));
                 out.push(mc::Inst { opcode: "BRA16", operands: vec![target.clone()] });
             }
             Kind::Op("MOVM32pm_P") => {
