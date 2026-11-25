@@ -347,9 +347,11 @@ pub(crate) struct Session<'a> {
     roots: Roots,
     /// `isAnalyzedBundle`: the windows that did not pay.
     analyzed: HashSet<Vec<InstId>>,
-    /// `positions` of the function the seeds attempts read, kept until a tree
-    /// is emitted.
-    positions: Option<llrm_mir::dense::IdMap<InstId, usize>>,
+    /// `positions` of the function and the instructions of the block that stand
+    /// anywhere their operands do, kept until a tree is emitted:
+    /// `BlockScheduling` keeps its block's data across the bundles it
+    /// tries.
+    positions: Option<crate::slptree::BlockFacts>,
     /// The expressions the attempts ask, made once and dropped when a tree is
     /// emitted (a failed attempt leaves the function as it was).
     scev: Option<llrm_analysis::scev::analysis::ScevSession>,
@@ -442,18 +444,14 @@ impl<'a> Session<'a> {
         function: &mut Function,
         window: &[InstId],
     ) -> bool {
-        let positions = match self.roots {
-            Roots::Seeds | Roots::Operands => {
-                Some(self.positions.take().unwrap_or_else(|| crate::slptree::positions(function)))
-            }
-            _ => None,
-        };
+        let mut facts = self.positions.take();
         let mut session = match self.scev.take() {
             Some(session) => session,
             None => llrm_analysis::scev::analysis::ScevSession::of(self.context, function, self.outer),
         };
         let tree = {
             let unit = MemUnit::within(self.context, self.layout, function, self.outer);
+            let facts_now = &*facts.get_or_insert_with(|| crate::slptree::BlockFacts::of(&unit, function, self.block));
             session.ask_within(
                 self.context,
                 self.layout,
@@ -463,19 +461,15 @@ impl<'a> Session<'a> {
                 |se, cx| {
                     let scaler = crate::slptree::Scaler::new(se, cx);
                     match self.roots {
-                        Roots::Phis => crate::slptree::try_phis(&unit, function, self.block, window, self.tti, &scaler),
-                        Roots::Inserts => {
-                            crate::slptree::try_inserts(&unit, function, self.block, window, self.tti, &scaler)
+                        Roots::Phis => {
+                            crate::slptree::try_phis(&unit, function, self.block, window, facts_now, self.tti, &scaler)
                         }
-                        Roots::Seeds | Roots::Operands => crate::slptree::try_seeds(
-                            &unit,
-                            function,
-                            self.block,
-                            window,
-                            positions.as_ref().expect("read for seeds"),
-                            self.tti,
-                            &scaler,
+                        Roots::Inserts => crate::slptree::try_inserts(
+                            &unit, function, self.block, window, facts_now, self.tti, &scaler,
                         ),
+                        Roots::Seeds | Roots::Operands => {
+                            crate::slptree::try_seeds(&unit, function, self.block, window, facts_now, self.tti, &scaler)
+                        }
                     }
                 },
             )
@@ -486,7 +480,7 @@ impl<'a> Session<'a> {
                 true
             }
             None => {
-                self.positions = positions;
+                self.positions = facts;
                 self.scev = Some(session);
                 false
             }

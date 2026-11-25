@@ -319,6 +319,7 @@ fn next_tree(
 ) -> Option<(crate::slptree::Tree, Option<u64>)> {
     let unit = MemUnit::within(context, layout, function, outer);
     let mut session = llrm_analysis::scev::analysis::ScevSession::of(context, function, outer);
+    let position = crate::slptree::positions(function);
     session.ask_within(context, layout, &outer.globals, &outer.metadata, function, |se, cx| {
         let scaler = crate::slptree::Scaler::new(se, cx);
         for block in function.layout().to_vec() {
@@ -344,6 +345,7 @@ fn next_tree(
                             &stores,
                             ty,
                             align.unwrap_or(bytes),
+                            &position,
                             tti,
                             &scaler,
                         ) {

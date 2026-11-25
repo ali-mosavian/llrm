@@ -398,17 +398,67 @@ fn c_abi_of(target: &Target) -> Result<Option<CAbi>, String> {
 pub fn targets(text: &str) -> Result<BTreeMap<String, Target>, String> {
     let mut table: BTreeMap<String, Target> = toml::from_str(text).map_err(|error| format!("targets.toml: {error}"))?;
     for target in table.values_mut() {
-        target.datalayout = expanded(&target.datalayout)?;
-        target.c_abi = c_abi_of(target)?;
-        target.clang_datalayout = target.clang_datalayout.take().map(|one| expanded(&one)).transpose()?;
-        for word in target.clang.iter_mut().chain(&mut target.llc) {
-            *word = with_root(word);
-        }
-        for word in target.clang.iter_mut().chain(&mut target.llc).chain(&mut target.link) {
-            *word = with_ow(&with_environment(word), &cache_dir());
-        }
+        finished(target)?;
     }
     Ok(table)
+}
+
+/// `target` with its `{datalayout:..}` filled in, its C ABI and its flags
+/// resolved.
+fn finished(target: &mut Target) -> Result<(), String> {
+    target.datalayout = expanded(&target.datalayout)?;
+    target.c_abi = c_abi_of(target)?;
+    target.clang_datalayout = target.clang_datalayout.take().map(|one| expanded(&one)).transpose()?;
+    for word in target.clang.iter_mut().chain(&mut target.llc) {
+        *word = with_root(word);
+    }
+    for word in target.clang.iter_mut().chain(&mut target.llc).chain(&mut target.link) {
+        *word = with_ow(&with_environment(word), &cache_dir());
+    }
+    Ok(())
+}
+
+/// The table [`targets`] gives, holding only the row `wanted` names (by name
+/// or by triple): a compile reads one row, and parsing and resolving all of
+/// them cost 10 M instructions, a third of an empty file's compile. Where the
+/// text has no such row, or a shape the split does not read, the whole table
+/// is made.
+pub fn targets_for(
+    text: &str,
+    wanted: &str,
+) -> Result<BTreeMap<String, Target>, String> {
+    let mut rows: Vec<(&str, &str)> = Vec::new();
+    let mut at = 0;
+    let mut open: Option<(&str, usize)> = None;
+    for line in text.split_inclusive('\n') {
+        let header = line.trim_end().strip_prefix('[').and_then(|rest| rest.strip_suffix(']'));
+        if let Some(name) = header.filter(|name| !name.contains(['[', ']', '.', '"', '\''])) {
+            if let Some((was, from)) = open.replace((name, at + line.len())) {
+                rows.push((was, &text[from..at]));
+            }
+        } else if open.is_none() && !line.trim().is_empty() && !line.trim_start().starts_with('#') {
+            return targets(text);
+        } else if line.trim_start().starts_with('[') {
+            return targets(text);
+        }
+        at += line.len();
+    }
+    if let Some((was, from)) = open {
+        rows.push((was, &text[from..]));
+    }
+    let by_triple = format!("triple = \"{wanted}\"");
+    let row = rows
+        .iter()
+        .find(|(name, _)| *name == wanted)
+        // As `target_named` has it: of rows sharing a triple, the first by
+        // name.
+        .or_else(|| {
+            rows.iter().filter(|(_, body)| body.lines().any(|line| line.trim() == by_triple)).min_by_key(|row| row.0)
+        });
+    let Some(&(name, body)) = row else { return targets(text) };
+    let mut target: Target = toml::from_str(body).map_err(|error| format!("targets.toml: [{name}]: {error}"))?;
+    finished(&mut target)?;
+    Ok(BTreeMap::from([(name.to_owned(), target)]))
 }
 
 #[derive(Debug, PartialEq)]
@@ -1234,8 +1284,9 @@ fn build(
                             Some(64) => "x86_64-unknown-none",
                             _ => "i386-unknown-none",
                         };
-                        // A block is assembled by the pin clang the route resolves
-                        // (`clang_path`); LLRM_A64_CLANG names one built with the
+                        // A block is assembled by the pin clang the route
+                        // resolves (`clang_path`);
+                        // LLRM_A64_CLANG names one built with the
                         // AArch64 target, and a binutils objcopy for AArch64
                         // (LLRM_A64_OBJCOPY) cuts out its `.text`.
                         let (assembler_program, objcopy) = if flat == Some(llrm_mir::intrinsics::AARCH64) {
@@ -1347,15 +1398,15 @@ pub fn run_main(argv: &[String]) -> i32 {
             eprintln!("llrm-cc: {why}");
             2
         })?;
-        let table = targets(TARGETS).map_err(|why| {
-            eprintln!("llrm-cc: {why}");
-            1
-        })?;
         let (named, job) = parse(argv).map_err(|why| {
             eprintln!("llrm-cc: {why}");
             1
         })?;
         let name = named.or_else(|| std::env::var("LLRM_CC_TARGET").ok()).unwrap_or_else(|| DEFAULT_TARGET.into());
+        let table = targets_for(TARGETS, &name).map_err(|why| {
+            eprintln!("llrm-cc: {why}");
+            1
+        })?;
         let target = target_named(&table, &name).map_err(|why| {
             eprintln!("llrm-cc: {why}");
             1
