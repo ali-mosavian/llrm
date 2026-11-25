@@ -285,7 +285,20 @@ fn address_copy(
         )?;
     let Kind::Copy = insts[copy].kind else { return None };
     let Operand::Use(base @ Reg::Virt(y)) = insts[copy].operands[1] else { return None };
-    if uses[x as usize].len() != 1 {
+    // read by the add and, besides, by addresses alone (the byte load that
+    // folded the add's `+ 1` as a displacement): those read `y` instead
+    let own = &uses[x as usize];
+    let others = own.iter().filter(|one| matches!(one, Use::Other)).count();
+    let addresses_only = own
+        .iter()
+        .all(
+            |one| match one {
+                Use::Other | Use::Address | Use::Either => true,
+                Use::Copy(to) => function.classes[*to as usize] == Class::Ar32,
+                Use::Phi(_) => false,
+            },
+        );
+    if others != 1 || !addresses_only {
         return None;
     }
     match function.classes[y as usize] {
@@ -385,7 +398,116 @@ fn rewrite_one(
     let insts = &mut function.blocks[b].insts;
     insts[at] = inst;
     insts.remove(copy);
+    read_base_instead(function, b, at - 1, x, base, d, Some(sign * value));
     Some(at)
+}
+
+/// What read the copy `x` of `base` besides the add (`d = x + step`, now at
+/// `at` of block `b`) reads `base`. A copy of `x` after the add whose every
+/// user is a displaced address in this block reads the add's result instead,
+/// the displacement lowered by the step: `addq.l #1, %a1` then `(0,%a1)`, not
+/// `(1,%a2)` with the old pointer kept live beside the new one.
+fn read_base_instead(
+    function: &mut MFunction,
+    b: usize,
+    at: usize,
+    x: u32,
+    base: Reg,
+    d: u32,
+    step: Option<i64>,
+) {
+    let copies: Vec<(usize, u32)> = if step.is_some() {
+        function.blocks[b]
+            .insts
+            .iter()
+            .enumerate()
+            .skip(at + 1)
+            .filter_map(|(index, inst)| match (&inst.kind, &inst.operands[..]) {
+                (Kind::Copy, [Operand::Def(Reg::Virt(to)), Operand::Use(Reg::Virt(from))])
+                    if *from == x && function.classes[*to as usize] == Class::Ar32 =>
+                {
+                    Some((index, *to))
+                }
+                _ => None,
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
+    let step = step.unwrap_or(0);
+    for (index, to) in copies {
+        if displaced_in_block(function, b, index, to, step) {
+            function.blocks[b].insts[index].operands[1] = Operand::Use(Reg::Virt(d));
+            for inst in function.blocks[b].insts[index + 1..].iter_mut() {
+                lower_displacement(inst, to, step);
+            }
+        }
+    }
+    for block in &mut function.blocks {
+        for inst in &mut block.insts {
+            for operand in &mut inst.operands {
+                if matches!(operand, Operand::Use(Reg::Virt(v)) if *v == x) {
+                    *operand = Operand::Use(base);
+                }
+            }
+        }
+    }
+}
+
+/// The `(Imm(displacement), Use(register))` pair of the address operand of
+/// `inst` that reads `register`.
+fn displacement_of(
+    inst: &Inst,
+    register: u32,
+) -> Option<usize> {
+    let Kind::Op(name) = inst.kind else { return None };
+    (1..inst.operands.len()).find(|&at| {
+        matches!(inst.operands[at], Operand::Use(Reg::Virt(v)) if v == register)
+            && matches!(inst.operands[at - 1], Operand::Imm(_))
+            && operand_class(name, at) == Some(Class::Ar32)
+    })
+}
+
+/// Whether every use of `to`, which the copy at `copy` of block `b` defines,
+/// is a displaced address of this block, after the copy, that `step` can be
+/// taken from.
+fn displaced_in_block(
+    function: &MFunction,
+    b: usize,
+    copy: usize,
+    to: u32,
+    step: i64,
+) -> bool {
+    let reads = |inst: &Inst| inst.operands.iter().any(|o| matches!(o, Operand::Use(Reg::Virt(v)) if *v == to));
+    let elsewhere = function.blocks.iter().enumerate().any(|(index, block)| {
+        block.phis.iter().any(|phi| phi.incoming.iter().any(|(_, r)| matches!(r, Reg::Virt(v) if *v == to)))
+            || (index != b && block.insts.iter().any(reads))
+    });
+    if elsewhere {
+        return false;
+    }
+    let insts = &function.blocks[b].insts;
+    insts[..=copy].iter().all(|inst| !reads(inst))
+        && insts[copy + 1..].iter().filter(|inst| reads(inst)).all(|inst| {
+            displacement_of(inst, to).is_some_and(|at| {
+                matches!(
+                    inst.operands[at - 1],
+                    Operand::Imm(k) if (-32768..=32767).contains(&(k - step))
+                )
+            }) && inst.operands.iter().filter(|o| matches!(o, Operand::Use(Reg::Virt(v)) if *v == to)).count() == 1
+        })
+}
+
+fn lower_displacement(
+    inst: &mut Inst,
+    register: u32,
+    step: i64,
+) {
+    if let Some(at) = displacement_of(inst, register) {
+        if let Operand::Imm(k) = inst.operands[at - 1] {
+            inst.operands[at - 1] = Operand::Imm(k - step);
+        }
+    }
 }
 
 /// A pointer plus a register, used only as an address, is `lea (0,An,Dn)`:
@@ -421,6 +543,7 @@ fn rewrite_indexed(
     let insts = &mut function.blocks[b].insts;
     insts[at] = inst;
     insts.remove(copy);
+    read_base_instead(function, b, at - 1, x, base, d, None);
     Some(at)
 }
 
