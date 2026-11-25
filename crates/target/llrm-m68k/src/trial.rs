@@ -153,9 +153,45 @@ fn labels_of(items: &[Item]) -> HashMap<&str, usize> {
         .collect()
 }
 
-/// The items as a graph: an item is a node, its edges are where control goes
-/// next. The loops and the shares read off this graph do not depend on the
-/// order the blocks are laid out in.
+/// The blocks of `items` and how each ends: a block starts at the first item,
+/// at a label, and after a branch, jump or return. Returns the block of each
+/// item and, per block, the ending of its last item with targets as blocks.
+fn blocks_of(
+    items: &[Item],
+    ends: &[Option<Ending>],
+) -> (Vec<usize>, Vec<Option<Ending>>) {
+    let mut block_of = Vec::with_capacity(items.len());
+    let mut count = 0usize;
+    let mut open = false;
+    for (item, end) in items.iter().zip(ends) {
+        if !open || matches!(item, Item::Label(_)) {
+            if open {
+                count += 1;
+            }
+            open = true;
+        }
+        block_of.push(count);
+        if end.is_some() {
+            count += 1;
+            open = false;
+        }
+    }
+    let blocks = if open { count + 1 } else { count };
+    let mut block_ends = vec![None; blocks];
+    for (at, end) in ends.iter().enumerate() {
+        let to_block = |to: usize| block_of.get(to).copied().unwrap_or(usize::MAX);
+        block_ends[block_of[at]] = match end {
+            Some(Ending::Jump(to)) => Some(Ending::Jump(to_block(*to))),
+            Some(Ending::Branch(to)) => Some(Ending::Branch(to_block(*to))),
+            other => *other,
+        };
+    }
+    (block_of, block_ends)
+}
+
+/// The blocks as a graph: its edges are where control goes next. The loops and
+/// the shares read off this graph do not depend on the order the blocks are
+/// laid out in.
 struct ItemGraph {
     nodes: Vec<BlockId>,
     succs: Vec<BlockList>,
@@ -235,9 +271,10 @@ fn run_weights(items: &[Item]) -> Vec<(u64, usize)> {
             _ => None,
         })
         .collect();
+    let (block_of, ends) = blocks_of(items, &ends);
     let graph = ItemGraph::of(&ends);
     let cycles = CycleInfo::compute(&graph);
-    let n = items.len();
+    let n = ends.len();
     // an edge into the header of a cycle that holds its source is that cycle's
     // back edge
     let is_back = |from: usize, to: usize| {
@@ -304,7 +341,7 @@ fn run_weights(items: &[Item]) -> Vec<(u64, usize)> {
             }
         }
     }
-    (0..n).map(|at| (share[at], (cycles.get_cycle_depth(BlockId(at as u32)) as usize).min(3))).collect()
+    block_of.iter().map(|&at| (share[at], (cycles.get_cycle_depth(BlockId(at as u32)) as usize).min(3))).collect()
 }
 
 /// Bytes, and clocks of `items` on `cpu` weighted by how often each runs: an
@@ -784,6 +821,23 @@ mod weights {
     ) -> (u64, usize) {
         let at = items.iter().position(|item| matches!(item, Item::Inst(one) if one.opcode == opcode)).expect(opcode);
         run_weights(items)[at]
+    }
+
+    /// The CFG was one node per instruction: +1.0% compile instructions on
+    /// QB comp.c at -O1 for the same weights. A straight run is one block.
+    #[test]
+    fn a_straight_run_of_instructions_is_one_block() {
+        let mut items = vec![label("H")];
+        items.extend((0..50).map(|_| inst("NOP", None)));
+        items.extend([inst("Bne16", Some("H")), inst("RTS", None)]);
+        let ends: Vec<_> = {
+            let labels = labels_of(&items);
+            items.iter().map(|item| if let Item::Inst(one) = item { ending(one, &labels) } else { None }).collect()
+        };
+        let (block_of, block_ends) = blocks_of(&items, &ends);
+        assert_eq!(block_ends.len(), 2, "loop body and exit");
+        assert_eq!(block_of[0], block_of[50]);
+        assert_ne!(block_of[51], block_of[52]);
     }
 
     /// One loop, its exit test laid out two ways: a backward branch over the
