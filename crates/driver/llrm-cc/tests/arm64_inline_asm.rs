@@ -45,6 +45,36 @@ fn test_arm64_asm_blocks_compute_what_the_source_says_at_every_level() {
     }
 }
 
+/// A block that clobbers `x19` or `d8` was refused by name ("clobber of
+/// callee-saved register"). The registers it declares are defs of the block, so
+/// the frame saves and restores them: the caller's values in them survive, and
+/// the program prints what the source says.
+#[test]
+fn test_a_block_may_clobber_callee_saved_registers_and_the_frame_saves_them() {
+    let clang = clang::clang().expect("this test needs the pin clang built with AArch64 and qemu-aarch64");
+    let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/c/a64_inline_asm_csr.c");
+    for level in ["-O1", "-O2", "-Os"] {
+        let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("a64asm-csr{level}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let (object, program) = (dir.join("a.o"), dir.join("a.out"));
+        let done = Command::new(env!("CARGO_BIN_EXE_llrm-cc-bin"))
+            .env("LLRM_CC_TARGET", "arm64-linux")
+            .env("LLRM_A64_CLANG", &clang)
+            .args([level, "-w", "-c", "-o"])
+            .arg(&object)
+            .arg(&source)
+            .output()
+            .unwrap();
+        assert!(done.status.success(), "{level}: {}", String::from_utf8_lossy(&done.stderr));
+        let linked =
+            Command::new("aarch64-linux-gnu-gcc").arg("-static").arg("-o").arg(&program).arg(&object).output().unwrap();
+        assert!(linked.status.success(), "{level}: {}", String::from_utf8_lossy(&linked.stderr));
+        let ran = Command::new("qemu-aarch64").arg(&program).output().unwrap();
+        assert_eq!(String::from_utf8_lossy(&ran.stdout), "12 1001 3.0 1.5\n", "{level}");
+    }
+}
+
 /// A block was a call to the allocator, so a pointer kept across `udiv`/`msub`
 /// moved from `x2` to the callee-saved `x19` and the function saved and
 /// restored it (`divmod`: `str x19`, `ldr x19`). The block now destroys what

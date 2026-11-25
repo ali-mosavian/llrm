@@ -42,17 +42,6 @@ use crate::mc::inst::{
 use crate::mc::visit::Reg;
 use crate::mfunc::{Callee, INCOMING_ARGUMENTS, MBlock, MFunc, Op, OpList, PoolEntry, block_label};
 
-/// Whether the AAPCS64 keeps `name` across a call: x19..x28 and the low halves
-/// of v8..v15, by any view.
-fn callee_saved(name: &str) -> bool {
-    let number = name.trim_start_matches(|one: char| one.is_ascii_alphabetic()).parse::<u32>().ok();
-    match (name.chars().next(), number) {
-        (Some('x' | 'w'), Some(19..=28)) => true,
-        (Some('v' | 'd' | 's' | 'h' | 'b' | 'q'), Some(8..=15)) => true,
-        _ => false,
-    }
-}
-
 /// The machine opcode's name.
 fn opcode_name(code: u32) -> Option<&'static str> {
     // `TargetOpcode::COPY` is no output of a pattern, so the table does not
@@ -1641,11 +1630,22 @@ impl Emitter<'_> {
         if block.code.len() % 4 != 0 {
             return Err(format!("{name}: asm code that is not whole words"));
         }
-        // The block is a call to the allocator: the caller-saved registers
-        // are clobbered. A callee-saved one it names needs the prologue's
-        // save, which a block does not ask for yet.
-        if let Some(kept) = block.clobbers.iter().find(|one| callee_saved(one)) {
-            return Err(format!("asm: clobber of callee-saved register {kept} is not carried"));
+        // Each register the block declares it clobbers is one more def of the
+        // op, as the pin's `INLINEASM` has them implicit defs: the allocator
+        // keeps nothing in it across the block, and the frame saves a
+        // callee-saved one it writes (`PrologEpilogInserter`).
+        let mut defs = defs;
+        for clobber in &block.clobbers {
+            let (number, fpr) = match clobber.split_at(1) {
+                ("x" | "w", digits) => (digits.parse::<u32>().ok(), false),
+                ("v" | "d" | "s" | "h" | "b" | "q", digits) => (digits.parse::<u32>().ok(), true),
+                _ => continue,
+            };
+            let Some(number) = number else { continue };
+            let register = if fpr { Reg::Fpr(Vreg(number)) } else { Reg::Gpr(Gpr(number)) };
+            if !defs.contains(&register) {
+                defs.push(register);
+            }
         }
         self.ops.push(Op::Call { callee: Callee::Symbol(name), uses, defs, tail: false });
         Ok(())
