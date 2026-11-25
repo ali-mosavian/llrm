@@ -365,6 +365,9 @@ pub fn asm(name: &str) -> Option<AsmBlock> {
     let [hex, inputs, outputs, clobbers, memory, fixups @ ..] = &parts[..] else {
         return None;
     };
+    // `.sN`: the Nth block alike in all else and unlike in operand types
+    // (`llrm-cc`)
+    let fixups: Vec<&str> = fixups.iter().copied().filter(|one| !one.starts_with('s')).collect();
     let (hex, inputs, outputs, clobbers, memory) = (*hex, *inputs, *outputs, *clobbers, *memory);
     if hex.len() % 2 != 0 {
         return None;

@@ -203,3 +203,25 @@ fn test_a_register_or_memory_constraint_takes_the_register() {
         assert!(done.status.success(), "{target}: {}", String::from_utf8_lossy(&done.stderr));
     }
 }
+
+#[test]
+fn test_two_blocks_alike_but_for_their_operand_types_are_two_functions() {
+    // The block's name holds its bytes, registers and clobbers, not its operand
+    // types: an `int` and a pointer in the same register made one name two
+    // declarations, and llc stopped with "@llrm.ia32.asm.....: defined
+    // twice".
+    let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("m32asm-types-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let source = dir.join("t.c");
+    std::fs::write(
+        &source,
+        "int a(int x) { int y; __asm__(\"nop\" : \"=r\"(y) : \"r\"(x)); return y; }\n\
+         char *b(char *x) { char *y; __asm__(\"nop\" : \"=r\"(y) : \"r\"(x)); return y; }\n\
+         short c(short x) { short y; __asm__(\"nop\" : \"=r\"(y) : \"r\"(x)); return y; }\n",
+    )
+    .unwrap();
+    for target in ["x86_32-linux", "x86_64-linux"] {
+        let (done, _) = compile("types", &source, "-O2", target);
+        assert!(done.status.success(), "{target}: {}", String::from_utf8_lossy(&done.stderr));
+    }
+}

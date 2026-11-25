@@ -583,6 +583,11 @@ pub fn finish_with(
         }
     }
     let layout = frame_of(kept_area);
+    // `layout` takes `%a6` when it is free; an argument past `(d16,%sp)` with
+    // `%a6` allocated cannot be named
+    if !layout.has_fp && layout.fixed_out_of_reach() {
+        return Err(format!("{}: an argument is past the reach of (d16,%sp) and %a6 is allocated", function.name));
+    }
     let mut out = Vec::new();
     let (opening, closing) = frame_ops(&layout, cpu, push_frame, short, wants_size)?;
     opening.iter().for_each(|op| frame_op(op, &mut out, short));

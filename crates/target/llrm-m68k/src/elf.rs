@@ -25,7 +25,7 @@ use llrm_support::hash::HashMap;
 
 use crate::compile::Item;
 use crate::encode::encode;
-use crate::object::{relax_step, relaxed_long};
+use crate::object::{absolute_twin, far_branch, relax_step, relaxed_long};
 
 const R_68K_32: u32 = 1;
 const R_68K_16: u32 = 2;
@@ -152,11 +152,21 @@ pub fn object_with_branches(
     let mut items = crate::object::tail_jumps_narrowed(items);
     loop {
         match place(name, &items, exports, variables, long_branches)? {
-            Placed::Wide(wide) => {
-                for at in wide {
+            Placed::Wide(mut wide) => {
+                wide.sort_unstable();
+                wide.dedup();
+                // last first: a far form takes more items than it replaces
+                for at in wide.into_iter().rev() {
                     let Item::Inst(inst) = &mut items[at] else { continue };
-                    inst.opcode =
-                        relax_step(inst.opcode, long_branches).ok_or_else(|| format!("{} cannot be relaxed", inst.opcode))?;
+                    if let Some(next) = relax_step(inst.opcode, long_branches) {
+                        inst.opcode = next;
+                    } else if let Some(far) = far_branch(inst, format!(".Lfar{at}")) {
+                        items.splice(at..=at, far);
+                    } else if let Some(twin) = absolute_twin(inst.opcode) {
+                        inst.opcode = twin;
+                    } else {
+                        return Err(format!("{} cannot be relaxed", inst.opcode));
+                    }
                 }
             }
             Placed::Done(object) => return Ok(object),
@@ -221,12 +231,17 @@ fn place(
             }
         }
         // a 16-bit branch past +-32 KiB
-        if long_branches
-            && let Item::Inst(inst) = &items[*index]
-            && relaxed_long(inst.opcode).is_some()
-            && fixups.iter().filter(|one| one.size == 2).any(|fixup| {
-                resolved(*start, fixup).is_some_and(|value| i16::try_from(value).is_err())
-            })
+        if let Item::Inst(inst) = &items[*index]
+            && (absolute_twin(inst.opcode).is_some()
+                || if long_branches {
+                    relaxed_long(inst.opcode).is_some()
+                } else {
+                    far_branch(inst, String::new()).is_some()
+                })
+            && fixups
+                .iter()
+                .filter(|one| one.size == 2)
+                .any(|fixup| resolved(*start, fixup).is_some_and(|value| i16::try_from(value).is_err()))
         {
             wide.push(*index);
         }
@@ -262,7 +277,9 @@ fn place(
     // The globals: one section per role, each variable a symbol in it.
     let mut data_sections: Vec<Section> = Vec::new();
     let mut data_relocs: Vec<(usize, usize, usize, i64, String)> = Vec::new();
-    for (role, section_name) in [(Role::ROData, ".rodata"), (Role::Data, ".data"), (Role::Bss, ".bss"), (Role::InitFunctions, ".init_array")] {
+    for (role, section_name) in
+        [(Role::ROData, ".rodata"), (Role::Data, ".data"), (Role::Bss, ".bss"), (Role::InitFunctions, ".init_array")]
+    {
         let members: Vec<&Variable> = variables.iter().filter(|one| role_of(one) == role).collect();
         if members.is_empty() {
             continue;
@@ -332,12 +349,16 @@ fn place(
             );
     }
     let mut relocs = Vec::new();
-    for (start, _, fixups) in &pending {
+    for (start, index, fixups) in &pending {
         for fixup in fixups {
             let at = start + fixup.offset;
             if let Some(value) = resolved(*start, fixup) {
-                llrm_object::apply_fixup_be(&mut code, at, usize::from(fixup.size), true, value, ".text")
-                    .map_err(|error| error.0)?;
+                llrm_object::apply_fixup_be(&mut code, at, usize::from(fixup.size), true, value, ".text").map_err(
+                    |error| match &items[*index] {
+                        Item::Inst(inst) => format!("{} (`{}` to {}): {}", name, inst.opcode, fixup.symbol, error.0),
+                        _ => error.0,
+                    },
+                )?;
                 continue;
             }
             let target = undefined(&mut symbols, &mut index_of, &fixup.symbol);
