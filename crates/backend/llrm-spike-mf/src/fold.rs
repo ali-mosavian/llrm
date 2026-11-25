@@ -228,8 +228,10 @@ fn scanned_predecessors<C>(
     let at = position(function, id);
     (0..function.blocks.len())
         .filter(|&other| {
-            terminators(&function.blocks[other].insts).iter().any(|inst| names(inst, id))
-                || (other + 1 == at && can_fall_through(function, other))
+            let insts = &function.blocks[other].insts;
+            // not `terminators`: this check is not the work the count measures
+            let first = insts.iter().rposition(|inst| !inst.terminator).map_or(0, |last| last + 1);
+            insts[first..].iter().any(|inst| names(inst, id)) || (other + 1 == at && can_fall_through(function, other))
         })
         .collect()
 }
