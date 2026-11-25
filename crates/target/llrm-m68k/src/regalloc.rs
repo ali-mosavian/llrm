@@ -471,7 +471,7 @@ pub fn shared_licm(
 
 /// `BranchFolder` over the m68k function. With `size`, a shared tail leaves a
 /// call's arguments in the block that made them: they are pushed there and
-/// [`crate::crossjump`] shares what the paths close with.
+/// [`crate::latefold`] shares what the paths close with.
 pub fn branch_fold(
     function: &mut MFunction,
     assignment: &Assignment,

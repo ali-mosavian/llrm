@@ -138,8 +138,8 @@ pub struct LoopCtx<'a> {
     pub innermost: &'a IdMap<BlockId, usize>,
     pub state: &'a State,
     /// Only sink through exit phis that read nothing else
-    /// (`isTriviallyReplaceablePHI`): the pass that moves instructions does
-    /// not split exit blocks.
+    /// (`isTriviallyReplaceablePHI`): the edits that move instructions do not
+    /// split exit blocks; `run` splits them first, then looks again.
     pub strict_sink: bool,
     /// `LicmAllowSpeculation` of this run: false for LPM1's first LICM.
     pub allow_speculation: bool,
@@ -405,10 +405,30 @@ pub fn run(
     analyses: &mut Analyses,
     allow_speculation: bool,
 ) -> Decisions {
-    let shape = analyses.get::<Shape>(unit.context, unit.layout, unit.function);
     let mut decisions = Decisions::default();
+    // The loops done: a loop whose exit blocks had their predecessors split
+    // (`sink` calls `splitPredecessorsOfLoopExit` in the middle of its walk)
+    // changes the blocks and edges every analysis stands on, so the walk starts
+    // again with them made afresh, past the loops it finished.
+    let mut done = llrm_mir::dense::IdSet::<BlockId>::new();
+    while run_loops(unit, analyses, allow_speculation, &mut decisions, &mut done) {
+        analyses.invalidate(unit.function, &PreservedAnalyses::none());
+    }
+    decisions
+}
+
+/// The loops of `run` not yet `done`, until one needs its exits split: whether
+/// they were, and the walk is to start again.
+fn run_loops(
+    unit: &mut passes::Unit,
+    analyses: &mut Analyses,
+    allow_speculation: bool,
+    decisions: &mut Decisions,
+    done: &mut llrm_mir::dense::IdSet<BlockId>,
+) -> bool {
+    let shape = analyses.get::<Shape>(unit.context, unit.layout, unit.function);
     if shape.loops.is_empty() {
-        return decisions;
+        return false;
     }
     let outer = std::rc::Rc::clone(analyses.outer());
     let registers = analyses.get::<llrm_analysis::manager::Registers>(unit.context, unit.layout, unit.function);
@@ -518,6 +538,9 @@ pub fn run(
     let memo = safety::SafetyMemo::default();
     for one in shape.loops.iter() {
         let header = cfg::block(one.header);
+        if done.contains(&header) {
+            continue;
+        }
         // A loop pass manager run for one loop (LPM1's, per loop): the others
         // are not looked at yet.
         if !crate::loopfilter::allows(header) {
@@ -540,11 +563,20 @@ pub fn run(
         // has replaced, so the loop is looked at again while a round
         // reassociated something.
         for round in 0.. {
-            let (sunk, hoisted, reassociated) = looking!(one, true, |view, ctx, mssa, aa, accesses| {
+            // As `sink` asks: through phis that read something else too, once
+            // the exit's predecessors are split.
+            let ((sunk, hoisted, reassociated), splits) = looking!(one, false, |view, ctx, mssa, aa, accesses| {
                 let found = sink_and_hoist(view, &outer, &ctx, mssa, &aa, accesses, &memo);
-                record_edits(view, &mut decisions, header, &found.0, &found.1, &found.2);
-                found
+                let splits = sink::exits_needing_split(&ctx, &found.0);
+                (found, splits)
             });
+            if !splits.is_empty() {
+                for exit in splits {
+                    apply::split_exit(&mut *unit.function, exit);
+                }
+                return true;
+            }
+            record_edits(&*unit, decisions, header, &sunk, &hoisted, &reassociated);
             {
                 let built = graph.as_mut().expect("a graph");
                 let mut kept = apply::Graph {
@@ -583,7 +615,10 @@ pub fn run(
                 break;
             }
         }
-        let Some(preheader) = preheader else { continue };
+        let Some(preheader) = preheader else {
+            done.insert(header);
+            continue;
+        };
         // The stores of a promotion go before the first instruction of each
         // exit block that is not a phi, taken before any promotion: the
         // next ones follow them.
@@ -654,10 +689,11 @@ pub fn run(
                     );
             }
         }
+        done.insert(header);
     }
     // `PA.preserve<MemorySSAAnalysis>()`: the graph the updater kept is the
     // manager's from here, as EarlyCSE's is.
-    if found_changed(&decisions)
+    if found_changed(decisions)
         && let Some(built) = graph
     {
         analyses.replace::<llrm_analysis::manager::MemorySsa>(
@@ -669,9 +705,9 @@ pub fn run(
         );
         decisions.graph_kept = true;
     }
-    decisions.safety_scans = memo.scans.get();
-    decisions.safety_pred_lookups = memo.pred_lookups.get();
-    decisions
+    decisions.safety_scans += memo.scans.get();
+    decisions.safety_pred_lookups += memo.pred_lookups.get();
+    false
 }
 
 /// Whether the loop has an instruction any of the three could start from: one

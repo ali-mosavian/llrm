@@ -15,6 +15,10 @@
 //!   user, become the operation applied to a phi of the left operands (or to
 //!   the one left operand all of them share). The new operation goes at the top
 //!   of the phi's block, after the phis.
+//! - Two or more incoming values that are the same binary operator or compare
+//!   of two variables, each with one user, where one operand is the same in all
+//!   of them, become the operation applied to that operand and a phi of the
+//!   other (`foldPHIArgBinOpIntoPHI`).
 //! - Two or more incoming values that are simple loads with one user each and
 //!   no memory write after them in their block
 //!   (`isSafeAndProfitableToSinkLoad`) become one load of a phi of the
@@ -45,10 +49,9 @@
 //! constant right operand, the intersection of the binary operators' flags.
 //!
 //! DEVIATE 1: the rest of `visitPHINode` is not translated: the
-//! `insertvalue`/`extractvalue` and binary-operator-of-two-variables forms of
-//! `foldPHIArgOpIntoPHI`, `foldPHIArgIntToPtrToPHI`, the pointer-cast phi,
-//! `foldIntegerTypedPHI`, `SliceUpIllegalIntegerPHI`, and
-//! `foldDependentIVs`. Exit: later slices.
+//! `insertvalue`/`extractvalue` forms of `foldPHIArgOpIntoPHI`,
+//! `foldPHIArgIntToPtrToPHI`, the pointer-cast phi, `foldIntegerTypedPHI`,
+//! `SliceUpIllegalIntegerPHI`, and `foldDependentIVs`. Exit: later slices.
 //!
 //! DEVIATE 2: no check that the block's terminator is an EH pad, which MIR
 //! cannot have a phi before; no debug locations.
@@ -545,7 +548,7 @@ impl Combiner<'_> {
             Opcode::Binary(_) | Opcode::ICmp(_) => {
                 let rhs = *first_inst.operands.get(1)?;
                 if !matches!(rhs, Operand::Constant(_)) {
-                    return None;
+                    return self.fold_phi_arg_bin_op_into_phi(phi, incoming, first);
                 }
                 (None, Some(rhs))
             }
@@ -589,6 +592,61 @@ impl Combiner<'_> {
         };
         let op_flags = if matches!(first_inst.opcode, Opcode::Binary(_)) { flags } else { Flags::default() };
         let new = self.insert_before(at, first_inst.opcode, phi_ty, operands, op_flags);
+        Some(Operand::Value(self.function.instruction(new).result.expect("a value")))
+    }
+
+    /// `foldPHIArgBinOpIntoPHI`: `phi [op a, b], [op a, c]` is `op a, phi [b,
+    /// c]`; a phi is made for each operand that differs, none when both do
+    /// (the pin does not trade one phi for two: register pressure in a loop
+    /// header).
+    fn fold_phi_arg_bin_op_into_phi(
+        &mut self,
+        phi: InstId,
+        incoming: &[(Operand, BlockId)],
+        first: InstId,
+    ) -> Option<Operand> {
+        let first_inst = self.function.instruction(first).clone();
+        let phi_ty = self.function.instruction(phi).ty;
+        let (left_ty, right_ty) = (self.type_of(first_inst.operands[0]), self.type_of(first_inst.operands[1]));
+        let mut flags = first_inst.flags;
+        let (mut same_left, mut same_right) = (true, true);
+        for &(value, _) in &incoming[1..] {
+            let def = self.definition_of(value)?;
+            let Operand::Value(used) = value else { return None };
+            let inst = self.function.instruction(def);
+            // The opcode includes a compare's predicate.
+            if !self.has_one_user(used)
+                || inst.opcode != first_inst.opcode
+                || self.type_of(inst.operands[0]) != left_ty
+                || self.type_of(inst.operands[1]) != right_ty
+            {
+                return None;
+            }
+            same_left &= inst.operands[0] == first_inst.operands[0];
+            same_right &= inst.operands[1] == first_inst.operands[1];
+            flags = flags.intersect(inst.flags);
+        }
+        if !same_left && !same_right {
+            return None;
+        }
+        let mut sides = [first_inst.operands[0], first_inst.operands[1]];
+        for (side, (same, ty)) in [(same_left, left_ty), (same_right, right_ty)].into_iter().enumerate() {
+            if same {
+                continue;
+            }
+            let operands: Vec<Operand> = incoming
+                .iter()
+                .flat_map(|&(value, from)| {
+                    let def = self.definition_of(value).expect("an instruction");
+                    [self.function.instruction(def).operands[side], Operand::Block(from)]
+                })
+                .collect();
+            let new_phi = self.insert_before(phi, Opcode::Phi, ty, operands, Flags::default());
+            sides[side] = Operand::Value(self.function.instruction(new_phi).result.expect("a value"));
+        }
+        let at = self.after_phis(phi);
+        let op_flags = if matches!(first_inst.opcode, Opcode::Binary(_)) { flags } else { Flags::default() };
+        let new = self.insert_before(at, first_inst.opcode, phi_ty, sides.to_vec(), op_flags);
         Some(Operand::Value(self.function.instruction(new).result.expect("a value")))
     }
 }

@@ -241,6 +241,38 @@ fn can_sink(
         })
 }
 
+/// The exit blocks `sink` splits the predecessors of
+/// (`splitPredecessorsOfLoopExit`): those of a phi that reads a sunk
+/// instruction and something else, in the order the sunk instructions have
+/// them. The loop is edited and looked at again, so that every such phi is then
+/// trivially replaceable.
+pub fn exits_needing_split(
+    ctx: &LoopCtx,
+    sunk: &[(InstId, Sinking)],
+) -> Vec<BlockId> {
+    let function = ctx.function;
+    let mut exits: Vec<BlockId> = vec![];
+    for &(inst, how) in sunk {
+        if how == Sinking::Erased {
+            continue;
+        }
+        let Some(result) = function.instruction(inst).result else { continue };
+        for user in users(ctx, inst).filter(|&user| !ctx.contains(user)) {
+            if ctx.state.sunk.borrow().contains(&user) || !matches!(function.instruction(user).opcode, Opcode::Phi) {
+                continue;
+            }
+            let trivial = function.instruction(user).operands.chunks(2).all(|pair| pair[0] == Operand::Value(result));
+            if !trivial
+                && let Some(block) = function.parent(user)
+                && !exits.contains(&block)
+            {
+                exits.push(block);
+            }
+        }
+    }
+    exits
+}
+
 /// `canSplitPredecessors`: the phi's block does not start with a landing pad.
 fn can_split_predecessors(
     ctx: &LoopCtx,
