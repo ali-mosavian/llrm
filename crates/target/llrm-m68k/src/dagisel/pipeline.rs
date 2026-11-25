@@ -19,7 +19,10 @@ use llrm_codegen::backend::registerinfo::RegId;
 use llrm_codegen::backend::selectiondag::SelectionDAG;
 use llrm_codegen::backend::selectiondag::dag_target::{DagTarget, Phases, Select, select_units};
 use llrm_codegen::backend::selectiondag::dagisel_adapter::PinRegisters;
+use llrm_codegen::backend::selectiondag::isd::ISD;
+use llrm_codegen::backend::selectiondag::mvt::EVT;
 use llrm_codegen::backend::selectiondag::schedule::{Preference, SchedInfo, Unit};
+use llrm_codegen::backend::selectiondag::{NodeData, SDValue};
 use llrm_dagisel::interp::Selector;
 
 use super::generated::ids::reg as pin;
@@ -145,6 +148,32 @@ impl SchedInfo for M68kSched {
 
     fn call_frame_destroy(&self) -> Option<u32> {
         Some(u32::from(super::generated::ids::opcode::ADJCALLSTACKUP))
+    }
+
+    /// A `move.l`, `clr.l` store of a call's argument: `(%sp)` or `(d,%sp)`.
+    fn call_argument_slot(
+        &self,
+        dag: &SelectionDAG,
+        node: u32,
+    ) -> Option<(u32, i64)> {
+        use super::generated::ids::opcode as op;
+        let of = |at: u32| dag.node(SDValue { node: at, res: 0 });
+        let this = of(node);
+        let ISD::Machine(code) = this.opcode else { return None };
+        // the displacement operand comes first in the `(d,An)` forms
+        let (base, displacement) = match code as u16 {
+            op::MOV32jr | op::MOV32ji | op::CLR32j => (this.ops.first()?, 0),
+            op::MOV32pr | op::MOV32pi | op::CLR32p => {
+                let NodeData::Const { bits, .. } = of(this.ops.first()?.node).data else { return None };
+                (this.ops.get(1)?, bits as i64)
+            }
+            _ => return None,
+        };
+        let copy = of(base.node);
+        let sp = copy.opcode == ISD::CopyFromReg
+            && copy.ops.get(1).is_some_and(|reg| matches!(of(reg.node).data, NodeData::PhysReg(id) if id == reg::SP));
+        let chain = this.ops.last()?;
+        (sp && dag.value_type(*chain) == EVT::OTHER).then_some((chain.node, displacement))
     }
 
     fn copy_clobbers(&self) -> Option<u16> {

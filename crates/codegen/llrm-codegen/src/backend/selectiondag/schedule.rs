@@ -145,6 +145,21 @@ pub trait SchedInfo {
     fn call_frame_destroy(&self) -> Option<u32> {
         None
     }
+    /// DEVIATE CALL-PUSH-ORDER: where selected node `node` stores an argument
+    /// of a call, as (the call's chain, the offset in its argument area). The
+    /// stores of one call are then scheduled in descending offset, the order
+    /// the target pushes them in. The pin leaves them unordered, and the
+    /// post-RA push planner can use a call only when a stored register is
+    /// not redefined before a later store; gcc's `emit_push_insn` emits them
+    /// in push order. Exit: none. None: no ordering.
+    fn call_argument_slot(
+        &self,
+        dag: &SelectionDAG,
+        node: u32,
+    ) -> Option<(u32, i64)> {
+        let _ = (dag, node);
+        None
+    }
     /// DEVIATE: the register a copy of a virtual register may clobber, as the
     /// move it can become after allocation does (M68k's `MOVE` sets CCR). A
     /// copy is then held back from between a flag-setter and its reader, where
@@ -600,6 +615,7 @@ impl<'a> Graph<'a> {
         };
         graph.build_sched_units(root);
         graph.add_sched_edges();
+        graph.order_call_argument_stores();
         graph
     }
 
@@ -731,6 +747,32 @@ impl<'a> Graph<'a> {
         res: usize,
     ) -> bool {
         self.users_of(n).iter().any(|&u| self.ops(u).iter().any(|op| op.node == n && usize::from(op.res) == res))
+    }
+
+    /// DEVIATE CALL-PUSH-ORDER (`SchedInfo::call_argument_slot`): each call's
+    /// argument stores run in descending offset: an artificial edge from each
+    /// store to the next lower one.
+    fn order_call_argument_stores(&mut self) {
+        let mut calls: HashMap<u32, Vec<(i64, usize)>> = HashMap::default();
+        for su in 0..self.sus.len() {
+            for &n in &self.sus[su].nodes {
+                if let Some((call, offset)) = self.info.call_argument_slot(self.dag, n) {
+                    calls.entry(call).or_default().push((offset, su));
+                }
+            }
+        }
+        if llrm_support::debug::enabled("sched") {
+            eprintln!("sched: {} call(s) with ordered argument stores", calls.len());
+        }
+        for stores in calls.values_mut() {
+            stores.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)));
+            for pair in stores.windows(2) {
+                let (higher, lower) = (pair[0].1, pair[1].1);
+                if higher != lower {
+                    self.add_pred(lower, Dep { su: higher, kind: Kind::Artificial, latency: 0, reg: None });
+                }
+            }
+        }
     }
 
     /// `AddSchedEdges`.

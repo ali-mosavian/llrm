@@ -845,7 +845,7 @@ pub struct LoopSplit {
 
 impl FunctionPass for LoopSplit {
     fn name(&self) -> &'static str {
-        "loopsplit"
+        "loop-split"
     }
 
     fn translation(&self) -> Option<&'static str> {
