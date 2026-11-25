@@ -56,9 +56,7 @@ fn a_counter_value_that_needs_a_word_keeps_it() {
 /// and a byte index both reach one address use, so the formula sums a word
 /// pointer and a byte register. The sum was done in the byte type
 /// (`Formula::ty` took the first register's) and panicked in debug with
-/// "SCEVAddExpr operand types don't match!" (bench/shellsort at every level);
-/// a scale of such a formula multiplied a byte register by a word constant
-/// ("SCEVMulExpr operand types don't match!").
+/// "SCEVAddExpr operand types don't match!".
 #[test]
 fn a_byte_index_beside_a_word_pointer_is_summed_as_a_word() {
     let ir = format!(
@@ -116,5 +114,36 @@ exit:
     for level in [Level::O1, Level::O2, Level::Os] {
         let text = assembly(&ir, &Request::new(level)).unwrap_or_else(|e| panic!("{level:?}: {e}"));
         assert!(text.contains("sort:"), "{level:?}:\n{text}");
+    }
+}
+
+/// A word counter compared with a byte-ranged call result: the compare's
+/// scaled formula holds a narrowed register, and its scale factor was a word
+/// constant, so the product panicked in debug with "SCEVMulExpr operand types
+/// don't match!" (the factor is now a constant of each register's own width).
+#[test]
+fn a_word_counter_compared_with_a_byte_ranged_value_scales_each_in_its_width() {
+    let ir = format!(
+        "target datalayout = \"{}\"
+declare range(i16 0, 256) i16 @next()
+define i32 @loop() {{
+entry:
+  %n = tail call i16 @next()
+  br label %body
+body:
+  %i = phi i16 [ %i.next, %body ], [ 0, %entry ]
+  %v = load volatile i16, ptr null, align 1
+  %i.next = add i16 %i, 1
+  %c = icmp eq i16 %i, %n
+  br i1 %c, label %exit, label %body
+exit:
+  ret i32 0
+}}
+",
+        datalayout()
+    );
+    for level in [Level::O1, Level::O2, Level::Os] {
+        let text = assembly(&ir, &Request::new(level)).unwrap_or_else(|e| panic!("{level:?}: {e}"));
+        assert!(text.contains("loop:"), "{level:?}:\n{text}");
     }
 }
