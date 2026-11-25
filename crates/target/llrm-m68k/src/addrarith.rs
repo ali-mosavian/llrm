@@ -18,6 +18,13 @@
 //! size they are ordered by bytes first. None of the three change the codes,
 //! so the add must not be one whose codes a branch reads.
 //!
+//! The copy the add reads may be read by addresses besides the add (a byte
+//! load that folded the step as a displacement, `move.b (1,%a2)`): those read
+//! the base, and a copy after the add whose users are displaced addresses in
+//! the block reads the add's result with the displacement lowered by the step,
+//! so `*++p` is `addq.l #1, %a0; move.b (%a0)` without the old pointer kept
+//! live beside the new one (QB `kw_scan`: two copies and a register a trip).
+//!
 //! A second, wide run ([`address_adds`] with `wide`,
 //! `Options::address_data_uses`) also takes a result that an either-class
 //! operand (a store's source) reads or that is returned in an address register;
@@ -273,6 +280,7 @@ fn address_copy(
     b: usize,
     at: usize,
     x: u32,
+    wide: bool,
 ) -> Option<(usize, Reg)> {
     let insts = &function.blocks[b].insts;
     let copy = insts[..at]
@@ -298,7 +306,10 @@ fn address_copy(
                 Use::Phi(_) => false,
             },
         );
-    if others != 1 || !addresses_only {
+    // only in the wide run of a size build, which the trial keeps where it is
+    // smaller: one more address register live can cost a spill (-O1's bench
+    // cells grew 4 to 16 bytes with it)
+    if others != 1 || !addresses_only || (own.len() > 1 && !wide) {
         return None;
     }
     match function.classes[y as usize] {
@@ -347,7 +358,7 @@ pub fn address_adds(
     for b in 0..function.blocks.len() {
         let mut at = 0;
         while at < function.blocks[b].insts.len() {
-            if let Some(done) = rewrite_one(function, &uses, b, at, cpu, size) {
+            if let Some(done) = rewrite_one(function, &uses, b, at, cpu, size, wide) {
                 // the copy before the add is gone
                 made += 1;
                 at = done;
@@ -366,19 +377,20 @@ fn rewrite_one(
     at: usize,
     cpu: Cpu,
     size: bool,
+    wide: bool,
 ) -> Option<usize> {
     let insts = &function.blocks[b].insts;
     let Kind::Op(name) = insts[at].kind else { return None };
     let sign = match name {
         "ADD32di" | "ADDQ32di" => 1,
         "SUB32di" | "SUBQ32di" => -1,
-        "ADD32dr" | "ADD32dd" => return rewrite_indexed(function, uses, b, at),
+        "ADD32dr" | "ADD32dd" => return rewrite_indexed(function, uses, b, at, wide, size),
         _ => return None,
     };
     let [Operand::Def(Reg::Virt(d)), Operand::Use(Reg::Virt(x)), Operand::Imm(value)] = insts[at].operands[..] else {
         return None;
     };
-    let (copy, base) = address_copy(function, uses, b, at, x)?;
+    let (copy, base) = address_copy(function, uses, b, at, x, wide && size)?;
     if !codes_unread(&function.blocks[b].insts, at)
         || !reaches_addresses_only(function, uses, d, Some(x), &mut HashSet::default())
     {
@@ -518,6 +530,8 @@ fn rewrite_indexed(
     uses: &[Vec<Use>],
     b: usize,
     at: usize,
+    wide: bool,
+    size: bool,
 ) -> Option<usize> {
     let insts = &function.blocks[b].insts;
     let [Operand::Def(Reg::Virt(d)), Operand::Use(Reg::Virt(first)), Operand::Use(Reg::Virt(second))] =
@@ -525,9 +539,9 @@ fn rewrite_indexed(
     else {
         return None;
     };
-    let (copy, base, x, index) = [(first, second), (second, first)]
-        .into_iter()
-        .find_map(|(x, index)| address_copy(function, uses, b, at, x).map(|(copy, base)| (copy, base, x, index)))?;
+    let (copy, base, x, index) = [(first, second), (second, first)].into_iter().find_map(|(x, index)| {
+        address_copy(function, uses, b, at, x, wide && size).map(|(copy, base)| (copy, base, x, index))
+    })?;
     if !codes_unread(insts, at) || !reaches_addresses_only(function, uses, d, Some(x), &mut HashSet::default()) {
         return None;
     }
