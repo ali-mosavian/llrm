@@ -48,6 +48,11 @@ def product_modules():
             i+=1
         mods.append((toks[toks.index('-c')+1],keep))
     return mods
+def clang_headers():
+    """The arm64-glibc row's header order for the pin's clang, as targets.toml has it: no host headers (x86 glibc), clang's own, the cross glibc last (`-idirafter`) so a project's `-isystem` dir wins: a plain `-isystem` glibc put its error.h ahead of the project's and qbrt.c read as refused (b_inonerr undeclared)."""
+    if not SYSROOT: return []
+    res=subprocess.run([CLANG,'-print-resource-dir'],capture_output=True,text=True).stdout.strip()
+    return ['-nostdinc','-isystem',res+'/include','-idirafter',SYSROOT+'/usr/aarch64-linux-gnu/include']
 BARS=('gcc','clang') if CLANG else ('gcc',)
 def sizes(o,prefixes):
     r=subprocess.run(['size','-A',o],capture_output=True,text=True).stdout
@@ -72,7 +77,7 @@ def one(mod):
         ours_env=dict(os.environ,LLRM_CC_TARGET=tgt)
         if R['llc']: ours_env['LLRM_LLC']=f"{D}/{R['llc']}"
         cmds=[('ours',[f'{D}/llrm-cc',*own,*CF,'-c',f,'-o',f'{t}/o.o'],ours_env),('gcc',[GCC,*own,*GCC_CF,'-c',f,'-o',f'{t}/g.o'],os.environ)]
-        if CLANG: cmds.append(('clang',[CLANG,*R['clang'],*(['-isystem',SYSROOT+'/usr/aarch64-linux-gnu/include'] if SYSROOT else []),*own,*CF,'-c',f,'-o',f'{t}/c.o'],os.environ))
+        if CLANG: cmds.append(('clang',[CLANG,*R['clang'],*clang_headers(),*own,*CF,'-c',f,'-o',f'{t}/c.o'],os.environ))
         for v,cmd,env in cmds:
             r=subprocess.run(cmd,cwd=T,env=env,capture_output=True)
             o=cmd[-1]
