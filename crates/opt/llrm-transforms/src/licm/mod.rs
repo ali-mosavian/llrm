@@ -410,7 +410,7 @@ pub fn run(
     // (`sink` calls `splitPredecessorsOfLoopExit` in the middle of its walk)
     // changes the blocks and edges every analysis stands on, so the walk starts
     // again with them made afresh, past the loops it finished.
-    let mut done: std::collections::HashSet<BlockId> = Default::default();
+    let mut done = llrm_mir::dense::IdSet::<BlockId>::new();
     while run_loops(unit, analyses, allow_speculation, &mut decisions, &mut done) {
         analyses.invalidate(unit.function, &PreservedAnalyses::none());
     }
@@ -424,7 +424,7 @@ fn run_loops(
     analyses: &mut Analyses,
     allow_speculation: bool,
     decisions: &mut Decisions,
-    done: &mut std::collections::HashSet<BlockId>,
+    done: &mut llrm_mir::dense::IdSet<BlockId>,
 ) -> bool {
     let shape = analyses.get::<Shape>(unit.context, unit.layout, unit.function);
     if shape.loops.is_empty() {
