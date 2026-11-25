@@ -73,6 +73,7 @@ fn test_a_block_may_clobber_callee_saved_registers_and_the_frame_saves_them() {
         let ran = Command::new("qemu-aarch64").arg(&program).output().unwrap();
         assert_eq!(String::from_utf8_lossy(&ran.stdout), "12 1001 3.0 1.5\n", "{level}");
     }
+}
 
 /// A block was a call to the allocator, so a pointer kept across `udiv`/`msub`
 /// moved from `x2` to the callee-saved `x19` and the function saved and
