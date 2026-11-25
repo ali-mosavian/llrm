@@ -2,10 +2,11 @@
 //!
 //! # How it works
 //! [`cheaper`] prices both builds on the CPU: bytes as they are, clocks
-//! weighted by loop depth (a backward branch to a label makes the lines
-//! between that can reach it a loop; each nesting multiplies by ten), then asks
-//! the level's [`Price`] whether the first beats the second. A price the tables
-//! cannot give keeps the second (the build without the optional pass).
+//! weighted by the control-flow graph of the items (the share of runs reaching
+//! each, times ten per natural loop it is in, at most three), then asks the
+//! level's [`Price`] whether the first beats the second. The weights do not
+//! depend on the order the blocks are laid out in. A price the tables cannot
+//! give keeps the second (the build without the optional pass).
 //!
 //! A pass whose price needs the allocation (the moves an address register
 //! costs) is decided here, by building the function both ways, instead of
@@ -49,7 +50,8 @@ fn ending(
         ("RTS", _) => Some(Ending::Return),
         (name, Some(to)) if name.starts_with("BRA") => Some(Ending::Jump(to)),
         (name, Some(to)) if name.starts_with('B') && !name.starts_with("BSR") => Some(Ending::Branch(to)),
-        // `dbf` is the loop's back edge: left out, its loop is not weighted by depth and looks ten times cheaper
+        // `dbf` is the loop's back edge: left out, its loop is not weighted by
+        // depth and looks ten times cheaper
         (name, Some(to)) if name.starts_with("DBF") => Some(Ending::Branch(to)),
         _ => None,
     }
@@ -151,8 +153,9 @@ fn labels_of(items: &[Item]) -> HashMap<&str, usize> {
         .collect()
 }
 
-/// The items as a graph: an item is a node, its edges are where control goes next. The loops and the
-/// shares read off this graph do not depend on the order the blocks are laid out in.
+/// The items as a graph: an item is a node, its edges are where control goes
+/// next. The loops and the shares read off this graph do not depend on the
+/// order the blocks are laid out in.
 struct ItemGraph {
     nodes: Vec<BlockId>,
     succs: Vec<BlockList>,
@@ -218,10 +221,11 @@ impl FlowGraph for ItemGraph {}
 /// For each item of `items`, the share of runs that reach it (thousandths, a
 /// two-way branch splits evenly) and the loops it sits in, three at most.
 ///
-/// Translation: the loops are `MachineCycleInfo`'s cycles of the item graph (the pin's
-/// `MachineLoopInfo` for a reducible graph), not the layout span between a backward branch
-/// and its label; the share flows along the edges that are not a cycle's back edge, in
-/// reverse postorder, so the same graph laid out in another block order has the same weights.
+/// Translation: the loops are `MachineCycleInfo`'s cycles of the item graph
+/// (the pin's `MachineLoopInfo` for a reducible graph), not the layout span
+/// between a backward branch and its label; the share flows along the edges
+/// that are not a cycle's back edge, in reverse postorder, so the same graph
+/// laid out in another block order has the same weights.
 fn run_weights(items: &[Item]) -> Vec<(u64, usize)> {
     let labels = labels_of(items);
     let ends: Vec<Option<Ending>> = items
@@ -234,7 +238,8 @@ fn run_weights(items: &[Item]) -> Vec<(u64, usize)> {
     let graph = ItemGraph::of(&ends);
     let cycles = CycleInfo::compute(&graph);
     let n = items.len();
-    // an edge into the header of a cycle that holds its source is that cycle's back edge
+    // an edge into the header of a cycle that holds its source is that cycle's
+    // back edge
     let is_back = |from: usize, to: usize| {
         let cycle = cycles.get_cycle(BlockId(to as u32));
         cycle.is_valid()
@@ -265,10 +270,11 @@ fn run_weights(items: &[Item]) -> Vec<(u64, usize)> {
         }
     }
     order.reverse();
-    // Whether control can leave the function from an item without taking a back edge: a branch
-    // whose one way only goes round the loop again sends its share the other way, however the
-    // blocks are laid out (a loop's exit test is a forward branch past a `bra` back, or a
-    // backward branch over the exit).
+    // Whether control can leave the function from an item without taking a back
+    // edge: a branch whose one way only goes round the loop again sends its
+    // share the other way, however the blocks are laid out (a loop's exit
+    // test is a forward branch past a `bra` back, or a backward branch over
+    // the exit).
     let mut leaves = vec![false; n];
     for &at in order.iter().rev() {
         let next = forward(at);
@@ -674,18 +680,24 @@ pub fn cheaper(
 
 #[cfg(test)]
 mod ending_tests {
-    use super::{Ending, ending};
-    use crate::mc;
     use std::collections::HashMap;
 
-    /// A counted loop ending in `dbf` was priced as one pass: the unroll trial (loop_interchange 68020 -O1) read
-    /// it ten times cheaper than the `bne` loop it replaced, and kept an unrolled nest 586 B larger and slower.
+    use super::{Ending, ending};
+    use crate::mc;
+
+    /// A counted loop ending in `dbf` was priced as one pass: the unroll trial
+    /// (loop_interchange 68020 -O1) read it ten times cheaper than the
+    /// `bne` loop it replaced, and kept an unrolled nest 586 B larger and
+    /// slower.
     #[test]
     fn a_dbf_loop_ends_in_a_branch_back_to_its_label() {
         let labels: HashMap<&str, usize> = [(".L1", 0)].into_iter().collect();
         let dbf = mc::Inst {
             opcode: "DBF16dl",
-            operands: vec![mc::Operand::Reg(llrm_lir::registers::RegId::from(crate::reg::D0)), mc::Operand::Symbol(".L1".into(), 0)],
+            operands: vec![
+                mc::Operand::Reg(llrm_lir::registers::RegId::from(crate::reg::D0)),
+                mc::Operand::Symbol(".L1".into(), 0),
+            ],
         };
         assert!(matches!(ending(&dbf, &labels), Some(Ending::Branch(0))));
     }
@@ -693,11 +705,12 @@ mod ending_tests {
 
 #[cfg(test)]
 mod call_weight_tests {
+    use llrm_lir::registers::RegId;
+
     use super::price_of_functions;
     use crate::compile::Item;
     use crate::dagisel::hooks::Cpu;
     use crate::mc;
-    use llrm_lir::registers::RegId;
 
     fn inst(
         opcode: &'static str,
@@ -706,10 +719,12 @@ mod call_weight_tests {
         Item::Inst(mc::Inst { opcode, operands })
     }
 
-    /// `long_shift_by_bits` -Os 68000: 28 calls of `put64` went through the register the call-target hoist
-    /// loaded (`lea put64, %a4; jsr (%a4)`), which the trial did not count as calls, so `put64` was priced
-    /// as run once: the kept-call build looked cheaper than the inline (48,758 clk against 51,452) while
-    /// it ran 4,156 clk slower. A callee is priced once for each call, hoisted or not.
+    /// `long_shift_by_bits` -Os 68000: 28 calls of `put64` went through the
+    /// register the call-target hoist loaded (`lea put64, %a4; jsr (%a4)`),
+    /// which the trial did not count as calls, so `put64` was priced as run
+    /// once: the kept-call build looked cheaper than the inline (48,758 clk
+    /// against 51,452) while it ran 4,156 clk slower. A callee is priced
+    /// once for each call, hoisted or not.
     #[test]
     fn a_callee_reached_through_a_hoisted_register_is_priced_once_per_call() {
         let a4 = RegId::from(crate::reg::A4);
@@ -724,8 +739,9 @@ mod call_weight_tests {
         assert_eq!(both, main_clocks + 4 * put_clocks, "put64 is priced once, not once per call");
     }
 
-    /// The same call sat in a loop: the callee ran once per pass, ten to the loop depth, and was priced
-    /// as run once for the one call instruction (`put64` in `long_shift_by_bits`' loops).
+    /// The same call sat in a loop: the callee ran once per pass, ten to the
+    /// loop depth, and was priced as run once for the one call instruction
+    /// (`put64` in `long_shift_by_bits`' loops).
     #[test]
     fn a_call_in_a_loop_prices_its_callee_once_per_pass() {
         let body = || vec![inst("CALLb", vec![mc::Operand::Symbol("report".into(), 0)]), inst("RTS", vec![])];
@@ -770,9 +786,10 @@ mod weights {
         run_weights(items)[at]
     }
 
-    /// One loop, its exit test laid out two ways: a backward branch over the exit, and a forward
-    /// branch past a `bra` back. The graph is the same; the exit's share of the runs was 1000 and 500,
-    /// and `price_of` priced a function by the order of its blocks.
+    /// One loop, its exit test laid out two ways: a backward branch over the
+    /// exit, and a forward branch past a `bra` back. The graph is the same;
+    /// the exit's share of the runs was 1000 and 500, and `price_of` priced
+    /// a function by the order of its blocks.
     #[test]
     fn the_same_loop_in_two_block_orders_has_the_same_weights() {
         let rotated = [label("H"), inst("NOP", None), inst("Bne16", Some("H")), inst("RTS", None)];
