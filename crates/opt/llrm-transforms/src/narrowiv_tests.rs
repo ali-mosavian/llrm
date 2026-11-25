@@ -86,7 +86,7 @@ fn a_target_that_narrows_for_size_only_narrows_at_os_and_not_at_speed() {
 fn a_twelve_trip_counter_of_four_bytes_is_one_byte() {
     let after = run(&counting("i32", 0, "add", 1, "icmp ult i32 %next, 12"), true);
     assert!(after.contains("phi i8 [ 0, %entry ]"), "{after}");
-    assert!(after.contains("add i8"), "{after}");
+    assert!(after.contains("add nuw i8"), "{after}");
     assert!(!after.contains("phi i32 [ 0, %entry ], [ %next"), "{after}");
 }
 
@@ -140,4 +140,27 @@ fn a_counter_of_a_native_width_stays() {
 fn a_counter_stepping_over_the_byte_edge_is_not_a_byte() {
     let after = run(&counting("i32", 0, "add", 100, "icmp ult i32 %next, 300"), true);
     assert!(after.contains("phi i16 [ 0, %entry ]") && !after.contains("phi i8"), "{after}");
+}
+
+/// A narrowed up-counter left `add i8` unflagged, so ScalarEvolution could not
+/// see `zext` of it as a wide recurrence and no pointer counter formed (a walk
+/// over 49 shorts recomputed `base + 2 * zext(i)` every trip).
+#[test]
+fn a_narrowed_up_counter_does_not_wrap() {
+    let after = run(&counting("i32", 0, "add", 1, "icmp ult i32 %next, 12"), true);
+    assert!(after.contains("add nuw i8"), "{after}");
+}
+
+#[test]
+fn a_narrowed_signed_countdown_does_not_wrap_signed() {
+    let after = run(&counting("i32", 11, "sub", 1, "icmp sgt i32 %next, -1"), true);
+    assert!(after.contains("sub nsw i8"), "{after}");
+}
+
+/// `add i, -1` counts down as a signed byte: step -1 fits, so `nsw`; it wraps
+/// as an unsigned byte (255), so it must not claim `nuw`.
+#[test]
+fn a_step_that_wraps_in_the_narrow_width_is_not_flagged() {
+    let after = run(&counting("i32", 11, "add", -1, "icmp sgt i32 %next, -1"), true);
+    assert!(after.contains("add nsw i8 %0, -1") && !after.contains("nuw"), "{after}");
 }
