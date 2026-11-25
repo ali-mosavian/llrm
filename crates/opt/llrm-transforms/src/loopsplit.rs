@@ -276,6 +276,138 @@ fn forced(
     result
 }
 
+/// The guards of a loop: a branch on a compare, or a `select` of values on one
+/// (the mid-end folds `i < k ? a : b` into one): each copy decides it the same
+/// way. The exiting block's branch is the exit, not a guard.
+fn guard_sites(
+    f: &Function,
+    context: &Context,
+    l: llrm_mir::loopinfo::Loop<'_>,
+    exiting: BlockId,
+) -> Vec<(BlockId, InstId, ValueId)> {
+    let mut sites: Vec<(BlockId, InstId, ValueId)> = Vec::new();
+    for &block in l.get_blocks() {
+        if let Some(term) = f.terminator(block).filter(|_| block != exiting) {
+            let guard = f.instruction(term);
+            if let [Operand::Value(c), Operand::Block(t), Operand::Block(e)] = guard.operands[..]
+                && guard.opcode == Opcode::Br
+                && t != e
+                && l.contains(t)
+                && l.contains(e)
+            {
+                sites.push((block, term, c));
+            }
+        }
+        for inst in f.iter_block(block) {
+            let one = f.instruction(inst);
+            if one.opcode == Opcode::Select
+                && logical(f, context, inst).is_none()
+                && let Operand::Value(c) = one.operands[0]
+            {
+                sites.push((block, inst, c));
+            }
+        }
+    }
+    sites
+}
+
+/// A guard that tests a counter against a range: `(i + c) <u k` is `i >= -c`
+/// and `i < -c + k`, the two borders the mid-end folded into one unsigned
+/// compare of a sum.
+struct Range {
+    cmp: InstId,
+    counter: Operand,
+    /// The first value the test lets through, and the first it does not.
+    lo: i128,
+    hi: i128,
+}
+
+/// The range test in a guard of the loop at `header`, where the sum is a
+/// header phi and a constant and the borders fit the type: the identity holds
+/// for every value of a signed counter, wrapped or not.
+fn range_guard(
+    se: &mut ScalarEvolution,
+    cx: &Cx,
+    header: BlockId,
+) -> Option<Range> {
+    let f = cx.function;
+    let l = cx.loops.get_loop_for(header)?;
+    let [(exiting, _)] = cx.loops.get_exit_edges(f, l)[..] else { return None };
+    for (_, _, c) in guard_sites(f, cx.context, l, exiting) {
+        for cmp in logical_leaves(cx, c) {
+            let Opcode::ICmp(pred @ (IntPredicate::Ult | IntPredicate::Ule)) = f.instruction(cmp).opcode else {
+                continue;
+            };
+            let [Operand::Value(sum), limit] = f.instruction(cmp).operands[..] else { continue };
+            let Some(add) = def(cx, Operand::Value(sum)) else { continue };
+            if f.instruction(add).opcode != Opcode::Binary(BinaryOp::Add) {
+                continue;
+            }
+            let [counter, offset] = f.instruction(add).operands[..] else { continue };
+            let Some(phi) = def(cx, counter) else { continue };
+            if f.instruction(phi).opcode != Opcode::Phi || f.parent(phi) != Some(header) {
+                continue;
+            }
+            let ty = f.operand_type(cx.context, counter)?;
+            let bits = cx.context.types.int_bits(ty)?;
+            let (Some(offset), Operand::Constant(limit)) = (signed_value(cx.context, offset, bits), limit) else {
+                continue;
+            };
+            let ConstantKind::Int(raw) = cx.context.get(limit).kind else { continue };
+            let k = (raw & mask(bits)) as i128 + i128::from(pred == IntPredicate::Ule);
+            let (lo, hi) = (-offset, -offset + k);
+            let top = (1i128 << (bits - 1)) - 1;
+            if k == 0 || lo > top || hi > top || affine(se, cx, header, counter).is_none() {
+                continue;
+            }
+            return Some(Range { cmp, counter, lo, hi });
+        }
+    }
+    None
+}
+
+/// The range test as the two compares it is, `i >= lo && i < hi`; the old
+/// compare stays until the split is made. Returns the `and`.
+fn unfold(
+    context: &Context,
+    function: &mut Function,
+    range: &Range,
+) -> ValueId {
+    let ty = function.operand_type(context, range.counter).expect("a counter");
+    let at = Position::Before(range.cmp);
+    let mut make = |function: &mut Function, opcode, operands: Vec<Operand>, ty, name| {
+        let inst = function.create_instruction(opcode, ty, operands, Flags::default(), Some(name));
+        function.insert(inst, at).expect("a placed compare");
+        function.instruction(inst).result.expect("a value")
+    };
+    let flag = function.instruction(range.cmp).ty;
+    let constant = |value: i128| Operand::Constant(context.int(ty, value));
+    let low = make(
+        function,
+        Opcode::ICmp(IntPredicate::Sge),
+        vec![range.counter, constant(range.lo)],
+        flag,
+        "range.low",
+    );
+    let high = make(
+        function,
+        Opcode::ICmp(IntPredicate::Slt),
+        vec![range.counter, constant(range.hi)],
+        flag,
+        "range.high",
+    );
+    let both = make(
+        function,
+        Opcode::Binary(BinaryOp::And),
+        vec![Operand::Value(low), Operand::Value(high)],
+        flag,
+        "range.both",
+    );
+    let old = function.instruction(range.cmp).result.expect("a flag");
+    function.replace_all_uses_with(old, Operand::Value(both));
+    both
+}
+
 /// `split_loop`'s test of the loop: one exit from a block that runs every
 /// iteration, an empty latch, easy exit values and a loop that can be copied.
 fn plan_for(
@@ -404,33 +536,7 @@ fn plan_for(
         return None;
     }
 
-    // A split point: the first guard `split_at_bb_p` takes. A guard is a
-    // branch on the compare, or a `select` of values on it (the mid-end folds
-    // `i < k ? a : b` into one): each loop decides it the same way.
-    let mut sites: Vec<(BlockId, InstId, ValueId)> = Vec::new();
-    for &block in l.get_blocks() {
-        // The exiting block's branch is the exit, not a guard.
-        if let Some(term) = f.terminator(block).filter(|_| block != exiting) {
-            let guard = f.instruction(term);
-            if let [Operand::Value(c), Operand::Block(t), Operand::Block(e)] = guard.operands[..]
-                && guard.opcode == Opcode::Br
-                && t != e
-                && l.contains(t)
-                && l.contains(e)
-            {
-                sites.push((block, term, c));
-            }
-        }
-        for inst in f.iter_block(block) {
-            let one = f.instruction(inst);
-            if one.opcode == Opcode::Select
-                && logical(f, cx.context, inst).is_none()
-                && let Operand::Value(c) = one.operands[0]
-            {
-                sites.push((block, inst, c));
-            }
-        }
-    }
+    let sites = guard_sites(f, cx.context, l, exiting);
     for (block, term, c) in sites {
         for guard_cmp in logical_leaves(cx, c) {
             let Opcode::ICmp(gpred) = f.instruction(guard_cmp).opcode else { continue };
@@ -821,6 +927,43 @@ pub fn split_loops(
         let plan = session.ask_within(context, layout, &outer.globals, &outer.metadata, &*function, |se, cx| {
             plan_for(se, cx, header)
         });
+        // The guard may be the range test of the counter: its two borders are
+        // a guard each, and the split is made at the first.
+        let plan = match plan {
+            Some(plan) => Some(plan),
+            None => {
+                let range = session.ask_within(
+                    context,
+                    layout,
+                    &outer.globals,
+                    &outer.metadata,
+                    &*function,
+                    |se, cx| range_guard(se, cx, header),
+                );
+                match range {
+                    None => None,
+                    Some(range) => {
+                        let both = unfold(context, function, &range);
+                        session = ScevSession::within(context, &outer.globals, &outer.metadata, function);
+                        let plan = session.ask_within(
+                            context,
+                            layout,
+                            &outer.globals,
+                            &outer.metadata,
+                            &*function,
+                            |se, cx| plan_for(se, cx, header),
+                        );
+                        if plan.is_none() {
+                            // not a split: the range test as it was
+                            let old = function.instruction(range.cmp).result.expect("a flag");
+                            function.replace_all_uses_with(both, Operand::Value(old));
+                            session = ScevSession::within(context, &outer.globals, &outer.metadata, function);
+                        }
+                        plan
+                    }
+                }
+            }
+        };
         let Some(plan) = plan else { continue };
         let mut up = session.loops().get_loop_for(header).and_then(|one| one.get_parent_loop());
         while let Some(parent) = up {

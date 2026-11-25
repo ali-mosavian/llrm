@@ -433,3 +433,28 @@ fn test_a_loop_of_more_than_the_peel_bound_is_left_whole() {
     assert_split(&heavy(60));
     assert_whole(&heavy(120));
 }
+
+/// A guard that is a range test of the counter, `(i - 10) <u 8`, is the two
+/// borders `i >= 10 && i < 18`: the mid-end folds the pair into one unsigned
+/// compare of a sum, which had no counter on either side, so the loop ran
+/// every value through the test (an m68k loop over 256 values, 192 of which
+/// the test sends nowhere).
+#[test]
+fn test_a_range_test_of_the_counter_splits_at_its_borders() {
+    let text = up("icmp ult i32 %t, 8", "icmp slt i32 %i.next, %n")
+        .replace("  %c = icmp", "  %t = add i32 %i, -10\n  %c = icmp");
+    assert_split(&text);
+}
+
+/// The counter of an m68k loop `for (m = start; m < 256; ++m)` starts at
+/// `start - 1` (the induction rewrite moved the step into the start) and the
+/// loop is entered where `start < 256`: its first test, `start - 1 < 255`,
+/// holds for every `start` that is not `INT_MIN`, which the entry test does
+/// not exclude, so the new bound was left unproved and the loop whole.
+#[test]
+fn test_a_range_guard_on_a_counter_that_starts_one_below_the_entry_value_splits() {
+    let text = counting("icmp slt i32 %n, 256", "%b", "add nsw", 1, "icmp ult i32 %t, 28", "icmp slt i32 %i.next, 255")
+        .replace("pre:\n  br label %loop", "pre:\n  %b = add i32 %n, -1\n  br label %loop")
+        .replace("  %c = icmp", "  %t = add i32 %i, -191\n  %c = icmp");
+    assert_split(&text);
+}
