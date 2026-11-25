@@ -160,3 +160,35 @@ fn the_edge_scan_reads_a_blocks_terminators_not_its_body() {
     assert!(blocks > 0, "the late fold scanned nothing");
     assert!(instructions <= 4 * blocks, "{instructions} instructions read for {blocks} block scans");
 }
+
+/// The graph is kept across the edits of a merge instead of rebuilt after
+/// each (`exec.c` at 68000 -O1 spent 38 % of its compile in the rebuilds); a
+/// debug build checks the kept graph against a rebuilt one after every edit
+/// and every predecessor read, so a merge that leaves a stale list panics here.
+#[test]
+fn the_kept_graph_is_the_rebuilt_one_after_every_merge() {
+    use llrm_m68k::expand::Line;
+    use llrm_m68k::mc::{Inst, Operand};
+    let inst = |opcode: &'static str, operands: Vec<Operand>| Line::Inst(Inst { opcode, operands });
+    let to = |label: usize| vec![Operand::Symbol(format!(".LBB7_{label}"), 0)];
+    let arms = 40;
+    let mut lines = Vec::new();
+    // dispatch blocks 1..=arms branch to the arms, which share a
+    // three-instruction tail
+    for k in 0..arms {
+        lines.push(Line::Label(1 + k));
+        lines.push(inst("BEQ8", to(1 + arms + k)));
+    }
+    lines.push(inst("RTS", vec![]));
+    for k in 0..arms {
+        lines.push(Line::Label(1 + arms + k));
+        lines.push(inst("MOVEQ", vec![Operand::Imm(k as i64)]));
+        for tail in 100..103 {
+            lines.push(inst("MOVEQ", vec![Operand::Imm(tail)]));
+        }
+        lines.push(inst("RTS", vec![]));
+    }
+    let out = llrm_m68k::latefold::merge_tails(lines, 7, 1 + 2 * arms, vec![], vec![], true);
+    let shared = out.iter().filter(|line| matches!(line, Line::Inst(i) if i.operands == [Operand::Imm(101)])).count();
+    assert!(shared < arms, "premise: the tails merge, {shared} copies of {arms} remain");
+}
