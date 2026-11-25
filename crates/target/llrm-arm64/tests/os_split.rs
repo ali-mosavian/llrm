@@ -15,8 +15,5 @@ fn an_optsize_function_does_not_split_around_a_hint() {
     let asm = driver::assembly(ir, Platform::Linux, false).expect("lowers");
     let body = asm.split("bench_stft_fixed:").nth(1).expect("the kernel").split("\n\n").next().unwrap();
     let instructions = body.lines().filter(|line| line.starts_with('\t') && !line.starts_with("\t.")).count();
-    assert!(
-        instructions <= 259,
-        "{instructions} instructions (262 when the allocator is told the function is not for size)"
-    );
+    assert!(instructions <= 259, "{instructions} instructions (262 when the allocator is told the function is not for size)");
 }

@@ -1,6 +1,6 @@
 //! A lane read out of a byte vector and used as an integer stopped the compile
-//! (`jpeg_single` at -O3: `Unsupported ExtractElement i8 "promote result"`):
-//! the legalizer had no promotion for an `extract_element` whose result type
+//! (`jpeg_single` at -O3: `Unsupported ExtractElement i8 "promote result"`): the
+//! legalizer had no promotion for an `extract_element` whose result type
 //! (`i8`) is illegal.
 
 use std::process::Command;

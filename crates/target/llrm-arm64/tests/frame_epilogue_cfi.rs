@@ -31,7 +31,13 @@ fn the_restores_follow_the_last_load_in_the_pins_order() {
     let after: Vec<&str> = lines[last_load + 1..].iter().copied().filter(|line| line.starts_with(".cfi")).collect();
     assert_eq!(
         after,
-        [".cfi_def_cfa_offset 0", ".cfi_restore w19", ".cfi_restore w20", ".cfi_restore w30", ".cfi_restore w29"],
+        [
+            ".cfi_def_cfa_offset 0",
+            ".cfi_restore w19",
+            ".cfi_restore w20",
+            ".cfi_restore w30",
+            ".cfi_restore w29"
+        ],
         "{asm}"
     );
     let restores = lines.iter().filter(|line| line.starts_with(".cfi_restore")).count();

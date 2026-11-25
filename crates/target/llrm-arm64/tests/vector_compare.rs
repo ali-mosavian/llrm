@@ -90,8 +90,8 @@ fn shapes(text: &str) -> BTreeMap<String, usize> {
     counts
 }
 
-/// Ours selects what the pin's `opt -O2 | llc` selects (ours runs the middle
-/// end too: a compare against zero that is always true is a constant there).
+/// Ours selects what the pin's `opt -O2 | llc` selects (ours runs the middle end too:
+/// a compare against zero that is always true is a constant there).
 fn matches_the_pin(source: &str) -> String {
     let text = ours(source).unwrap_or_else(|why| panic!("refused: {why}\n{source}"));
     if let Some(pinned) = pin_optimized(source) {
@@ -102,11 +102,10 @@ fn matches_the_pin(source: &str) -> String {
 
 /// DEVIATE VEC3 (owner llrm-arm64-vec, exit 2026-11-24): compares against zero
 /// that the pin folds are not compared against zero.
-/// - `ule` is rewritten to `eq` (`cmeq #0`) by the pin's instcombine; ours
-///   stays `cmhs`.
+/// - `ule` is rewritten to `eq` (`cmeq #0`) by the pin's instcombine; ours stays `cmhs`.
 /// - `uge`/`ult` are constants: ours does not fold `sext` of a constant
-///   `build_vector` (`movi` + `sshll`) and does not turn a 64-bit zero store
-///   into `str xzr` (`replaceZeroVectorStore`).
+///   `build_vector` (`movi` + `sshll`) and does not turn a 64-bit zero store into
+///   `str xzr` (`replaceZeroVectorStore`).
 const FOLDED_BY_PIN_AGAINST_ZERO: [&str; 3] = ["ule", "uge", "ult"];
 
 const PREDICATES: [&str; 10] = ["eq", "ne", "sgt", "sge", "slt", "sle", "ugt", "uge", "ult", "ule"];
@@ -256,10 +255,10 @@ fn vector_min_and_max_are_neon_instructions() {
     }
 }
 
-/// `visitIMINMAX`'s sign-bit test used `1 << (vt.size_in_bits() - 1)`: the
-/// whole vector's width, not the lane's. A `<8 x i32>` min/max (256 bits, split
-/// by the legalizer, so the fold runs on the illegal type) shifted a `u128` by
-/// 255: a debug compiler panicked ("attempt to shift left with overflow") and a
+/// `visitIMINMAX`'s sign-bit test used `1 << (vt.size_in_bits() - 1)`: the whole
+/// vector's width, not the lane's. A `<8 x i32>` min/max (256 bits, split by the
+/// legalizer, so the fold runs on the illegal type) shifted a `u128` by 255:
+/// a debug compiler panicked ("attempt to shift left with overflow") and a
 /// release one tested the wrong bit.
 #[test]
 fn a_vector_wider_than_128_bits_min_and_max_compiles() {

@@ -37,11 +37,11 @@ pub fn tuning() -> llrm_mir::target::Tuning {
         max_stores_per_memcpy_opt_size: 0,
         max_stores_per_memmove: 0,
         max_stores_per_memmove_opt_size: 0,
-        // DEVIATE TRIAL-CAP (owner qb-arm64-synth-gfx, exit 2026-12-20):
-        // the -Os trials build the whole module again, once each. Over 126 QB
-        // modules and 232 run/c files at -Os, no function over 5,000
-        // instructions is changed by a trial; 2,000: +0.019% bytes (two files),
-        // 0.73 of the compile instructions; 1,500: +0.151%.
+        // DEVIATE TRIAL-CAP (owner qb-arm64-synth-gfx, exit 2026-12-20): the -Os
+        // trials build the whole module again, once each. Over 126 QB modules
+        // and 232 run/c files at -Os, no function over 5,000 instructions is
+        // changed by a trial; 2,000: +0.019% bytes (two files), 0.73 of the
+        // compile instructions; 1,500: +0.151%.
         trial_insts_max: Some(2_000),
         ..llrm_mir::target::Tuning::PIN
     }

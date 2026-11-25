@@ -1,5 +1,4 @@
-//! Loads, stores and shifted adds are the pin's instructions (`llc -O2`) for
-//! the same IR.
+//! Loads, stores and shifted adds are the pin's instructions (`llc -O2`) for the same IR.
 
 use std::process::Command;
 
@@ -7,7 +6,9 @@ fn llc() -> (bool, String, String) {
     llc_of("dag_memory.ll")
 }
 
-fn llc_of(file: &str) -> (bool, String, String) {
+fn llc_of(
+    file: &str,
+) -> (bool, String, String) {
     let dir = tempfile::tempdir().unwrap();
     let output = dir.path().join("t.s");
     let input = format!("{}/tests/data/{file}", env!("CARGO_MANIFEST_DIR"));

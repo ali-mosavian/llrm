@@ -9,11 +9,7 @@ use llrm_arm64::machine::Platform;
 
 fn kernel() -> Vec<String> {
     let asm = driver::assembly(include_str!("data/vector_uno_zero.ll"), Platform::Linux, Level::O2).expect("lowers");
-    asm.lines()
-        .skip_while(|line| *line != "f:")
-        .take_while(|line| !line.starts_with("\tret"))
-        .map(String::from)
-        .collect()
+    asm.lines().skip_while(|line| *line != "f:").take_while(|line| !line.starts_with("\tret")).map(String::from).collect()
 }
 
 #[test]

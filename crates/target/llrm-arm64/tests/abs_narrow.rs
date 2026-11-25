@@ -5,9 +5,8 @@ use llrm_arm64::machine::Platform;
 
 const LAYOUT: &str = "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i8:8:32-i16:16:32-i64:64-i128:128-n32:64-S128-Fn32\"\n";
 
-/// The type legalizer had no promotion for `ABS` ("Unsupported Abs i16 promote
-/// result"), so `__divhi3` and `__modhi3` (runtime/compiler-rt/lib/int/int16.c)
-/// fell back to the hand selector at -O1 and above. The pin
+/// The type legalizer had no promotion for `ABS` ("Unsupported Abs i16 promote result"), so `__divhi3` and
+/// `__modhi3` (runtime/compiler-rt/lib/int/int16.c) fell back to the hand selector at -O1 and above. The pin
 /// (`PromoteIntRes_ABS`) takes the absolute value of the sign-extended operand.
 #[test]
 fn abs_of_i16_and_i8_is_promoted_on_the_dag_path() {

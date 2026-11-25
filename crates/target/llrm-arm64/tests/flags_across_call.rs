@@ -18,8 +18,7 @@ declare i32 @g(i32)\n\
     a:\n  %x = add i32 %r, 1\n  ret i32 %x\n\
     b:\n  %y = add i32 %r, 2\n  ret i32 %y\n}\n";
 
-/// The first line that reads the condition flags with none set since the last
-/// call.
+/// The first line that reads the condition flags with none set since the last call.
 fn stale_read(level: Level) -> Option<String> {
     let asm = driver::assembly(SOURCE, Platform::Linux, level).expect("lowers");
     let sets = ["subs ", "cmp ", "cmn ", "ands ", "tst ", "adds ", "ccmp ", "ccmn "];

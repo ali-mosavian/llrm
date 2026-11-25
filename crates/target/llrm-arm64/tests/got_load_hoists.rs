@@ -1,8 +1,7 @@
-//! A GOT slot is constant memory (the pin: `PseudoSourceValue::GOT` is
-//! constant, and `MachineLICM` hoists a load from it, MachineLICM.cpp
-//! `mayLoadFromGOTOrConstantPool`). textfill -O2 at PIE kept `ldr x, [x,
-//! :got_lo12:]` inside the loop that stores bytes through it: 9 instructions an
-//! iteration where gcc and clang run 8 (+2000 on the run).
+//! A GOT slot is constant memory (the pin: `PseudoSourceValue::GOT` is constant, and
+//! `MachineLICM` hoists a load from it, MachineLICM.cpp `mayLoadFromGOTOrConstantPool`).
+//! textfill -O2 at PIE kept `ldr x, [x, :got_lo12:]` inside the loop that stores bytes
+//! through it: 9 instructions an iteration where gcc and clang run 8 (+2000 on the run).
 
 use llrm_arm64::driver::{self, Level};
 use llrm_arm64::machine::Platform;

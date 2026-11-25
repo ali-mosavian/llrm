@@ -1,7 +1,6 @@
 //! Every arm64 corpus `.ll` compiles at -O1 and -O2 without a panic in a debug
 //! build. A release build wraps where a debug build panics on overflow, so a
-//! release-only run hid `promote.rs` `span.high - span.low` (vla.ll -O1,
-//! rc=101).
+//! release-only run hid `promote.rs` `span.high - span.low` (vla.ll -O1, rc=101).
 
 use llrm_arm64::driver::{self, Level};
 use llrm_arm64::machine::Platform;

@@ -1,7 +1,7 @@
 //! The byte table of the rate-priced decisions counts bytes: arm64's table was
-//! the default of 1 per operation, so an unroll or an inline "added 42 B" was
-//! 42 instructions (168 B) at a rate of 250 clocks a byte (nbody_single -O3:
-//! the trial said -6 B, the kernel grew 460 B).
+//! the default of 1 per operation, so an unroll or an inline "added 42 B" was 42
+//! instructions (168 B) at a rate of 250 clocks a byte (nbody_single -O3: the
+//! trial said -6 B, the kernel grew 460 B).
 
 use llrm_arm64::machine::{Arm64Machine, Platform};
 use llrm_mir::target::Machine;

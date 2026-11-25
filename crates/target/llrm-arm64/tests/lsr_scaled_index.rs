@@ -33,8 +33,7 @@ exit:\n  ret void\n}}\n"
 /// #n]`. The Tti asked every use as if it were an 8-byte access, so only `i64`
 /// elements scaled and the others got a stepping pointer each: two more phis
 /// and adds per loop than `llc -O2` (the pin) has. The loop makes two trips:
-/// where it makes more, LSR-POSTINC walks the pointers instead
-/// (`postinc_trips`).
+/// where it makes more, LSR-POSTINC walks the pointers instead (`postinc_trips`).
 #[test]
 fn an_index_scaled_by_the_access_size_is_kept() {
     for element in ["i16", "i32", "i64"] {

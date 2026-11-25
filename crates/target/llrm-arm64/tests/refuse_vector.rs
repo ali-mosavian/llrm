@@ -5,10 +5,9 @@ use std::process::Command;
 
 /// `<4 x i32>` reached `combine_shared::width` and panicked ("an integer", exit
 /// 101, every llc but arm64 and wasm untested); it is refused as isel refuses a
-/// type with no registers, exit 1. With the vectors off
-/// (`LLRM_ARM64_VECTORS=0`) the type is named; on (the default), the vector
-/// argument has no calling hook (AAPCS vector arguments are not translated):
-/// still a refusal, exit 1.
+/// type with no registers, exit 1. With the vectors off (`LLRM_ARM64_VECTORS=0`)
+/// the type is named; on (the default), the vector argument has no calling
+/// hook (AAPCS vector arguments are not translated): still a refusal, exit 1.
 #[test]
 fn a_vector_value_is_refused_not_a_panic() {
     for (flag, said) in [("0", "@g: a <4 x i32> value"), ("1", "@g: a value that is no integer")] {

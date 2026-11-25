@@ -118,10 +118,9 @@ fn add_v8i16_is_addv() {
     assert_eq!(count(&text, "addv", ".8h"), 1, "{text}");
 }
 
-/// A 64-bit vector reduced: `<4 x i16>` and `<8 x i8>` were
-/// `CannotSelect("Add")`, so `if (p[i] > 3) count++` over `unsigned short` at
-/// -O3 (an epilogue of four lanes) failed to compile; the pin selects `addv h,
-/// v.4h`.
+/// A 64-bit vector reduced: `<4 x i16>` and `<8 x i8>` were `CannotSelect("Add")`, so
+/// `if (p[i] > 3) count++` over `unsigned short` at -O3 (an epilogue of four
+/// lanes) failed to compile; the pin selects `addv h, v.4h`.
 #[test]
 fn add_v4i16_is_addv() {
     let text = matches_the_pin(&ir("add", 4, 16));

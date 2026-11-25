@@ -6,9 +6,10 @@
 //! row is written wherever the code changes the state or enters a block in
 //! another one.
 
+use llrm_support::hash::HashMap;
+
 use llrm_debug::FrameRow;
 use llrm_object::assembler::Cfi;
-use llrm_support::hash::HashMap;
 
 use crate::frame::Lowered;
 use crate::layout::label_of;
@@ -82,9 +83,9 @@ fn falls_through(
 ) -> bool {
     !dead_ends.contains(&block.label)
         && !matches!(
-            block.insts.iter().rev().find(|inst| !inst.is_directive()),
-            Some(Inst::Ret { .. } | Inst::Branch { link: false, .. } | Inst::BranchReg { link: false, .. })
-        )
+        block.insts.iter().rev().find(|inst| !inst.is_directive()),
+        Some(Inst::Ret { .. } | Inst::Branch { link: false, .. } | Inst::BranchReg { link: false, .. })
+    )
 }
 
 /// The rows of the function made of `blocks`, as byte offsets from its start;

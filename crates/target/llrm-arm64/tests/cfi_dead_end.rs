@@ -18,7 +18,10 @@ fn block(
 /// made.
 #[test]
 fn a_block_after_a_noreturn_call_does_not_inherit_its_frame() {
-    let entry = block("entry", vec![Inst::BranchCond { cond: Cond::Hs, target: Target::Label("mid".into()) }]);
+    let entry = block(
+        "entry",
+        vec![Inst::BranchCond { cond: Cond::Hs, target: Target::Label("mid".into()) }],
+    );
     let cold = block(
         "cold",
         vec![

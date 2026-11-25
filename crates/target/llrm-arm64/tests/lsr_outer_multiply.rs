@@ -1,12 +1,10 @@
-//! DEVIATE LSR-OUTER on arm64: the pin's LSR skips a loop with a subloop, gcc's
-//! ivopts does not.
+//! DEVIATE LSR-OUTER on arm64: the pin's LSR skips a loop with a subloop, gcc's ivopts does not.
 
 use llrm_arm64::tti::AArch64;
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::passes::{Declared, Outer};
 
-/// An outer loop that feeds `i * MULTIPLIER + 3` to an inner loop: recgcd's
-/// `gcd(i * 7 + 3, i * 5 + 2)`.
+/// An outer loop that feeds `i * MULTIPLIER + 3` to an inner loop: recgcd's `gcd(i * 7 + 3, i * 5 + 2)`.
 fn outer_loop(multiplier: u32) -> String {
     format!(
         "target datalayout = \"e-m:e-i64:64-i128:128-n32:64-S128\"\n\
@@ -38,13 +36,12 @@ fn outer_part(text: &str) -> &str {
     &text[start..text[start..].find("inner:").map_or(text.len(), |at| start + at)]
 }
 
-/// recgcd -O2/-O3 kept `7 * i + 3` (a `lsl` and a `sub`, then an `add`) in its
-/// outer loop, where gcc keeps counters: 17611 instructions against gcc's
-/// 17314. A multiply that is two instructions (`2^N - 1`) is a counter stepped
-/// by the multiplier. One that is a single instruction (`i * 5`, a shifted add;
-/// `i * 24`, a `madd`) is not worth a register held across the inner loop:
-/// mandel O2/O3 took one extra `add` in its innermost loop (134739 -> 142026
-/// instructions, over gcc's 134956) when `24 * px - 128` became a counter.
+/// recgcd -O2/-O3 kept `7 * i + 3` (a `lsl` and a `sub`, then an `add`) in its outer loop, where gcc
+/// keeps counters: 17611 instructions against gcc's 17314. A multiply that is two instructions (`2^N -
+/// 1`) is a counter stepped by the multiplier. One that is a single instruction (`i * 5`, a shifted add;
+/// `i * 24`, a `madd`) is not worth a register held across the inner loop: mandel O2/O3 took one extra
+/// `add` in its innermost loop (134739 -> 142026 instructions, over gcc's 134956) when `24 * px - 128`
+/// became a counter.
 #[test]
 fn an_outer_loops_multiply_of_two_instructions_or_more_is_a_counter() {
     for multiplier in [7u32, 15, 31] {

@@ -65,12 +65,7 @@ fn cluster(mut ops: OpList) -> OpList {
                             || touch(between).is_some_and(|other| commutes(&touch_of(&first), &other)))
                 }
                 Op::Copy { .. } | Op::Imm { .. } | Op::FrameAddress { .. } | Op::DbgValue { .. } => true,
-                Op::Call { .. }
-                | Op::Return { .. }
-                | Op::JumpTable { .. }
-                | Op::IndirectJump { .. }
-                | Op::Phi { .. }
-                | Op::Unreachable => false,
+                Op::Call { .. } | Op::Return { .. } | Op::JumpTable { .. } | Op::IndirectJump { .. } | Op::Phi { .. } | Op::Unreachable => false,
             };
             if !passable || defs.contains(&base) || defs.contains(&source) {
                 break;
@@ -113,28 +108,19 @@ fn passes(
     moved: &Access,
     value: Reg,
 ) -> bool {
-    between
-        .into_iter()
-        .all(
-            |k| {
-                let (defs, uses) = ops[k].defs_and_uses();
-                let passable = match &ops[k] {
-                    Op::I(inst) => {
-                        !leaves_the_block(inst)
-                            && (!crate::pairs::is_memory(inst)
-                                || touch(inst).is_some_and(|other| commutes(&touch_of(moved), &other)))
-                    }
-                    Op::Copy { .. } | Op::Imm { .. } | Op::FrameAddress { .. } | Op::DbgValue { .. } => true,
-                    Op::Call { .. }
-                    | Op::Return { .. }
-                    | Op::JumpTable { .. }
-                    | Op::IndirectJump { .. }
-                    | Op::Phi { .. }
-                    | Op::Unreachable => false,
-                };
-                passable && !defs.contains(&base) && !defs.contains(&value) && !uses.contains(&value)
-            },
-        )
+    between.into_iter().all(|k| {
+        let (defs, uses) = ops[k].defs_and_uses();
+        let passable = match &ops[k] {
+            Op::I(inst) => {
+                !leaves_the_block(inst)
+                    && (!crate::pairs::is_memory(inst)
+                        || touch(inst).is_some_and(|other| commutes(&touch_of(moved), &other)))
+            }
+            Op::Copy { .. } | Op::Imm { .. } | Op::FrameAddress { .. } | Op::DbgValue { .. } => true,
+            Op::Call { .. } | Op::Return { .. } | Op::JumpTable { .. } | Op::IndirectJump { .. } | Op::Phi { .. } | Op::Unreachable => false,
+        };
+        passable && !defs.contains(&base) && !defs.contains(&value) && !uses.contains(&value)
+    })
 }
 
 /// A load moves up to right after the load of the neighbouring slot from the

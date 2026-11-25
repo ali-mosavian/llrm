@@ -424,8 +424,7 @@ fn a_loop_of_widening_multiplies_by_a_scalar_is_vectorized() {
 /// `trunc <8 x i32> to <8 x i8>` stopped the compile ("split conversion with
 /// no half result type": `v4i8` is no type; `mem_length_boundaries_m32` at
 /// arm64 -O2 after LoopVectorize widened its `(unsigned char)` stores). The
-/// pin truncates in two steps (`SplitVecOp_TruncateHelper`): `uzp1 .8h`, `xtn
-/// .8b`.
+/// pin truncates in two steps (`SplitVecOp_TruncateHelper`): `uzp1 .8h`, `xtn .8b`.
 #[test]
 fn a_truncation_to_under_half_the_lane_of_a_split_vector_is_two_steps() {
     let text = assembly(
