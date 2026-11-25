@@ -447,3 +447,97 @@ m:
     );
     assert!(after.contains("phi ptr") && after.matches("getelementptr").count() == 2, "{after}");
 }
+
+/// A phi of one binary operator of two variables that share an operand made
+/// the operation in both arms (stft_fixed's butterfly: the same `add` of two
+/// variables in each arm, 286 instructions where the pin's InstCombine gives
+/// 282): one operation of a phi of the other operands.
+#[test]
+fn a_phi_of_the_same_add_with_one_shared_operand_is_one_add_of_a_phi() {
+    let after = combined(
+        "define i32 @f(i1 %c, i32 %a, i32 %x, i32 %y) {
+b0:
+  br i1 %c, label %l, label %r
+l:
+  %u = add nsw i32 %a, %x
+  br label %m
+r:
+  %v = add i32 %a, %y
+  br label %m
+m:
+  %p = phi i32 [ %u, %l ], [ %v, %r ]
+  ret i32 %p
+}
+",
+    );
+    assert_eq!(after.matches("add ").count(), 1, "{after}");
+    assert!(after.contains("phi i32 [ %x, %l ], [ %y, %r ]"), "{after}");
+    assert!(!after.contains("nsw"), "the flags of the arms intersect: {after}");
+}
+
+/// The shared operand may be on either side, and a compare folds too.
+#[test]
+fn a_phi_of_the_same_compare_with_one_shared_operand_is_one_compare_of_a_phi() {
+    let after = combined(
+        "define i1 @f(i1 %c, i32 %a, i32 %x, i32 %y) {
+b0:
+  br i1 %c, label %l, label %r
+l:
+  %u = icmp ult i32 %x, %a
+  br label %m
+r:
+  %v = icmp ult i32 %y, %a
+  br label %m
+m:
+  %p = phi i1 [ %u, %l ], [ %v, %r ]
+  ret i1 %p
+}
+",
+    );
+    assert_eq!(after.matches("icmp ").count(), 1, "{after}");
+}
+
+/// Both operands differ: two phis for one operation would raise the pressure
+/// in a loop header, and the pin leaves the phi.
+#[test]
+fn a_phi_of_adds_with_both_operands_different_is_left() {
+    let after = combined(
+        "define i32 @f(i1 %c, i32 %a, i32 %b, i32 %x, i32 %y) {
+b0:
+  br i1 %c, label %l, label %r
+l:
+  %u = add i32 %a, %x
+  br label %m
+r:
+  %v = add i32 %b, %y
+  br label %m
+m:
+  %p = phi i32 [ %u, %l ], [ %v, %r ]
+  ret i32 %p
+}
+",
+    );
+    assert_eq!(after.matches("add ").count(), 2, "{after}");
+}
+
+/// A compare of another predicate is another operation.
+#[test]
+fn a_phi_of_compares_with_different_predicates_is_left() {
+    let after = combined(
+        "define i1 @f(i1 %c, i32 %a, i32 %x, i32 %y) {
+b0:
+  br i1 %c, label %l, label %r
+l:
+  %u = icmp ult i32 %a, %x
+  br label %m
+r:
+  %v = icmp slt i32 %a, %y
+  br label %m
+m:
+  %p = phi i1 [ %u, %l ], [ %v, %r ]
+  ret i1 %p
+}
+",
+    );
+    assert_eq!(after.matches("icmp ").count(), 2, "{after}");
+}
