@@ -22,7 +22,7 @@
 //! loop, or this stays as the m68k value.
 
 use llrm_spike_mf::regalloc::successors;
-use llrm_spike_mf::{Kind, Operand, Reg};
+use llrm_spike_mf::{Inst, Kind, Operand, Reg};
 
 use crate::mfunc::{Class, MFunction, operand_class};
 
@@ -106,6 +106,16 @@ pub(crate) fn address_bound(function: &MFunction) -> (Vec<bool>, Vec<bool>) {
     (wants_address, addressy)
 }
 
+thread_local! {
+    static OCCURRENCES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// The operand occurrences this thread's class splits have visited: a count
+/// of their work a test can bound without reading a clock.
+pub fn occurrences_visited() -> usize {
+    OCCURRENCES.with(std::cell::Cell::get)
+}
+
 /// The number of values held to a data register.
 pub fn hold_in_data_registers(function: &mut MFunction) -> usize {
     let count = function.classes.len();
@@ -142,7 +152,36 @@ pub fn hold_in_data_registers(function: &mut MFunction) -> usize {
         }
     }
     let (wants_address, addressy) = address_bound(function);
+    // where each register is read through a phi, defined and used: one walk of
+    // the function, not one per register
+    let mut phi_uses: Vec<Vec<(usize, Reg)>> = vec![Vec::new(); count];
+    let mut occurrences: Vec<Vec<(usize, &Inst, usize, bool)>> = vec![Vec::new(); count];
+    for (b, block) in function.blocks.iter().enumerate() {
+        for phi in &block.phis {
+            for (from, incoming) in &phi.incoming {
+                if let Reg::Virt(v) = incoming {
+                    phi_uses[*v as usize].push((*from, phi.result));
+                }
+            }
+        }
+        for inst in &block.insts {
+            for (position, operand) in inst.operands.iter().enumerate() {
+                match operand {
+                    Operand::Def(Reg::Virt(d)) => {
+                        OCCURRENCES.with(|work| work.set(work.get() + 1));
+                        occurrences[*d as usize].push((b, inst, position, true));
+                    }
+                    Operand::Use(Reg::Virt(u)) => {
+                        OCCURRENCES.with(|work| work.set(work.get() + 1));
+                        occurrences[*u as usize].push((b, inst, position, false));
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
     let mut held = 0;
+    let mut hold: Vec<usize> = Vec::new();
     for v in 0..count as u32 {
         let at = v as usize;
         if defs[at] != 1 || phi_result[at] || wants_address[at] || function.classes[at] != Class::Xr32 {
@@ -152,49 +191,33 @@ pub fn hold_in_data_registers(function: &mut MFunction) -> usize {
         let mut defined = vec![false; blocks];
         let mut copies: Vec<usize> = Vec::new();
         let mut fits = true;
-        for (b, block) in function.blocks.iter().enumerate() {
-            for phi in &block.phis {
-                for (from, incoming) in &phi.incoming {
-                    if *incoming == Reg::Virt(v) {
-                        used[*from] = true;
-                        match phi.result {
-                            Reg::Virt(to) if addressy[to as usize] => copies.push(*from),
-                            _ => fits = false,
-                        }
-                    }
-                }
+        for &(from, result) in &phi_uses[at] {
+            used[from] = true;
+            match result {
+                Reg::Virt(to) if addressy[to as usize] => copies.push(from),
+                _ => fits = false,
             }
-            for inst in &block.insts {
-                for (position, operand) in inst.operands.iter().enumerate() {
-                    match operand {
-                        Operand::Def(Reg::Virt(d)) if *d as usize == at => {
-                            defined[b] = true;
-                            fits &= takes_data(inst.kind, position);
+        }
+        for &(b, inst, position, is_def) in &occurrences[at] {
+            OCCURRENCES.with(|work| work.set(work.get() + 1));
+            if is_def {
+                defined[b] = true;
+                fits &= takes_data(inst.kind, position);
+            } else {
+                used[b] = true;
+                match inst.kind {
+                    Kind::Copy => {
+                        let into = inst.operands.iter().find_map(|o| match o {
+                            Operand::Def(Reg::Virt(d)) => Some(*d as usize),
+                            _ => None,
+                        });
+                        if into.is_some_and(|d| addressy[d]) {
+                            copies.push(b);
+                        } else {
+                            fits = false;
                         }
-                        Operand::Use(Reg::Virt(u)) if *u as usize == at => {
-                            used[b] = true;
-                            match inst.kind {
-                                Kind::Copy => {
-                                    let into = inst
-                                        .operands
-                                        .iter()
-                                        .find_map(
-                                            |o| match o {
-                                                Operand::Def(Reg::Virt(d)) => Some(*d as usize),
-                                                _ => None,
-                                            },
-                                        );
-                                    if into.is_some_and(|d| addressy[d]) {
-                                        copies.push(b);
-                                    } else {
-                                        fits = false;
-                                    }
-                                }
-                                Kind::Op(_) => fits &= takes_data(inst.kind, position),
-                            }
-                        }
-                        _ => {}
                     }
+                    Kind::Op(_) => fits &= takes_data(inst.kind, position),
                 }
             }
         }
@@ -228,9 +251,12 @@ pub fn hold_in_data_registers(function: &mut MFunction) -> usize {
                 && copies.iter().all(|&u| !(reach[u][b] && reach[b][u]))
         });
         if through {
-            function.classes[at] = Class::Dr32;
-            held += 1;
+            hold.push(at);
         }
+    }
+    for at in hold {
+        function.classes[at] = Class::Dr32;
+        held += 1;
     }
     held
 }
