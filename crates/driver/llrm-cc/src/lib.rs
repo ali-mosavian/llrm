@@ -1234,24 +1234,38 @@ fn build(
                             Some(64) => "x86_64-unknown-none",
                             _ => "i386-unknown-none",
                         };
-                        // The pin's clang is built for x86 only: an AArch64
-                        // block is assembled by the
-                        // host's clang and objcopy (the encodings
-                        // of one instruction do not vary by version).
+                        // The pin's x86 clang has no AArch64 assembler: a block
+                        // is assembled by the pin built
+                        // with it (LLRM_A64_CLANG, else
+                        // ~/scratch/llvm-build-aarch64) and cut to its `.text`
+                        // by a binutils objcopy for
+                        // AArch64 (LLRM_A64_OBJCOPY).
                         let (assembler_program, objcopy) = if flat == Some(llrm_mir::intrinsics::AARCH64) {
                             (
-                                std::env::var_os("LLRM_A64_CLANG")
-                                    .map_or_else(|| PathBuf::from("clang"), PathBuf::from),
+                                std::env::var_os("LLRM_A64_CLANG").map_or_else(
+                                    || {
+                                        PathBuf::from(std::env::var_os("HOME").unwrap_or_default())
+                                            .join("scratch/llvm-build-aarch64/bin/clang")
+                                    },
+                                    PathBuf::from,
+                                ),
                                 std::env::var_os("LLRM_A64_OBJCOPY")
                                     .map_or_else(|| PathBuf::from("aarch64-linux-gnu-objcopy"), PathBuf::from),
                             )
                         } else {
                             (clang.clone(), PathBuf::from("objcopy"))
                         };
-                        if !ran(&assembler_program, &["-target", assembler, "-x", "assembler", "-c", &sp, "-o", &op])
-                            || !ran(&objcopy, &["-O", "binary", "--only-section=.text", &op, &bp])
-                        {
-                            return Err(format!("asm: could not assemble\n{source}"));
+                        if !ran(&assembler_program, &["-target", assembler, "-x", "assembler", "-c", &sp, "-o", &op]) {
+                            return Err(format!(
+                                "asm: could not assemble with {} (set LLRM_A64_CLANG to a pin clang with the AArch64 target)\n{source}",
+                                assembler_program.display()
+                            ));
+                        }
+                        if !ran(&objcopy, &["-O", "binary", "--only-section=.text", &op, &bp]) {
+                            return Err(format!(
+                                "asm: could not cut .text with {} (set LLRM_A64_OBJCOPY)\n{source}",
+                                objcopy.display()
+                            ));
                         }
                         std::fs::read(&b).map_err(|error| error.to_string())
                     };
