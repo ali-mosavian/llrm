@@ -4,8 +4,8 @@
 use std::path::PathBuf;
 use std::process::Command;
 
-/// The pin clang built with AArch64 (`LLVM_BUILD`, else under `$HOME`), when
-/// it and the cross gcc and qemu are all there.
+/// The pin clang built with AArch64, when it and the cross gcc and qemu are
+/// all there.
 pub fn clang() -> Option<PathBuf> {
     let home = std::env::var("HOME").unwrap_or_default();
     let build = std::env::var("LLVM_BUILD").unwrap_or_else(|_| format!("{home}/scratch/llvm-build-aarch64"));
