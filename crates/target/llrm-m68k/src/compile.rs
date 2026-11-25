@@ -1284,71 +1284,88 @@ fn items_once(
         crate::calltarget::through_registers(&mut function, &chosen)?;
     }
     let word_tables = word_table_labels(&function, number);
-    let mut lines = expand(&function)?;
-    if wants_size {
+    let lines = expand(&function)?;
+    let folded = {
         let fresh = lines
             .iter()
             .filter_map(|line| if let Line::Label(at) = line { Some(*at + 1) } else { None })
             .max()
             .unwrap_or(0)
             .max(function.blocks.len());
-        lines = crate::crossjump::cross_jump(lines, number, fresh, &|inst| {
-            crate::instprice::price_of(cpu, inst).map_or(0, |price| price.0)
-        });
-    }
-    for line in lines {
-        let at_label = if let Line::Label(at) = &line { Some(*at) } else { None };
-        let table = match &line {
-            Line::Inst(inst) if inst.opcode == crate::dagisel::wordjump::NAME => match inst.operands.first() {
-                Some(mc::Operand::Symbol(table, _)) => Some(table.clone()),
+        let tables = table_target_blocks(&function);
+        let address_taken = function
+            .address_symbols
+            .iter()
+            .filter_map(|(id, _)| function.blocks.iter().position(|block| block.id == *id))
+            .collect();
+        crate::latefold::merge_tails(lines.clone(), number, fresh, tables, address_taken, wants_size)
+    };
+    let head = out;
+    let emit = |lines: Vec<Line>| -> Result<Vec<Item>, String> {
+        let mut out = head.clone();
+        for line in lines {
+            let at_label = if let Line::Label(at) = &line { Some(*at) } else { None };
+            let table = match &line {
+                Line::Inst(inst) if inst.opcode == crate::dagisel::wordjump::NAME => match inst.operands.first() {
+                    Some(mc::Operand::Symbol(table, _)) => Some(table.clone()),
+                    _ => None,
+                },
                 _ => None,
-            },
-            _ => None,
-        };
-        // DEVIATE M68K-FAR-TAIL: the pin's `TAILJMPq` is always `bra`, whose
-        // PC16 reaches 32 KiB. Where the model has absolute data
-        // (`-mcmodel=medium|large`) a tail call to another function goes
-        // through `%a0`, the pin's `TAILJMPj` form. +4 B per external tail
-        // call. Owner: m68k (w11). Review: 2026-12-15, or when the pin picks a
-        // reaching tail-call form, whichever is first.
-        let line = match line {
-            Line::Inst(inst)
-                if options.code_model.absolute_data()
-                    && inst.opcode == "BRA16"
-                    && matches!(
-                        &inst.operands[..],
-                        [mc::Operand::Symbol(target, 0)] if target != name
-                    ) =>
-            {
-                let target = inst.operands[0].clone();
-                out.push(Item::Inst(mc::Inst {
-                    opcode: "LEA32b",
-                    operands: vec![mc::Operand::Reg(crate::reg::A0), target],
-                }));
-                Line::Inst(mc::Inst { opcode: "JMP32j", operands: vec![mc::Operand::Reg(crate::reg::A0)] })
+            };
+            // DEVIATE M68K-FAR-TAIL: the pin's `TAILJMPq` is always `bra`,
+            // whose PC16 reaches 32 KiB. Where the model has
+            // absolute data (`-mcmodel=medium|large`) a tail call
+            // to another function goes through `%a0`, the pin's
+            // `TAILJMPj` form. +4 B per external tail call. Owner:
+            // m68k (w11). Review: 2026-12-15, or when the pin picks a
+            // reaching tail-call form, whichever is first.
+            let line = match line {
+                Line::Inst(inst)
+                    if options.code_model.absolute_data()
+                        && inst.opcode == "BRA16"
+                        && matches!(
+                            &inst.operands[..],
+                            [mc::Operand::Symbol(target, 0)] if target != name
+                        ) =>
+                {
+                    let target = inst.operands[0].clone();
+                    out.push(Item::Inst(mc::Inst {
+                        opcode: "LEA32b",
+                        operands: vec![mc::Operand::Reg(crate::reg::A0), target],
+                    }));
+                    Line::Inst(mc::Inst { opcode: "JMP32j", operands: vec![mc::Operand::Reg(crate::reg::A0)] })
+                }
+                other => other,
+            };
+            out.push(match line {
+                Line::Label(at) => Item::Label(format!(".LBB{number}_{at}")),
+                Line::Inst(inst) => Item::Inst(inst),
+                Line::Loc(place) => Item::Loc(place),
+            });
+            // `AsmPrinter::GetBlockAddressSymbol`: a block whose address is
+            // taken is also named by its symbol
+            if let Some(at) = at_label.filter(|at| *at < function.blocks.len()) {
+                let id = function.blocks[at].id;
+                let names = function.address_symbols.iter().filter(|(block, _)| *block == id);
+                out.extend(names.map(|(_, name)| Item::Label(name.clone())));
             }
-            other => other,
-        };
-        out.push(match line {
-            Line::Label(at) => Item::Label(format!(".LBB{number}_{at}")),
-            Line::Inst(inst) => Item::Inst(inst),
-            Line::Loc(place) => Item::Loc(place),
-        });
-        // `AsmPrinter::GetBlockAddressSymbol`: a block whose address is taken
-        // is also named by its symbol
-        if let Some(at) = at_label.filter(|at| *at < function.blocks.len()) {
-            let id = function.blocks[at].id;
-            let names = function.address_symbols.iter().filter(|(block, _)| *block == id);
-            out.extend(names.map(|(_, name)| Item::Label(name.clone())));
+            // the table starts where the `jmp` through it ends
+            if let Some(table) = table {
+                let labels = word_tables.get(&table).ok_or("a word jump of no table")?.clone();
+                out.push(Item::Label(table));
+                out.push(Item::WordTable(labels));
+            }
         }
-        // the table starts where the `jmp` through it ends
-        if let Some(table) = table {
-            let labels = word_tables.get(&table).ok_or("a word jump of no table")?.clone();
-            out.push(Item::Label(table));
-            out.push(Item::WordTable(labels));
-        }
-    }
-    out.extend(jump_tables(&function, number));
+        out.extend(jump_tables(&function, number));
+        Ok(out)
+    };
+    // the late fold stays where the level's price says it pays; at size a
+    // shared tail is bytes saved
+    let out = if wants_size || folded == lines {
+        emit(folded)?
+    } else {
+        crate::trial::cheaper(emit(folded)?, emit(lines)?, cpu, price)
+    };
     drop(sp);
     prefixes.had_slots.set(prefixes.had_slots.get() || !slots.is_empty());
     Ok((out, touched))
@@ -1378,6 +1395,27 @@ fn word_table_labels(
             Some((table.clone(), labels))
         })
         .collect()
+}
+
+/// The blocks a table jump of the function may go to.
+fn table_target_blocks(function: &crate::mfunc::MFunction) -> Vec<usize> {
+    let mut out: Vec<usize> = function
+        .blocks
+        .iter()
+        .flat_map(|block| &block.insts)
+        .filter(|inst| {
+            inst.kind == crate::mfunc::Kind::Op("JMP32j")
+                || inst.kind == crate::mfunc::Kind::Op(crate::dagisel::wordjump::NAME)
+        })
+        .flat_map(|inst| &inst.operands)
+        .filter_map(|operand| match operand {
+            crate::mfunc::Operand::Block(id) => function.blocks.iter().position(|block| block.id == *id),
+            _ => None,
+        })
+        .collect();
+    out.sort_unstable();
+    out.dedup();
+    out
 }
 
 /// Each jump table the function dispatches through: its label, then the
