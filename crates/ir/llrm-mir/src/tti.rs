@@ -1269,6 +1269,13 @@ pub trait Tti {
         None
     }
 
+    /// Units the SZ2 trial's body sizes count for such an intrinsic of
+    /// unknown length at a size-optimized caller: its call with three
+    /// arguments, in the units of `CodeSize`. None: the pin's one instruction.
+    fn size_trial_memory_call_units(&self) -> Option<i64> {
+        None
+    }
+
     /// What computing an address that no addressing mode holds costs (a
     /// `lea` or an add): one unit, as the pin prices it.
     fn address_computation_cost(
