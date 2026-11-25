@@ -11,7 +11,7 @@ use super::{COMPUTED_GOTO_SIZE, Placer, TAIL_DUPLICATION_PENALTY, TRIANGLE_CHAIN
 use crate::backend::jumps::{_real, _unowned};
 use crate::model::ir::Operation;
 use crate::model::lir::{self, Insn, LirBlock};
-use crate::support::hash::IndexMap;
+use crate::support::hash::{HashSet, IndexMap};
 
 impl Placer {
     /// `terminatorIsComputedGotoWithSuccessors`: `block` ends in an indirect
@@ -164,13 +164,20 @@ impl Placer {
         }
         let (mut duplicate, mut count) = (true, 0_usize);
         let successors = &self.succ[block];
+        // The pin builds `Successors` once, ahead of the loop; here at the
+        // first predecessor that asks, as most blocks have one
+        // successor.
+        let mut successor_set: Option<HashSet<usize>> = None;
         for &from in &self.pred[to] {
             if from == block || !self.allowed(from) || (self.chain_of[from] == chain && !self.succ[to].is_empty()) {
                 continue;
             }
             if !self.can_tail_duplicate(to, from) {
-                if successors.len() > 1 && self.has_same_successors(from, successors) {
-                    continue;
+                if successors.len() > 1 {
+                    let set = successor_set.get_or_insert_with(|| successors.iter().copied().collect());
+                    if set.len() > 1 && self.has_same_successors(from, set) {
+                        continue;
+                    }
                 }
                 duplicate = false;
                 continue;
