@@ -2208,6 +2208,10 @@ impl Tti for X86 {
         true
     }
 
+    fn overlapping_copy_tail(&self) -> bool {
+        self.real_mode.is_none()
+    }
+
     // X86TTIImpl::hasDivRemOp (X86TargetTransformInfo.cpp#L7421) asks
     // `isOperationLegal(SDIVREM/UDIVREM, VT)`; X86ISelLowering sets the scalar
     // divides to `Expand` (L340) and leaves the two-result ones at the base

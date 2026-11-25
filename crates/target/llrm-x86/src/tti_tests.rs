@@ -552,8 +552,8 @@ fn vector_rows() -> Vec<(String, Result<(), Option<i64>>)> {
     rows
 }
 
-/// Every integer vector row of `tti_oracle_vector.txt`. `mul <N x i64>` was unpriced, so a loop of
-/// them (tile's init) stayed scalar: clocks +153%.
+/// Every integer vector row of `tti_oracle_vector.txt`. `mul <N x i64>` was
+/// unpriced, so a loop of them (tile's init) stayed scalar: clocks +153%.
 /// Before: `mul <N x i8>` within 64 bits took the 128-bit row (6, not 4), and a
 /// wide add or sub cost its registers in the latency and size kinds, the pin's
 /// base model one.
@@ -589,8 +589,9 @@ fn a_variable_vector_shift_is_priced_as_the_pins_sse2_rows() {
     assert_eq!(cost(ArithOp::AShr, 8, 16, constant), Some(3));
 }
 
-/// `getMemoryInstructionCost` at VF 1 adds `getAddressComputationCost` of the value type, which x86 leaves at the
-/// base model's 0. It was 1: dot's scalar loop cost 9 (the pin's 7), so a VF 8 loop at 60 was taken and ran twice
+/// `getMemoryInstructionCost` at VF 1 adds `getAddressComputationCost` of the
+/// value type, which x86 leaves at the base model's 0. It was 1: dot's scalar
+/// loop cost 9 (the pin's 7), so a VF 8 loop at 60 was taken and ran twice
 /// as many instructions.
 #[test]
 fn a_scalar_access_adds_no_address_cost_on_x86_64() {
@@ -598,8 +599,9 @@ fn a_scalar_access_adds_no_address_cost_on_x86_64() {
     assert_eq!(x86.scalar_access_address_cost(CostKind::RecipThroughput), Cost::FREE);
 }
 
-/// `(long)a[i] * b[i]` of `i16` values priced as `<8 x i64>` ladders (28 for the multiply, 24 for the two
-/// extensions) kept dot's loop scalar, 39% behind gcc. Lowered by `pmullw`/`pmulhw` it is 4 plus the extension of
+/// `(long)a[i] * b[i]` of `i16` values priced as `<8 x i64>` ladders (28 for
+/// the multiply, 24 for the two extensions) kept dot's loop scalar, 39% behind
+/// gcc. Lowered by `pmullw`/`pmulhw` it is 4 plus the extension of
 /// the products, and the operand extensions leave no instruction.
 #[test]
 fn a_multiply_of_two_shorts_widened_to_i64_is_priced_as_pmullw_and_pmulhw() {
@@ -613,7 +615,26 @@ fn a_multiply_of_two_shorts_widened_to_i64_is_priced_as_pmullw_and_pmulhw() {
     assert_eq!(multiply, Ok(extension.map(|extend| Cost::of(4 + extend.value))));
     let user = ExtUser { op: Some(ArithOp::Mul), operands: [short, short], index: 0 };
     assert_eq!(x86.vector_ext_cost(CastKind::SExt, wide, shorts, &[user], CostKind::RecipThroughput), Some(Cost::FREE));
-    // One operand not extended: the multiply is the pin's `<8 x i64>` one, not the widening.
+    // One operand not extended: the multiply is the pin's `<8 x i64>` one, not
+    // the widening.
     let other = x86.vector_arithmetic_cost_ext(ArithOp::Mul, wide, [short, None], CostKind::RecipThroughput);
     assert_ne!(other, multiply);
+}
+
+#[test]
+fn real_mode_keeps_the_pins_copy_tail_and_flat_code_overlaps_it() {
+    let real = crate::tti::RealMode {
+        scale_costs: vec![(1, 0)],
+        registers: 6,
+        scaled_index_insns: 0,
+        huge_space: None,
+        address_registers: None,
+        inline_size_guard: false,
+        float_code_size_percent: 100,
+        unroll_size_few_trips: (0, 0),
+        recursive_inlining: None,
+        priced_self_inlining: None,
+    };
+    assert!(!X86::of_cpu("i486").unwrap().in_real_mode(real).overlapping_copy_tail());
+    assert!(X86::of_cpu("i486").unwrap().overlapping_copy_tail());
 }
