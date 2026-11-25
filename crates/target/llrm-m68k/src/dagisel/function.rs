@@ -45,6 +45,8 @@ pub fn tuning() -> llrm_mir::target::Tuning {
         // are not measurable on m68k: the clock side is that thin set.
         // -O2, -O3 and -Os are under gcc already and keep the pin's bars.
         inline_threshold_o1: Some(112),
+        // QB, 68020: no function over it at -Os, one at -O1 (`voice`)
+        trial_insts_max: Some(5000),
         ..llrm_mir::target::Tuning::PIN
     }
 }
