@@ -2322,7 +2322,7 @@ fn sized(
                         },
                         _ => None,
                     },
-                    false,
+                    Some(crate::inlinecost::UnknownLength::Trial),
                 )
             {
                 return units;
