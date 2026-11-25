@@ -1,4 +1,4 @@
-//! M68K-INLINE-O1: the -O1 inline bar is 112 (`Tuning::inline_threshold_o1`),
+//! M68K-INLINE-O1: the -O1 inline bar is 100 (`Tuning::inline_threshold_o1`),
 //! the pin's 225 stays at -O2. Before it, QB at 68020 -O1 was +23,414 B over
 //! gcc with 87 modules over; a function inlined at both levels cost the
 //! difference in bytes.
@@ -45,4 +45,12 @@ fn a_callee_between_the_o1_and_o2_bars_is_inlined_at_o2_only() {
     let ops = 50;
     assert!(!calls_leaf(ops, Level::O2), "premise: -O2 inlines it");
     assert!(calls_leaf(ops, Level::O1), "-O1 inlined a callee over its bar");
+}
+
+/// 68000 -O1 was +1,298 B over gcc at the bar of 112 (68020 -978), under it at
+/// 100: a callee of pin cost between the two is a call at -O1.
+#[test]
+fn a_callee_between_100_and_112_is_a_call_at_o1() {
+    assert!(!calls_leaf(40, Level::O2), "premise: -O2 inlines it");
+    assert!(calls_leaf(40, Level::O1), "-O1 inlined a callee over its bar of 100");
 }
