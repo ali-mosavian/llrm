@@ -46,9 +46,27 @@ pub fn forget(name: &str) {
     KNOWN.with(|known| known.borrow_mut().remove(name));
 }
 
-/// What a call to `name` destroys, where it is known.
+/// What a call to `name` destroys, where it is known: an inline assembly block
+/// destroys what its name says (the pin's `INLINEASM` has its clobbers as
+/// implicit defs and no call mask); a function of the module what it wrote.
 pub fn known(name: &str) -> Option<Written> {
-    KNOWN.with(|known| known.borrow().get(name).cloned())
+    asm_clobbers(name).or_else(|| KNOWN.with(|known| known.borrow().get(name).cloned()))
+}
+
+/// The registers the `llrm.a64.asm.*` block `name` declares it clobbers; its
+/// outputs are defs of the call and its inputs are left as they were.
+fn asm_clobbers(name: &str) -> Option<Written> {
+    let block = llrm_mir::intrinsics::asm(name)?;
+    let mut out = BTreeSet::new();
+    for clobber in &block.clobbers {
+        let (class, number) = match clobber.split_at(1) {
+            ("x" | "w", digits) => (Class::Gpr, digits.parse::<u32>().ok()),
+            ("v" | "d" | "s" | "h" | "b" | "q", digits) => (Class::Fpr, digits.parse::<u32>().ok()),
+            _ => continue,
+        };
+        out.extend(number.map(|n| id(class, n)));
+    }
+    Some(Arc::new(out))
 }
 
 /// The registers `function`, allocated, leaves different for its caller: each

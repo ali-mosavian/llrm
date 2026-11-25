@@ -188,10 +188,13 @@ pub(crate) fn block_depths(function: &llrm_mir::module::Function) -> BTreeMap<i6
 }
 
 /// For each defined function, how many times its call sites in the module
-/// run per run of their callers, a call in a loop counting 10 a level.
+/// run per run of their callers, a call in a loop counting 10 a level. A call
+/// of the function by itself is one more level: the recursion runs the body
+/// again for each depth (`frameless`: `descend(10)` runs its multiply 11
+/// times).
 pub(crate) fn call_weights(module: &Module) -> BTreeMap<usize, f64> {
     let mut found: BTreeMap<usize, f64> = BTreeMap::new();
-    for global in &module.globals {
+    for (index, global) in module.globals.iter().enumerate() {
         let GlobalKind::Function(function) = &global.kind else { continue };
         if function.entry().is_none() {
             continue;
@@ -206,8 +209,9 @@ pub(crate) fn call_weights(module: &Module) -> BTreeMap<usize, f64> {
                 let Some(Operand::Constant(id)) = instruction.operands.last().copied() else { continue };
                 let ConstantKind::Global(callee) = module.context.get(id).kind else { continue };
                 let depths = depths.get_or_insert_with(|| block_depths(function));
-                *found.entry(callee.0 as usize).or_default() +=
-                    weight(depths.get(&cfg::id(*block)).copied().unwrap_or(0));
+                let depth = depths.get(&cfg::id(*block)).copied().unwrap_or(0);
+                let recursion = usize::from(callee.0 as usize == index);
+                *found.entry(callee.0 as usize).or_default() += weight(depth + recursion);
             }
         }
     }
