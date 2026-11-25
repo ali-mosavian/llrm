@@ -1223,7 +1223,7 @@ fn items_once(
     preserve_flags(&mut function, &assignment)?;
     restore_remade_flags(&mut function);
     crate::ccrcopy::drop_redundant_restores(&mut function, &assignment);
-    branch_fold(&mut function, &assignment);
+    branch_fold(&mut function, &assignment, wants_size);
     if !wants_size {
         // gcc's `duplicate_computed_gotos` is off when optimizing for size
         llrm_spike_mf::taildup::duplicate_indirect_jumps(&mut function, 20, &|inst| {
@@ -1284,7 +1284,19 @@ fn items_once(
         crate::calltarget::through_registers(&mut function, &chosen)?;
     }
     let word_tables = word_table_labels(&function, number);
-    for line in expand(&function)? {
+    let mut lines = expand(&function)?;
+    if wants_size {
+        let fresh = lines
+            .iter()
+            .filter_map(|line| if let Line::Label(at) = line { Some(*at + 1) } else { None })
+            .max()
+            .unwrap_or(0)
+            .max(function.blocks.len());
+        lines = crate::crossjump::cross_jump(lines, number, fresh, &|inst| {
+            crate::instprice::price_of(cpu, inst).map_or(0, |price| price.0)
+        });
+    }
+    for line in lines {
         let at_label = if let Line::Label(at) = &line { Some(*at) } else { None };
         let table = match &line {
             Line::Inst(inst) if inst.opcode == crate::dagisel::wordjump::NAME => match inst.operands.first() {
@@ -1324,7 +1336,7 @@ fn items_once(
         });
         // `AsmPrinter::GetBlockAddressSymbol`: a block whose address is taken
         // is also named by its symbol
-        if let Some(at) = at_label {
+        if let Some(at) = at_label.filter(|at| *at < function.blocks.len()) {
             let id = function.blocks[at].id;
             let names = function.address_symbols.iter().filter(|(block, _)| *block == id);
             out.extend(names.map(|(_, name)| Item::Label(name.clone())));
