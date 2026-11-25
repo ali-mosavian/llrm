@@ -2752,6 +2752,12 @@ pub trait Tti {
         (None, None)
     }
 
+    /// The instructions the unroll cost analysis simulates before it gives up
+    /// (the target's table); none: the pass's own.
+    fn unroll_analysis_budget(&self) -> Option<u64> {
+        None
+    }
+
     /// Whether the target takes gcc's path splitting at `-O3`
     /// (`Tuning::split_paths_at_o3`).
     fn split_paths_at_o3(&self) -> bool {
