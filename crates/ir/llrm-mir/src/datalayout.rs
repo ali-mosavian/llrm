@@ -44,7 +44,13 @@ pub struct DataLayout {
 /// and only for a struct whose body is defined.
 #[derive(Default)]
 struct StructLayouts(
-    std::sync::Mutex<(usize, usize, usize, crate::hash::HashMap<TypeId, std::sync::Arc<(u64, Vec<u64>)>>)>,
+    std::sync::Mutex<(
+        usize,
+        usize,
+        usize,
+        crate::hash::HashMap<TypeId, std::sync::Arc<(u64, Vec<u64>)>>,
+        crate::hash::HashMap<TypeId, u64>,
+    )>,
 );
 
 impl Clone for StructLayouts {
@@ -75,6 +81,13 @@ impl std::fmt::Debug for StructLayouts {
 
 thread_local! {
     static COMPUTED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static ALIGNED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many struct alignments this thread has worked out, for a test that
+/// each is made once.
+pub fn struct_aligns_computed() -> usize {
+    ALIGNED.with(std::cell::Cell::get)
 }
 
 /// How many struct layouts this thread has worked out, for a test that each is
@@ -326,12 +339,41 @@ impl DataLayout {
             Type::Vector { .. } => self.store_size(types, ty).next_power_of_two(),
             Type::Struct { packed: true, .. } => 1,
             Type::Named(name) if types.body(name).is_some_and(|body| body.packed) => 1,
-            Type::Struct { .. } | Type::Named(_) => {
-                let fields = types.fields(ty).unwrap_or_default();
-                fields.iter().map(|&one| self.align(types, one)).max().unwrap_or(1).max(self.aggregate_align)
-            }
+            Type::Struct { .. } | Type::Named(_) => self.struct_align(types, ty),
             Type::Void | Type::Label | Type::Metadata | Type::Token | Type::Function { .. } => 1,
         }
+    }
+
+    /// `StructLayout::getAlignment` of a struct that is not packed, held with
+    /// its layout (`getStructLayout` is a map in LLVM): the largest ABI
+    /// alignment of the fields walks every nested struct again at each ask.
+    fn struct_align(
+        &self,
+        types: &Types,
+        ty: TypeId,
+    ) -> u64 {
+        let version = (types as *const Types as usize, types.version().0, types.version().1);
+        {
+            let mut held = self.layouts.0.lock().expect("the layout memo");
+            if (held.0, held.1, held.2) != version {
+                *held = (version.0, version.1, version.2, Default::default(), Default::default());
+            } else if let Some(found) = held.4.get(&ty) {
+                return *found;
+            }
+        }
+        ALIGNED.with(|count| count.set(count.get() + 1));
+        let fields = types.fields(ty);
+        let made = fields
+            .unwrap_or_default()
+            .iter()
+            .map(|&one| self.align(types, one))
+            .max()
+            .unwrap_or(1)
+            .max(self.aggregate_align);
+        if fields.is_some() {
+            self.layouts.0.lock().expect("the layout memo").4.insert(ty, made);
+        }
+        made
     }
 
     // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/IR/DataLayout.cpp#L871
@@ -584,7 +626,7 @@ impl DataLayout {
         {
             let mut held = self.layouts.0.lock().expect("the layout memo");
             if (held.0, held.1, held.2) != version {
-                *held = (version.0, version.1, version.2, Default::default());
+                *held = (version.0, version.1, version.2, Default::default(), Default::default());
             } else if let Some(found) = held.3.get(&ty) {
                 return std::sync::Arc::clone(found);
             }
@@ -772,5 +814,24 @@ mod tests {
             assert_eq!(layout.alloc_size(types, outer), 28);
         }
         assert_eq!(super::layouts_computed() - before, 2, "outer and inner, once each");
+    }
+
+    /// A struct's alignment was worked out at every ask, from the alignment of
+    /// each field and so of each nested struct: `DataLayout::align` was 13.8%
+    /// of a QB module's compile (arm64 -O2, 40 G instructions). It is made once
+    /// for each struct, as `StructLayout::getAlignment` is.
+    #[test]
+    fn a_structs_alignment_is_made_once_however_often_it_is_asked() {
+        let module =
+            crate::parse::module("%inner = type { i16, i32, [4 x i8] }\n%outer = type { %inner, i16, %inner }\n")
+                .unwrap();
+        let types = &module.context.types;
+        let layout = DataLayout::parse("e-p:16:16-i32:32").unwrap();
+        let outer = types.intern(crate::types::Type::Named("outer".into()));
+        let before = super::struct_aligns_computed();
+        for _ in 0..100 {
+            assert_eq!(layout.align(types, outer), 4);
+        }
+        assert_eq!(super::struct_aligns_computed() - before, 2, "outer and inner, once each");
     }
 }
