@@ -604,6 +604,7 @@ fn analyze_loop_unroll_cost(
         return None;
     }
 
+    let budget = run.tti.unroll_analysis_budget().unwrap_or(ANALYSIS_BUDGET);
     let header = lp.get_header();
     let latch = lp.get_loop_latch(run.function).expect("a latch");
     let preheader = lp.get_loop_preheader(run.function).expect("a preheader");
@@ -678,8 +679,8 @@ fn analyze_loop_unroll_cost(
                 }
                 simulated += 1;
                 MAX_SIMULATED.fetch_max(simulated, std::sync::atomic::Ordering::Relaxed);
-                if simulated > ANALYSIS_BUDGET {
-                    why(run, lp, &format!("cannot analyze: over {ANALYSIS_BUDGET} simulated instructions"));
+                if simulated > budget {
+                    why(run, lp, &format!("cannot analyze: over {budget} simulated instructions"));
                     return None;
                 }
 
