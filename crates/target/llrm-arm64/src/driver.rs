@@ -291,7 +291,10 @@ fn lower_function(
     let ccmp = std::env::var("LLRM_ARM64_CCMP");
     if !flagged(function, &["optnone"]) && ccmp.as_deref() != Ok("off") {
         // `stress` is `-aarch64-stress-ccmp`: every candidate converts.
-        crate::ccmp::run(&mut machine, flagged(function, &["minsize"]), ccmp.as_deref() == Ok("stress"));
+        // DEVIATE CCMP-OS (owner x87, exit 2026-12-31): the pin takes the
+        // code-size branch of `shouldConvert` at `minsize`; here at `optsize`
+        // too (-Os is optsize alone, D8).
+        crate::ccmp::run(&mut machine, flagged(function, &["minsize", "optsize"]), ccmp.as_deref() == Ok("stress"));
         dump("ConditionalCompares", &machine);
     }
     // `EarlyIfConverter` skips an `optnone` function (`skipFunction`).
