@@ -502,9 +502,9 @@ fn slot_after(body: &str) -> String {
 }
 
 /// `*d = (T){.head = d->head}`: the slot is the old head and zeros, copied
-/// back whole. Before: a 80-byte copy back (its head a copy of what `d`
-/// held, `rep movs` and `rep stos` each way at x86 -Os, 2,319 B against gcc's
-/// 2,078 in `blok_pair`). Now: the zeros alone are written to `d`.
+/// back whole. Before: an 80-byte copy back, the head copied out and in again
+/// (`rep movs` and `rep stos` each way at x86 -Os). Now: the zeros alone are
+/// written to `d`.
 #[test]
 fn test_a_copy_back_of_a_slot_built_from_its_own_bytes_writes_only_the_new_ones() {
     let after = slot_after(

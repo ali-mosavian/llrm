@@ -1175,6 +1175,7 @@ impl State<'_> {
             self.insert_def(made, after, true);
             after = Created::After(self.mssa.get_memory_access(made).expect("a made access"));
         }
+        llrm_support::debug!("memcpyopt", "assembled slot forwarded: {size} bytes");
         true
     }
 
