@@ -254,3 +254,18 @@ fn vector_min_and_max_are_neon_instructions() {
         }
     }
 }
+
+/// `visitIMINMAX`'s sign-bit test used `1 << (vt.size_in_bits() - 1)`: the whole
+/// vector's width, not the lane's. A `<8 x i32>` min/max (256 bits, split by the
+/// legalizer, so the fold runs on the illegal type) shifted a `u128` by 255:
+/// the QB module `synth.c` at arm64 -O3 panicked ("attempt to shift left with
+/// overflow") in a debug compiler and, in a release one, tested the wrong bit.
+#[test]
+fn a_vector_wider_than_128_bits_min_and_max_compiles() {
+    for op in ["smin", "smax", "umin", "umax"] {
+        for vector in ["<8 x i32>", "<4 x i64>", "<16 x i16>"] {
+            let source = min_max_ir(op, vector);
+            ours(&source).unwrap_or_else(|why| panic!("{op} {vector}: {why}"));
+        }
+    }
+}
