@@ -96,16 +96,24 @@ impl Graph<'_> {
         self.accesses.add_instruction(&unit, inst);
         let effect = llrm_analysis::mssa::shadow::effect_of_in(self.accesses, &unit);
         let access = match at {
-            Created::Beginning => {
-                self.updater.create_memory_access_in_bb(self.mssa, function, inst, None, block, Place::Beginning, &effect)?
-            }
+            Created::Beginning => self.updater.create_memory_access_in_bb(
+                self.mssa,
+                function,
+                inst,
+                None,
+                block,
+                Place::Beginning,
+                &effect,
+            )?,
             Created::End => {
                 self.updater.create_memory_access_in_bb(self.mssa, function, inst, None, block, Place::End, &effect)?
             }
             Created::After(previous) => {
                 self.updater.create_memory_access_after(self.mssa, function, inst, None, previous, &effect)?
             }
-            Created::Before(next) => self.updater.create_memory_access_before(self.mssa, function, inst, None, next, &effect)?,
+            Created::Before(next) => {
+                self.updater.create_memory_access_before(self.mssa, function, inst, None, next, &effect)?
+            }
         };
         if self.mssa.access(access).kind == Kind::Def {
             self.updater.insert_def(self.mssa, function, access, rename_uses);
@@ -514,6 +522,22 @@ fn sink(
     }
     graph.erase(function, inst);
     function.erase(inst)
+}
+
+/// [`splitPredecessorsOfLoopExit`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/LICM.cpp#L1281):
+/// each predecessor of the exit block `exit` jumps to a block of its own,
+/// `.split.loop.exit`, that jumps to `exit`, so that what the loop defines
+/// reaches `exit` through trivially replaceable phis and the exit stays one
+/// every predecessor of which is in the loop. The blocks and edges change: the
+/// analyses are made again.
+pub fn split_exit(
+    function: &mut Function,
+    exit: BlockId,
+) {
+    for pred in function.predecessors(exit).to_vec() {
+        let new = llrm_analysis::edges::split_block_predecessors_of(function, exit, &[pred], true);
+        function.set_block_name(new, ".split.loop.exit");
+    }
 }
 
 /// The edits one loop's decisions make, in the order `runOnLoop` makes them:

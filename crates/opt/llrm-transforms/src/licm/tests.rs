@@ -262,6 +262,39 @@ b3:
     assert_eq!(sunk_and_erased(&plain).0, vec!["v".to_owned()]);
 }
 
+/// An exit block that two loop blocks leave to reads `%v` through a phi with
+/// another arm, so the phi is not trivially replaceable. The pass left `%v` in
+/// the loop: it sank only through phis that read nothing else, and never split
+/// the exit's predecessors (`splitPredecessorsOfLoopExit`, LICM.cpp:1281). A
+/// dispatch loop's handlers kept the pointer bumps they feed the exit with, in
+/// every handler's head (QB `exec_loop` m32 -Os, the pin sinks them).
+#[test]
+fn test_a_value_read_by_an_exit_phi_with_another_arm_is_sunk_into_a_split_exit() {
+    let text = "define i16 @f(i16 %n) {
+b0:
+  br label %b1
+
+b1:
+  %i = phi i16 [ 0, %b0 ], [ %i1, %b2 ]
+  %v = mul i16 %i, 3
+  %c = icmp slt i16 %i, %n
+  br i1 %c, label %b2, label %b3
+
+b2:
+  %i1 = add i16 %i, 1
+  %d = icmp slt i16 %i1, 100
+  br i1 %d, label %b1, label %b3
+
+b3:
+  %r = phi i16 [ %v, %b1 ], [ 0, %b2 ]
+  ret i16 %r
+}
+";
+    let (_, after) = applied_on(text, llrm_mir::target::Neutral, &trips(), true);
+    assert!(!block_of(&after, "b1").iter().any(|line| line.contains("mul")), "%v left the loop:\n{after}");
+    assert!(after.contains(".split.loop.exit"), "from a block made for the edge:\n{after}");
+}
+
 /// A value nothing reads is erased, not sunk.
 #[test]
 fn test_a_value_nothing_reads_is_erased() {
