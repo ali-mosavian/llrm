@@ -208,7 +208,24 @@ pub fn translate_flat(
             out.push(line.to_owned());
             continue;
         }
-        let (call, declare) = flat_block(line, flat, assemble)?;
+        let (mut call, mut declare) = flat_block(line, flat, assemble)?;
+        // The name is the bytes, registers and clobbers: two blocks alike in
+        // those and unlike in the types of their operands are two
+        // functions, so the later one takes a suffix.
+        let name = declare.split('"').nth(1).unwrap_or_default().to_owned();
+        let signature = |declare: &str| declare.split_once("\"(").map(|(_, types)| types.to_owned());
+        let mut suffix = 0;
+        while let Some(taken) = declares.iter().find(|one| one.contains(&format!("@\"{name}{}\"", unique(suffix)))) {
+            if signature(taken) == signature(&declare) {
+                break;
+            }
+            suffix += 1;
+        }
+        if suffix > 0 {
+            let renamed = format!("{name}{}", unique(suffix));
+            call = call.replace(&format!("@\"{name}\""), &format!("@\"{renamed}\""));
+            declare = declare.replace(&format!("@\"{name}\""), &format!("@\"{renamed}\""));
+        }
         out.push(call);
         if !declares.contains(&declare) {
             declares.push(declare);
@@ -221,6 +238,11 @@ pub fn translate_flat(
         joined.push('\n');
     }
     Ok(joined)
+}
+
+/// The suffix of the `n`th block of one name and different operand types.
+fn unique(n: usize) -> String {
+    if n == 0 { String::new() } else { format!(".s{n}") }
 }
 
 /// The top-level `, `-separated items of `text` (not inside parentheses or
