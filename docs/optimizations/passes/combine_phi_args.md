@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/combine_phi_args.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/combine_phi_args.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/combine_phi_args.rs sha256:5305a97d584113c17fbcb17ffc23c21425cea1fb07bef3320a7235b387233b7d -->
+<!-- src: crates/opt/llrm-transforms/src/combine_phi_args.rs sha256:9b525e9528d1b1c925746132ab9017cb1e9f43e12b52cccf83c0f53537f28925 -->
 
 # combine_phi_args
 
@@ -20,6 +20,10 @@ at d1106deb71cc.
   user, become the operation applied to a phi of the left operands (or to
   the one left operand all of them share). The new operation goes at the top
   of the phi's block, after the phis.
+- Two or more incoming values that are the same binary operator or compare
+  of two variables, each with one user, where one operand is the same in all
+  of them, become the operation applied to that operand and a phi of the
+  other (`foldPHIArgBinOpIntoPHI`).
 - Two or more incoming values that are simple loads with one user each and
   no memory write after them in their block
   (`isSafeAndProfitableToSinkLoad`) become one load of a phi of the
@@ -50,10 +54,9 @@ operand types, predicate), `shouldChangeType` for integer casts, the
 constant right operand, the intersection of the binary operators' flags.
 
 DEVIATE 1: the rest of `visitPHINode` is not translated: the
-`insertvalue`/`extractvalue` and binary-operator-of-two-variables forms of
-`foldPHIArgOpIntoPHI`, `foldPHIArgIntToPtrToPHI`, the pointer-cast phi,
-`foldIntegerTypedPHI`, `SliceUpIllegalIntegerPHI`, and
-`foldDependentIVs`. Exit: later slices.
+`insertvalue`/`extractvalue` forms of `foldPHIArgOpIntoPHI`,
+`foldPHIArgIntToPtrToPHI`, the pointer-cast phi, `foldIntegerTypedPHI`,
+`SliceUpIllegalIntegerPHI`, and `foldDependentIVs`. Exit: later slices.
 
 DEVIATE 2: no check that the block's terminator is an EH pad, which MIR
 cannot have a phi before; no debug locations.
