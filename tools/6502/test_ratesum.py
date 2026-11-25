@@ -27,5 +27,17 @@ class RateSum(unittest.TestCase):
     def test_counts_name_each_status(self):
         self.assertEqual(counts({"a": row(1, 1), "b": ("WRONG", "x")}, ["a", "b", "c"]), {"PASS": 1, "WRONG": 1, "missing": 1})
 
+class ProductRuntime(unittest.TestCase):
+    """The gate number linked the runtime with BSS scratch cells (no OURS_RTLIB): runtime-heavy programs read slower than the product."""
+    def test_a_side_runs_ours_cr_with_the_product_runtime_archive(self):
+        import ratesum, tempfile
+        from pathlib import Path
+        from unittest import mock
+        seen = {}
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.object(ratesum, "product_runtime", return_value=Path("/x/rt.lib"), create=True), \
+                mock.patch.object(ratesum.subprocess, "run", side_effect=lambda cmd, **k: seen.update(env=k["env"])):
+            ratesum.run_side(Path(tmp), "6502", "O1", Path(tmp) / "o.tsv", ["a"], tmp)
+        self.assertEqual(seen["env"].get("OURS_RTLIB"), "/x/rt.lib")
+
 if __name__ == "__main__":
     unittest.main()

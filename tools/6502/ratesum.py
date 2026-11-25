@@ -68,10 +68,20 @@ def counts(side, names):
     return tally
 
 
+def product_runtime(dist, tmp):
+    """The runtime archive of `dist` (`mkrt.py`: scratch cells at zero page, what the product links), built once per dist and kept beside
+    the results. Without it ours_cr.py links the runtime with absolute BSS scratch and every runtime-heavy program reads slower."""
+    lib = Path(tmp) / f"rt-{md5(dist / 'llrm-cc')}-{md5(dist / 'mos_rt.s')}.lib"
+    if not lib.exists():
+        subprocess.run(["python3", str(HERE / "mkrt.py"), str(dist / "llrm-cc"), str(lib)], check=True, cwd=HERE,
+                       env=dict(os.environ, OURS_RT=str(dist / "mos_rt.s")), stdout=subprocess.DEVNULL)
+    return lib
+
+
 def run_side(dist, cpu, level, out, names, tmp):
     """One ours_cr.py run; the 'tsv' it writes is the id of a finished run."""
     env = dict(os.environ, OURS_CPU=cpu, OURS_PADS=PADS, OURS_RT=str(dist / "mos_rt.s"), LLRM_CC=str(dist / "llrm-cc"),
-               OURS_FLAGS="honor", TMPDIR=str(tmp))
+               OURS_FLAGS="honor", TMPDIR=str(tmp), OURS_RTLIB=str(product_runtime(dist, Path(out).parent)))
     env.setdefault("SIM65_INSNS", str(Path.home() / "scratch" / "s4" / "sim65-insns"))
     for k, v in GUARD_DEFAULTS.items():
         env.setdefault(k, v)
