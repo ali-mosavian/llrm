@@ -578,7 +578,21 @@ impl Formula {
         se: &ScalarEvolution,
         cx: &Cx,
     ) -> Option<Ty> {
-        if let Some(&first) = self.base_regs.first() {
+        // llvm-mos keeps the formula's type through `GenerateZExts`: with a
+        // register narrowed, the widest integer register is the original.
+        let widest = self
+            .base_regs
+            .iter()
+            .chain(&self.scaled_reg)
+            .filter_map(|&reg| match se.type_of(reg) {
+                Ty::Int(bits) => Some(bits),
+                Ty::Ptr(_) => None,
+            })
+            .max();
+        let all_ints = self.base_regs.iter().chain(&self.scaled_reg).all(|&reg| matches!(se.type_of(reg), Ty::Int(_)));
+        if let (true, Some(bits)) = (all_ints, widest) {
+            Some(Ty::Int(bits))
+        } else if let Some(&first) = self.base_regs.first() {
             Some(se.type_of(first))
         } else if let Some(scaled) = self.scaled_reg {
             Some(se.type_of(scaled))

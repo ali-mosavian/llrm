@@ -28,41 +28,45 @@ enum StorePlace {
     Global,
 }
 
+/// Bytes of `mov [reg+disp8], imm` by operand width; a wider store is 8.
+const IMMEDIATE_STORE_BYTES: [(u64, u64); 3] = [(1, 4), (2, 6), (4, 7)];
+
+/// Bytes of a 4-byte-opcode-and-modrm instruction (`movups [m], xmm0`,
+/// `lea rdi, [m]`) by place: frame, register, global.
+const MEMORY_FORM_BYTES: (u64, u64, u64) = (5, 4, 7);
+
 impl StorePlace {
+    fn pick(
+        self,
+        frame: u64,
+        register: u64,
+        global: u64,
+    ) -> u64 {
+        match self {
+            Self::Frame => frame,
+            Self::Register => register,
+            Self::Global => global,
+        }
+    }
+
     /// `mov [m], imm` of `width` bytes.
     fn immediate_store(
         self,
         width: u64,
     ) -> u64 {
-        let register = match width {
-            1 => 4,
-            2 => 6,
-            4 => 7,
-            _ => 8,
-        };
-        match self {
-            Self::Frame => register + 1,
-            Self::Register => register,
-            Self::Global => register + 3,
-        }
+        let register = IMMEDIATE_STORE_BYTES.iter().find(|(wide, _)| *wide == width).map_or(8, |(_, bytes)| *bytes);
+        self.pick(register + 1, register, register + 3)
     }
 
     /// `movups [m], xmm0`.
     fn wide_store(self) -> u64 {
-        match self {
-            Self::Frame => 5,
-            Self::Register => 4,
-            Self::Global => 7,
-        }
+        let (frame, register, global) = MEMORY_FORM_BYTES;
+        self.pick(frame, register, global)
     }
 
     /// `lea rdi, [m]`.
     fn lea(self) -> u64 {
-        match self {
-            Self::Frame => 5,
-            Self::Register => 4,
-            Self::Global => 7,
-        }
+        self.wide_store()
     }
 }
 
