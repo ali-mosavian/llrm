@@ -10,6 +10,7 @@ use llrm_codegen::backend::isel;
 use llrm_codegen::backend::selectiondag::SelectionDAG;
 use llrm_codegen::backend::selectiondag::builder::{BuilderTarget, TargetNodes, build_block};
 use llrm_codegen::backend::selectiondag::function_lowering::FunctionLoweringInfo;
+use llrm_codegen::backend::selectiondag::live_out;
 use llrm_codegen::backend::selectiondag::mvt::EVT;
 use llrm_codegen::backend::selectiondag::schedule::Unit;
 use llrm_codegen::backend::selectiondag::{BooleanContents, DagConfig};
@@ -248,7 +249,24 @@ pub fn select_function_with(
             );
         llrm_analysis::blockfreq::BlockFrequencies::of_bpi(function, bpi)
     });
+    let mut visited = llrm_support::hash::HashSet::default();
     for &block in function.layout() {
+        // `SelectAllBasicBlocks`: a phi knows what its incoming values do once
+        // all its predecessors are selected.
+        let ready = function.predecessors(block).iter().all(|pred| visited.contains(pred));
+        let phis: Vec<_> = function
+            .iter_block(block)
+            .take_while(|&inst| function.instruction(inst).opcode == llrm_mir::opcode::Opcode::Phi)
+            .collect();
+        for phi in phis {
+            if ready {
+                let bits = |bits: u32| (bits != 0 && bits <= 32).then(|| if bits <= 8 { 8 } else if bits <= 16 { 16 } else { 32 });
+                live_out::compute_phi_live_out_reg_info(module, function, phi, &bits, &mut info);
+            } else if let Some(reg) = function.instruction(phi).result.and_then(|r| info.value_regs.get(&r)) {
+                info.live_out.remove(reg);
+            }
+        }
+        visited.insert(block);
         let mut built = build_block(module, function, &layout, &target, &arch, &convention, &mut info, block)
             .map_err(|why| why.0.to_owned())?;
         if let Some(frequencies) = &frequencies {
@@ -270,6 +288,7 @@ pub fn select_function_with(
             mul.clone(),
             libcalls,
             &mut temporaries,
+            Some(&mut info),
         )
         .map_err(|why| format!("{why:?}"))?;
         updates.push(built.phi_updates);
@@ -306,6 +325,7 @@ pub fn select_function_with(
                 mul.clone(),
                 libcalls,
                 &mut temporaries,
+                Some(&mut info),
             )
             .map_err(|why| format!("{why:?}"))?;
             updates.push(extra.phi_updates);
