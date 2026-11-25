@@ -1557,6 +1557,15 @@ pub trait Tti {
         None
     }
 
+    /// DEVIATE INLINE-HINT-UNCAPPED: whether the trials that keep the calls of
+    /// a hinted callee (keep-hinted-calls, keep-loop-calls) are exempt from
+    /// `os_trial_clock_cap_percent`: bytes decide at -Os, as gcc's
+    /// `want_inline_small_function_p` (growth <= 0) does, and the calls it
+    /// keeps are the calls gcc keeps. false: the shared cap.
+    fn opt_size_inline_hint_trial_uncapped(&self) -> bool {
+        false
+    }
+
     /// With `opt_size_inline_outline_trial`: the most distinct callees a module
     /// may have among the candidate sites and still be compiled again. The
     /// trial's compile cost follows the candidates and its gain does not (QB

@@ -634,7 +634,16 @@ fn compiled_module_at_size(
         .and_then(|cpu| cpu.target().tti())
         .and_then(|tti| tti.opt_size_inline_outline_clock_cap_percent())
         .or(cap);
-    let cap_of = |dimension: Dimension| if dimension == Dimension::OutlineCalls { outline_cap } else { cap };
+    let hint_uncapped = options
+        .cpu()
+        .ok()
+        .and_then(|cpu| cpu.target().tti())
+        .is_some_and(|tti| tti.opt_size_inline_hint_trial_uncapped());
+    let cap_of = |dimension: Dimension| match dimension {
+        Dimension::OutlineCalls => outline_cap,
+        Dimension::KeepHintedCalls | Dimension::KeepLoopCalls if hint_uncapped => None,
+        _ => cap,
+    };
     let mut again = options.clone();
     again.dump = None;
     // A dimension that stays, with its variant assembled whole or the program
