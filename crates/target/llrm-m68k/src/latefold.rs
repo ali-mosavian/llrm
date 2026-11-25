@@ -63,14 +63,17 @@ enum Ending {
 }
 
 fn ending(inst: &mc::Inst) -> Ending {
-    let name = inst.opcode;
+    let name = inst.opcode.as_bytes();
     match name {
-        "RTS" | "RTE" | "RTR" => Ending::Return,
-        _ if name.starts_with("BRA") => Ending::Jump,
-        _ if name.starts_with("JMP") => Ending::Table,
-        _ if name.starts_with("TRAP") => Ending::Trap,
-        _ if name.starts_with("DB") => Ending::Loop,
-        _ if opposite(name).is_some() => Ending::Cond,
+        [b'R', b'T', b'S' | b'E' | b'R'] => Ending::Return,
+        [b'B', b'R', b'A', ..] => Ending::Jump,
+        [b'J', b'M', b'P', ..] => Ending::Table,
+        [b'T', b'R', b'A', b'P', ..] => Ending::Trap,
+        [b'D', b'B', ..] => Ending::Loop,
+        // `B<cc><width>`: a condition is two letters and a width follows
+        [b'B', _, _, b'8'] | [b'B', _, _, b'1', b'6'] | [b'B', _, _, b'3', b'2'] if opposite(inst.opcode).is_some() => {
+            Ending::Cond
+        }
         _ => Ending::Plain,
     }
 }
@@ -87,6 +90,19 @@ fn opposite(name: &str) -> Option<&'static str> {
         )
 }
 
+thread_local! {
+    /// Instructions, then blocks, the edge scans of this thread looked at.
+    static EDGE_SCANS: std::cell::Cell<(usize, usize)> = const { std::cell::Cell::new((0, 0)) };
+}
+
+/// The instructions and the blocks this thread's edge scans looked at. The
+/// graph is rebuilt after every merge; a scan that read every instruction of
+/// a block made the pass quadratic (`synth.c` at 68000 -O1 -funroll-loops,
+/// 60 % of 100 s).
+pub fn edge_scans() -> (usize, usize) {
+    EDGE_SCANS.with(std::cell::Cell::get)
+}
+
 struct Block {
     id: usize,
     label: Option<usize>,
@@ -98,8 +114,11 @@ struct Block {
 /// Where each block is and who reaches it, indexed by block id.
 struct Graph {
     position: Vec<usize>,
-    by_label: HashMap<usize, usize>,
-    preds: Vec<Vec<usize>>,
+    /// Label to block id, `usize::MAX` for none.
+    by_label: Vec<usize>,
+    /// The predecessors of block `b` are `from[start[b]..start[b + 1]]`.
+    start: Vec<u32>,
+    from: Vec<u32>,
 }
 
 struct Late {
@@ -250,36 +269,68 @@ impl Late {
 
     fn build_graph(&self) -> Graph {
         let size = self.blocks.iter().map(|block| block.id + 1).max().unwrap_or(0);
+        let labels = self.blocks.iter().filter_map(|block| block.label).max().map_or(0, |last| last + 1);
         let mut position = vec![usize::MAX; size];
-        let mut by_label = HashMap::default();
+        let mut by_label = vec![usize::MAX; labels];
         for (at, block) in self.blocks.iter().enumerate() {
             position[block.id] = at;
             if let Some(label) = block.label {
-                by_label.insert(label, block.id);
+                by_label[label] = block.id;
             }
         }
-        let mut preds = vec![Vec::new(); size];
+        let mut edges: Vec<(u32, u32)> = Vec::new();
+        let mut out = Vec::new();
         for (at, block) in self.blocks.iter().enumerate() {
-            for to in self.edges(at, &by_label) {
-                preds[to].push(block.id);
-            }
+            self.edges_into(at, &by_label, &mut out);
+            edges.extend(out.iter().map(|&to| (to as u32, block.id as u32)));
         }
-        Graph { position, by_label, preds }
+        let mut start = vec![0u32; size + 1];
+        for &(to, _) in &edges {
+            start[to as usize + 1] += 1;
+        }
+        for b in 0..size {
+            start[b + 1] += start[b];
+        }
+        let mut next = start.clone();
+        let mut from = vec![0u32; edges.len()];
+        for &(to, source) in &edges {
+            from[next[to as usize] as usize] = source;
+            next[to as usize] += 1;
+        }
+        Graph { position, by_label, start, from }
     }
 
-    /// The blocks `blocks[at]` goes to: its branches, then the block after it.
     fn edges(
         &self,
         at: usize,
-        by_label: &HashMap<usize, usize>,
+        by_label: &[usize],
     ) -> Vec<usize> {
-        let block = &self.blocks[at];
         let mut out = Vec::new();
-        for inst in &block.insts {
+        self.edges_into(at, by_label, &mut out);
+        out
+    }
+
+    /// The blocks `blocks[at]` goes to, sorted: its branches and the block
+    /// after it.
+    fn edges_into(
+        &self,
+        at: usize,
+        by_label: &[usize],
+        out: &mut Vec<usize>,
+    ) {
+        out.clear();
+        EDGE_SCANS.with(|count| count.set((count.get().0, count.get().1 + 1)));
+        let block = &self.blocks[at];
+        let named = |label: usize| by_label.get(label).copied().filter(|&id| id != usize::MAX);
+        // the terminators are the block's last instructions
+        for inst in block.insts.iter().rev().take_while(|inst| {
+            EDGE_SCANS.with(|count| count.set((count.get().0 + 1, count.get().1)));
+            ending(inst) != Ending::Plain
+        }) {
             match ending(inst) {
                 Ending::Plain | Ending::Return | Ending::Trap => {}
-                Ending::Table => out.extend(self.tables.iter().filter_map(|label| by_label.get(label).copied())),
-                _ => out.extend(self.label_of(inst).and_then(|label| by_label.get(&label).copied())),
+                Ending::Table => out.extend(self.tables.iter().filter_map(|&label| named(label))),
+                _ => out.extend(self.label_of(inst).and_then(named)),
             }
         }
         if self.falls_through(at) {
@@ -287,7 +338,6 @@ impl Late {
         }
         out.sort_unstable();
         out.dedup();
-        out
     }
 
     fn falls_through(
@@ -390,7 +440,7 @@ impl Late {
             .skip(1)
             .filter(|block| {
                 block.label.is_some_and(|label| forward.contains_key(&label))
-                    && self.graph(|graph| graph.preds[block.id].is_empty())
+                    && self.graph(|graph| graph.start[block.id] == graph.start[block.id + 1])
             })
             .map(|block| block.id)
             .collect();
@@ -456,7 +506,10 @@ impl TailMergeFunction for Late {
         &self,
         block: usize,
     ) -> Vec<usize> {
-        self.graph(|graph| graph.preds.get(block).cloned().unwrap_or_default())
+        self.graph(|graph| match (graph.start.get(block), graph.start.get(block + 1)) {
+            (Some(&from), Some(&to)) => graph.from[from as usize..to as usize].iter().map(|&b| b as usize).collect(),
+            _ => Vec::new(),
+        })
     }
 
     fn insts(
@@ -556,8 +609,10 @@ impl TailMergeFunction for Late {
         block: usize,
     ) -> Option<Exits<usize, mc::Inst>> {
         let insts = &self.blocks[self.at(block)].insts;
-        let target =
-            |inst: &mc::Inst| self.label_of(inst).and_then(|label| self.graph(|g| g.by_label.get(&label).copied()));
+        let target = |inst: &mc::Inst| {
+            self.label_of(inst)
+                .and_then(|label| self.graph(|g| g.by_label.get(label).copied().filter(|&id| id != usize::MAX)))
+        };
         let ends: Vec<&mc::Inst> =
             insts.iter().rev().take_while(|inst| ending(inst) != Ending::Plain).take(3).collect();
         match ends[..] {
