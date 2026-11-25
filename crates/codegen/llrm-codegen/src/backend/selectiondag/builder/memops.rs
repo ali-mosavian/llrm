@@ -1413,17 +1413,6 @@ impl Builder<'_> {
                     _ if strings_exist && matches!(which, Intrinsic::MemCpy) && !self.runtime_has("memcpy") => {
                         self.rep_movs_dwords(root, dst, other, size)
                     }
-                    // DEVIATE MEM-OS-REP: tuned for size, a length known at run
-                    // time that `memcpycall` left (outside every loop) is one
-                    // `rep movsb`, as gcc's `rep_prefix_1_byte`.
-                    _ if strings_exist
-                        && matches!(which, Intrinsic::MemCpy)
-                        && constant.is_none()
-                        && opt_size
-                        && self.target.tti.as_ref().is_some_and(|tti| tti.0.inlines_variable_memcpy_at_size()) =>
-                    {
-                        self.rep_movsb(root, dst, other, size)
-                    }
                     // a move a pass proved forward, past the inline limit: `rep
                     // movs` ascends, as the move needs (DEVIATE: the pin calls
                     // `memmove`; at m16 the old selector inlines it, 2.2x on
@@ -1542,16 +1531,6 @@ impl Builder<'_> {
                             && bytes % self.pointer_bytes() == 0 =>
                     {
                         self.rep_stos(root, dst, other, bytes, self.pointer_bytes())?
-                    }
-                    // DEVIATE MEM-OS-REP: gcc's `rep_prefix_1_byte` for a fill of unknown size;
-                    // `memcpycall` marked the ones in loops.
-                    (None, None)
-                        if strings_exist
-                            && opt_size
-                            && !llrm_mir::memory::has(&info.attrs, crate::backend::memcpycall::FILL_CALL)
-                            && self.target.tti.as_ref().is_some_and(|tti| tti.0.inlines_variable_memcpy_at_size()) =>
-                    {
-                        self.rep_stosb(root, dst, other, size)
                     }
                     _ if strings_exist && !self.runtime_has("memset") => self.rep_stosb(root, dst, other, size),
                     _ => self.mem_libcall(info, operands[0], "memset", root, &[dst, other], size)?,

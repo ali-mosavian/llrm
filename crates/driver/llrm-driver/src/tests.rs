@@ -6742,10 +6742,10 @@ fn a_calls_arguments_come_off_the_stack_by_add_at_o1_and_by_pop_at_m32_os() {
 
 /// LoopIdiomRecognize forms the `memcpy` of a copy loop whose length is known at run time and the target calls it (m32 has a
 /// libc; `Tuning::libc_memcpy`), as the pin does. At -Os the object decides (LIR-COPY-TRIAL, #10220): the call stays only where it
-/// is fewer bytes, and a cold `rep movsb` (MEM-OS-REP) is fewer than the 19-byte loop or a call. At -O2 the `memcpy` is always
+/// is fewer bytes. At -O2 the `memcpy` is always
 /// formed (here the 64-word bound expands it inline, as `rep movsd`).
 #[test]
-fn a_copy_loop_of_run_time_length_is_a_memcpy_at_m32_o2_and_rep_movsb_at_os() {
+fn a_copy_loop_of_run_time_length_is_a_memcpy_at_m32_o2_and_os() {
     let text = "target datalayout = \"@m32-datalayout@\"\ntarget triple = \"i486-unknown-linux-gnu\"\n\
                 @d = external global [64 x i32]\n@s = external global [64 x i32]\n                define void @f(i32 %n) {\nentry:\n  %e = icmp eq i32 %n, 0\n  br i1 %e, label %done, label %body\n\
                 body:\n  %i = phi i32 [ 0, %entry ], [ %j, %body ]\n  %a = getelementptr i32, ptr @s, i32 %i\n  %v = load i32, ptr %a\n  \
@@ -6757,11 +6757,11 @@ fn a_copy_loop_of_run_time_length_is_a_memcpy_at_m32_o2_and_rep_movsb_at_os() {
     };
     let o2 = listing("-O2");
     assert!(o2.contains("memcpy") || o2.contains("rep movsd"), "-O2: the loop is a memcpy:\n{o2}");
-    // MEM-OS-REP: the copy outside every loop is one `rep movsb`, fewer bytes than the loop's 19.
+    // The pin's call, not a `rep movsb` (its startup costs tens of clocks a small copy: QB `arry_fill`).
     let os = listing("-Os");
     assert!(
-        !os.contains("memcpy") && os.contains("rep movsb") && !os.contains("loop"),
-        "-Os: one `rep movsb`, no loop or call:\n{os}"
+        os.contains("memcpy") && !os.contains("rep movsb") && !os.contains("loop"),
+        "-Os: a memcpy call, no `rep movsb` or loop:\n{os}"
     );
 }
 

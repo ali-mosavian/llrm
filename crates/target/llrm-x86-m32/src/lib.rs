@@ -444,8 +444,6 @@ fn tuning(costs: &llrm_mir::target::OperationCosts) -> llrm_mir::target::Tuning 
         // 32-bit counter; the 486 and P5 pay a prefix on every 16-bit
         // operation (ring -O2: 67177 clk, gcc 61179).
         prefixed_16_bit_counters: true,
-        // DEVIATE MEM-OS-REP (owner x87, exit 2026-12-06): see `Tuning`.
-        inline_variable_memcpy_at_size: true,
         // DEVIATE REC5-1 (owner w2, exit 2026-11-20), not at -Os:
         // see `Tuning::ipsccp_widen_keeps_sign`.
         ipsccp_widen_keeps_sign: true,

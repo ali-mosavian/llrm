@@ -2571,11 +2571,6 @@ pub trait Tti {
         false
     }
 
-    /// `Tuning::inline_variable_memcpy_at_size`.
-    fn inlines_variable_memcpy_at_size(&self) -> bool {
-        false
-    }
-
     /// `Tuning::size_copy_price`.
     fn copy_price_for_size(&self) -> Option<crate::target::CopyPrice> {
         None
