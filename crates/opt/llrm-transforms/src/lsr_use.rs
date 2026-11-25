@@ -978,9 +978,9 @@ impl Cost {
 
             // llvm-mos `RateRegister`: a step of an illegal width is several
             // machine adds. Not translated: its `RateFormula` doubling of the
-            // base adds (a 16-bit table pointer kept beside the counter paid
-            // +42 B at -Os, switch_peeled_table; the 6502 prices base adds
-            // by width itself).
+            // base adds: a word-wide table pointer kept beside a counter, the
+            // loop one counter shorter without it (+42 B at -Os); the 6502
+            // prices base adds by width itself.
             let reg_ty = r.se.type_of(reg);
             let mut loop_cost =
                 if r.cx.layout.is_illegal_width(r.se.get_type_size_in_bits(r.cx, reg_ty)) { 2 } else { 1 };
