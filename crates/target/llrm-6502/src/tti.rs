@@ -155,8 +155,10 @@ impl Tti for Mos6502 {
         true
     }
 
-    /// Bytes first at every level (6502-UNROLL-RATE): a run of copies is a
-    /// `memcpy` where the call and its routine are fewer bytes.
+    /// A run of copies is a `memcpy` at every level where the call and its
+    /// routine are fewer bytes. The size gate is lifted by bytes alone: at
+    /// -O2/-O3, where clocks and 3 B per clock judge, a run the loop would
+    /// copy faster costs clocks (6502-UNROLL-RATE).
     fn string_runs_at_speed(&self) -> bool {
         true
     }
