@@ -100,7 +100,10 @@ const ANALYSIS_BUDGET: u64 = 1 << 16;
 
 static MAX_SIMULATED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
-/// The most instructions any one cost analysis has simulated.
+/// The most instructions any one cost analysis has simulated. Test-only
+/// instrumentation: a process-wide maximum, so its one reader
+/// (`llrm-m68k/tests/unroll_analysis_work_is_bounded.rs`) is the only test in
+/// its binary.
 pub fn max_simulated() -> u64 {
     MAX_SIMULATED.load(std::sync::atomic::Ordering::Relaxed)
 }

@@ -1,7 +1,8 @@
 //! The unroll cost analysis simulated every trip of a loop whose body has no
 //! side effect (nothing counts until the live-outs are walked), up to 262144
 //! instructions per loop: a 20000-trip sum took 2.4 G compile instructions at
-//! -O2 against gcc's 53 M.
+//! -O2 against gcc's 53 M. This is the only test in its binary: `max_simulated`
+//! is a process-wide maximum, so a second test would race on it.
 
 use llrm_m68k::driver::{Level, assembly, cpu_of};
 
