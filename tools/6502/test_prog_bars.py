@@ -135,5 +135,17 @@ class Instrument(unittest.TestCase):
         self.each(lambda c: self.assertIsNotNone(measure(c, src, [70000])[0], c))
 
 
+class OursNeedsTheProductRuntime(unittest.TestCase):
+    """`ours` without `--rtlib` linked the runtime with BSS scratch cells: a 200-trip 32-bit multiply loop read 361k clocks against
+    llvm-mos's 342k where the product's zero-page runtime reads 339k, and a ranking of cells over the bar was made on it."""
+
+    def test_ours_refuses_to_run_without_an_rtlib(self):
+        import subprocess
+        run = subprocess.run([sys.executable, os.path.join(HERE, "prog_bars.py"), "ours", "--cc", "/nonexistent/llrm-cc", "--rt", "/nonexistent.s",
+                              "--out", tempfile.mkdtemp(), "--progs", "x"], capture_output=True, text=True)
+        self.assertNotEqual(run.returncode, 0)
+        self.assertIn("--rtlib is required", run.stderr)
+
+
 if __name__ == "__main__":
     unittest.main()
