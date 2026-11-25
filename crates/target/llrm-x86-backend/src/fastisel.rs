@@ -1026,7 +1026,11 @@ impl Fast<'_> {
         global: llrm_mir::context::GlobalId,
     ) -> bool {
         self.module.global(global).name.intrinsic_id().is_some()
-            || self.module.global(global).name.as_deref().is_some_and(|name| name.starts_with("llvm."))
+            || self.module.global(global).name.as_deref().is_some_and(|name| {
+                // An asm block's registers are in its name, not the ABI's:
+                // FastISel declines inline asm for the DAG.
+                name.starts_with("llvm.") || llrm_mir::intrinsics::asm(name).is_some()
+            })
     }
 
     /// The address of the folded load that `operand` is, if it is one.
