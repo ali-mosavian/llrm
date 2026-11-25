@@ -1,8 +1,8 @@
 //! Multiplies by a constant outside every loop became calls of `__mulsi3`
-//! whenever the module was fewer bytes so, at every level: six of them saved
-//! 136 B and cost some 11,000 clocks at -O2, where the judge prices a byte at
-//! three clocks (call_keeps -O2: 21,053 clocks against 16,211 for llvm-mos,
-//! whose in-line expansion it matched on bytes). -O1 keeps bytes first.
+//! whenever the module was fewer bytes so, at every level. At -O2 and -O3 the
+//! judge prices a byte at three clocks and a call is some 2,200: a call is kept
+//! only where the bytes it saves, at that rate, repay the clocks it adds.
+//! -O1 keeps bytes first.
 
 mod common;
 

@@ -391,8 +391,7 @@ fn module_bytes(
 /// 22 B against twelve calls of 8 B and one routine). Bytes first at -O1
 /// (user ruling 2026-11-14); -O2 and -O3 at the judge's rate: a call is some
 /// 2,200 clocks a multiply, so the bytes it saves must repay them at
-/// `CLOCKS_PER_BYTE` (six calls to save 136 B were 11,000 clocks for 408);
-/// a place in a loop keeps the expansion.
+/// `CLOCKS_PER_BYTE`; a place in a loop keeps the expansion.
 ///
 /// DEVIATE 6502-MUL-CALL-TRIAL (owner 6502, exit 2026-11-24, with
 /// 6502-MUL-IMAGE): translation of the repo's module-level re-selections
