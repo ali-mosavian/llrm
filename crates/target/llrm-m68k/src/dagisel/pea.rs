@@ -4,8 +4,11 @@
 //! absolute short operand takes 4 (16 clk) and pushes the sign-extended
 //! address. [`crate::callpush`] chooses it for an argument push.
 //!
-//! `pea (d,An)` pushes an address register plus a displacement: 4 B, against the
-//! pin's `move An,Dn; addq #k,Dn; move Dn,(d,sp)`.
+//! `pea (d,An)` pushes an address register plus a displacement: 4 B, against
+//! the pin's `move An,Dn; addq #k,Dn; move Dn,(d,sp)`.
+//!
+//! `pea (d,%pc)` pushes a PC-relative symbol address the same way: 4 B against
+//! `lea (d,%pc), An; move An, -(%sp)`, 6.
 //!
 //! DEVIATE: the pin's M68k has no `PEA`. Reason: best of gcc and clang is the
 //! goal; gcc pushes small constants with it. Exit: none.
@@ -45,10 +48,27 @@ static DISPLACED_PIECES: [Piece; 5] = [
     Piece::Operand { lo: 16, width: 16, at: 0, from: 0, enc: Enc::RelocImm(16) },
 ];
 
+/// `pea (d,%pc)`: operand 0 is the symbol. 4 B against `lea (d,%pc), An` and a
+/// push, 6.
+pub const PC_RELATIVE: &str = "PEAq";
+
+static PC_RELATIVE_ASM: (&str, &str, &[AsmOperand]) =
+    (PC_RELATIVE, "pea\t$src", &[AsmOperand { name: "src", at: 0, method: "printPCD32Mem" }]);
+
+/// `0100 1000 01 111 010` and the displacement word.
+static PC_RELATIVE_PIECES: [Piece; 5] = [
+    Piece::Const { lo: 0, width: 3, value: 2 },
+    Piece::Const { lo: 3, width: 3, value: 7 },
+    Piece::Const { lo: 6, width: 3, value: 1 },
+    Piece::Const { lo: 9, width: 7, value: 0x24 },
+    Piece::Operand { lo: 16, width: 16, at: 0, from: 0, enc: Enc::PcRelImm(16) },
+];
+
 pub fn pea_asm(name: &str) -> Option<&'static (&'static str, &'static str, &'static [AsmOperand])> {
     match name {
         NAME => Some(&ASM),
         DISPLACED => Some(&DISPLACED_ASM),
+        PC_RELATIVE => Some(&PC_RELATIVE_ASM),
         _ => None,
     }
 }
@@ -57,6 +77,7 @@ pub fn pea_encoding(name: &str) -> Option<(u16, &'static [Piece])> {
     match name {
         NAME => Some((32, &PIECES[..])),
         DISPLACED => Some((32, &DISPLACED_PIECES[..])),
+        PC_RELATIVE => Some((32, &PC_RELATIVE_PIECES[..])),
         _ => None,
     }
 }
