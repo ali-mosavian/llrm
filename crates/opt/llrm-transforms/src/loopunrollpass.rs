@@ -92,10 +92,18 @@ pub use crate::trial;
 /// DEVIATE UNROLL-ANALYSIS-BUDGET (owner m68k, exit none): the pin analyzes
 /// at most `-unroll-max-iteration-count-to-analyze` (10) iterations; the
 /// target trials and the pricing ask for every trip, and the simulation is
-/// O(trips x size) with a map entry per instruction and trip. A loop of 200000
-/// trips was simulated twice for 49 s (`shl_of_a_zero_extended_dividend`
-/// -O2: 41 s of 41 s CPU) to price an unroll no bar admits.
-const ANALYSIS_BUDGET: u64 = 1 << 18;
+/// O(trips x size). A body with no side effect adds no cost until the
+/// live-outs are walked, so the bar never stops it: a 20000-trip sum took
+/// 2.4 G compile instructions at -O2 (gcc 53 M). No corpus output changes
+/// from 1 << 18 down to 1 << 16; 1 << 14 changes six.
+const ANALYSIS_BUDGET: u64 = 1 << 16;
+
+static MAX_SIMULATED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// The most instructions any one cost analysis has simulated.
+pub fn max_simulated() -> u64 {
+    MAX_SIMULATED.load(std::sync::atomic::Ordering::Relaxed)
+}
 
 static ROLLED_PRICED: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
@@ -669,6 +677,7 @@ fn analyze_loop_unroll_cost(
                     continue;
                 }
                 simulated += 1;
+                MAX_SIMULATED.fetch_max(simulated, std::sync::atomic::Ordering::Relaxed);
                 if simulated > ANALYSIS_BUDGET {
                     why(run, lp, &format!("cannot analyze: over {ANALYSIS_BUDGET} simulated instructions"));
                     return None;
