@@ -42,6 +42,29 @@ fn a_cheap_divide_by_a_power_of_two_is_still_a_shift() {
     }
 }
 
+/// A pointer difference of 36-byte elements is `sdiv exact x, 36`: where
+/// divides are kept it stayed `mov ecx, 36; cdq; idiv` (~43 clocks on a 486)
+/// while gcc and clang -Os make `sar; imul` for the same 9 bytes (QB
+/// `vm_nframes` in 11 loops and calls: 0 divides in gcc, 11 in ours).
+#[test]
+fn an_exact_divide_by_a_constant_is_a_multiply_where_divides_are_cheap() {
+    let build = |exact_div_inverse: bool, exact: bool| {
+        let tli = TargetLowering::x86_32(Features::default(), MVT::I32);
+        let mut dag = SelectionDAG::new(DagConfig { int_div_cheap: true, exact_div_inverse, ..DagConfig::default() });
+        let x = dag.get_register(EVT::I32, 5);
+        let divisor = dag.get_constant(36, EVT::I32);
+        let flags = if exact { SDNodeFlags::EXACT } else { SDNodeFlags::default() };
+        let divide = dag.get_node_flags(ISD::SDiv, EVT::I32, &[x, divisor], flags);
+        dag.set_root(divide);
+        DagCombiner::new(&mut dag, &mut NoCombines, CombineLevel::BeforeLegalizeTypes).with_tli(&tli).run();
+        let root = dag.get_root();
+        dag.opcode(root)
+    };
+    assert_eq!(build(true, true), ISD::Mul, "exact: shift and inverse multiply");
+    assert_eq!(build(true, false), ISD::SDiv, "an inexact divide stays");
+    assert_eq!(build(false, true), ISD::SDiv, "off: the divide stays");
+}
+
 /// An `i8` divide selects `DIV8r` (SD302), so where divides are cheap the
 /// remainder by a constant stays one, as for every other width. It was the
 /// multiply and shifts of the wider types while the selector could not take it.
