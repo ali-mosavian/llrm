@@ -904,6 +904,33 @@ fn at_m16_a_16_bit_divide_by_a_constant_keeps_its_divide() {
     }
 }
 
+/// An exact divide by 36 (a pointer difference) at `-Os`: the inverse multiply
+/// at m32 and m64, where an `idiv` is ~43 clocks against the multiply's 13
+/// (QB localarr: 301,113 divides, none left). m16 keeps the `idiv`: a 32-bit
+/// multiply there costs prefixes and is unmeasured.
+#[test]
+fn at_os_an_exact_divide_by_a_constant_is_a_multiply_except_at_m16() {
+    let names = |arch: &dyn llrm_target::Target, pointer: &str| {
+        let module = crate::testing::module(&format!(
+            "target datalayout = \"e-p:{pointer}:{pointer}-i64:32-n8:16:32\"
+define i32 @f(i32 %a) {{
+  %q = sdiv exact i32 %a, 36
+  ret i32 %q
+}}
+"
+        ))
+        .expect("parses");
+        let mut cpu = crate::backend::cpu::profile("486").expect("a cpu").clone();
+        cpu.size = true;
+        let done = selected(&module, "f", arch, &cpu, &[]).unwrap_or_else(|e| panic!("{}", e.0));
+        done.body.insns().iter().filter_map(|i| i.what.as_ref()?.name.as_deref().map(str::to_owned)).collect::<Vec<_>>()
+    };
+    let m32 = names(&llrm_x86_m32::M32, "32");
+    assert!(m32.iter().all(|n| n != "idiv") && m32.iter().any(|n| n == "imul"), "m32: shift and multiply: {m32:?}");
+    let m16 = names(&llrm_x86_m16::M16, "16");
+    assert!(m16.iter().any(|n| n == "idiv"), "m16: the divide stays: {m16:?}");
+}
+
 /// `x * 24` at `-Os` was `shl 3` then `imul 3` (two 4-byte instructions at m16)
 /// where the pin keeps the one `imul` (`combineMul`: `hasMinSize` returns
 /// first): bench/mandel.nib m16 -Os, +8 B. The pin declines at `minsize`
