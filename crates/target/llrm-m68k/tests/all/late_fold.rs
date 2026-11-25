@@ -1,8 +1,9 @@
-//! QuickrBasic `arena_grow` closed twice (`movem; rts` on each return), and a
+//! QuickrBasic `arena_grow` closed twice (`movem; rts` on each return); a
 //! call whose paths shared its tail kept the arguments as stores in the call
-//! area, because the tail ended an area the stores began (gcc's
-//! `-fcrossjumping` runs on pushed code and shares the closing after). Both at
-//! `-Os`.
+//! area, because the tail ended an area the stores began; and two paths that
+//! made the same call and met after it made it twice, because only blocks that
+//! return were folded. The tails are shared after the frame is made
+//! (`BranchFolder` after prologue/epilogue insertion). All at `-Os`.
 
 use llrm_m68k::driver::{Level, assembly, cpu_of};
 
@@ -103,5 +104,29 @@ e:
             })
             .count();
         assert_eq!(stores, 0, "{cpu}: {stores} arguments kept as stores in the call area:\n{out}");
+    }
+}
+
+#[test]
+fn two_paths_that_meet_share_a_call() {
+    let body = r#"
+declare void @f(ptr, i32)
+declare i32 @g(ptr)
+define i32 @meet(i1 %c, ptr %p) optsize {
+  br i1 %c, label %a, label %b
+a:
+  call void @f(ptr %p, i32 3)
+  br label %e
+b:
+  call void @f(ptr %p, i32 13)
+  br label %e
+e:
+  %r = call i32 @g(ptr %p)
+  %s = add i32 %r, 1
+  ret i32 %s
+}"#;
+    for cpu in ["68000", "68020"] {
+        let out = at_os(body, cpu);
+        assert_eq!(count(&out, "jsr\tf"), 1, "{cpu}: the call is made on both paths:\n{out}");
     }
 }
