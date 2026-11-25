@@ -73,6 +73,9 @@ pub struct Dos {
     /// speed. None by default (the entry in `RealMode` below); tests of the
     /// mechanism set it.
     pub recursive_inlining: Option<(u32, i64)>,
+    /// `Tuning::inline_threshold_o1`, `_o2` and `_o3`: none by default; tests
+    /// of the per-level bar set them.
+    pub inline_levels: [Option<i64>; 3],
 }
 
 /// The segment registers a selector is held in: ES, FS and GS, and DS where
@@ -101,6 +104,7 @@ impl Default for Dos {
             pin_tuning: PIN_TUNING.with(std::cell::Cell::get),
             constant_hoisting: false,
             recursive_inlining: None,
+            inline_levels: [None; 3],
         }
     }
 }
@@ -155,6 +159,7 @@ impl Dos {
             pin_tuning: PIN_TUNING.with(std::cell::Cell::get),
             constant_hoisting: false,
             recursive_inlining: None,
+            inline_levels: [None; 3],
         }
     }
 }
@@ -408,7 +413,14 @@ impl Machine for Dos {
             ..llrm_mir::target::Tuning::PIN
         }
         })();
-        llrm_mir::target::Tuning { constant_hoisting: self.constant_hoisting, ..table }
+        let [inline_threshold_o1, inline_threshold_o2, inline_threshold_o3] = self.inline_levels;
+        llrm_mir::target::Tuning {
+            constant_hoisting: self.constant_hoisting,
+            inline_threshold_o1,
+            inline_threshold_o2,
+            inline_threshold_o3,
+            ..table
+        }
     }
 
     fn size_costs(&self) -> OperationCosts {

@@ -2642,6 +2642,17 @@ pub trait Tti {
         None
     }
 
+    /// The target's `DefaultThreshold` at one optimization level (1, 2 or 3:
+    /// -O1, -O2, -O3), ahead of [`Tti::inline_threshold_override`]; none: that
+    /// one, then the level's own.
+    fn inline_threshold_at_level(
+        &self,
+        level: u8,
+    ) -> Option<i64> {
+        let _ = level;
+        None
+    }
+
     /// DEVIATE REC-1: the bounds of the recursion the target takes by default
     /// when optimizing for speed: (depth of a function's copies of itself,
     /// the largest recursive body in `gcc_insns` that is copied); none: the
