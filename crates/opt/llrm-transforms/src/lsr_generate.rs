@@ -168,6 +168,20 @@ fn collect_subexprs(
     }
 }
 
+/// `factor` as a constant of the width `reg` is summed in (its effective
+/// type): a formula's registers differ in width where `GenerateZExts` narrowed
+/// one, and a product or a quotient takes operands of one type.
+fn factor_in_width_of(
+    se: &mut ScalarEvolution,
+    cx: &llrm_analysis::scev::Cx,
+    reg: Scev,
+    factor: i64,
+) -> Scev {
+    let ty = se.type_of(reg);
+    let ty = se.get_effective_scev_type(cx, ty);
+    se.get_constant_of_type(cx, ty, i128::from(factor))
+}
+
 impl Collection<'_, '_> {
     /// The formula `f` of use `lu_idx` is legal as it is: used before
     /// inserting a variant.
@@ -625,7 +639,6 @@ impl Collection<'_, '_> {
             // The use has its minimum offset built in.
             f.base_offset = f.base_offset.add_unsigned(offset).sub_unsigned(min_offset);
 
-            let factor_s = se.get_constant_of_type(cx, int_ty, i128::from(factor));
             // DEVIATE LG1: `x == 0` and `x * c == 0` are the same compare for
             // an odd `c` (multiplying by it is a bijection of the
             // integers mod 2^bits), so the product may wrap where
@@ -641,7 +654,10 @@ impl Collection<'_, '_> {
                     && !self.size
                     && self.factor_keeps_zero(se, cx, &base, factor, bits));
             // No base register may overflow when multiplied.
+            // (each in its own width: a register `GenerateZExts` narrowed is
+            // not a word)
             for i in 0..f.base_regs.len() {
+                let factor_s = factor_in_width_of(se, cx, f.base_regs[i], factor);
                 f.base_regs[i] = se
                     .get_mul_expr(cx, vec![ScevUse::of(f.base_regs[i]), ScevUse::of(factor_s)], Flags::default(), 0)
                     .scev;
@@ -651,6 +667,7 @@ impl Collection<'_, '_> {
             }
             // Nor the scaled register.
             if let Some(scaled) = f.scaled_reg {
+                let factor_s = factor_in_width_of(se, cx, scaled, factor);
                 let product =
                     se.get_mul_expr(cx, vec![ScevUse::of(scaled), ScevUse::of(factor_s)], Flags::default(), 0).scev;
                 f.scaled_reg = Some(product);
@@ -770,7 +787,7 @@ impl Collection<'_, '_> {
                 if header != self.l && !outside {
                     continue;
                 }
-                let factor_s = se.get_constant_of_type(cx, int_ty, i128::from(factor));
+                let factor_s = factor_in_width_of(se, cx, reg, factor);
                 if se.match_zero(factor_s) {
                     continue;
                 }
