@@ -266,6 +266,68 @@ enum Place {
     Register(String, String),
     /// An address register the pointer argument is passed in.
     Memory(String),
+    /// A constant the block's text carries (`i`, `n`, `I`..`O`, `e`, `Z`), at
+    /// the width of its type: no register, no argument of the call.
+    Immediate(i128, u32),
+}
+
+/// The constraint letters that take a constant (`g` is `rim`).
+const IMMEDIATE_LETTERS: &[u8] = b"iInJKLMNOeZg";
+
+/// An integer literal operand `ty value` as (its zero-extended value, its
+/// width).
+fn integer_constant(
+    ty: &str,
+    value: &str,
+) -> Option<(i128, u32)> {
+    let width: u32 = ty.strip_prefix('i')?.parse().ok().filter(|width| (1..=64).contains(width))?;
+    let value = match value {
+        "true" => 1,
+        "false" => 0,
+        number => number.parse::<i128>().ok()?,
+    };
+    Some((value.rem_euclid(1 << width), width))
+}
+
+/// `X86TargetLowering::LowerAsmOperandForConstraint`: whether the constant
+/// `zero_extended` (of `width` bits) is one the immediate letter takes.
+fn immediate_fits(
+    letter: u8,
+    zero_extended: i128,
+    width: u32,
+    mode64: bool,
+) -> bool {
+    let signed = if zero_extended >= 1 << (width - 1) { zero_extended - (1 << width) } else { zero_extended };
+    match letter {
+        b'I' => zero_extended <= 31,
+        b'J' => zero_extended <= 63,
+        b'K' => (-128..=127).contains(&signed),
+        b'L' => matches!(zero_extended, 0xff | 0xffff) || mode64 && zero_extended == 0xffff_ffff,
+        b'M' => zero_extended <= 3,
+        b'N' => zero_extended <= 255,
+        b'O' => zero_extended <= 127,
+        b'e' => (i128::from(i32::MIN)..=i128::from(i32::MAX)).contains(&signed),
+        b'Z' => zero_extended <= 0xffff_ffff,
+        _ => matches!(letter, b'i' | b'n' | b'g'),
+    }
+}
+
+/// What an immediate operand prints as: its value sign-extended from its width
+/// (a bool, the zero-extended one).
+fn immediate_value(
+    zero_extended: i128,
+    width: u32,
+) -> i128 {
+    if width > 1 && zero_extended >= 1 << (width - 1) { zero_extended - (1 << width) } else { zero_extended }
+}
+
+/// The letters of an input constraint that takes a constant, when the item is
+/// only such letters and register letters (`i`, `Ir`, `Nd` after clang's
+/// rewrite is `N{dx}`: not this).
+fn immediate_letters(item: &str) -> Option<Vec<u8>> {
+    let letters = item.bytes().all(|one| IMMEDIATE_LETTERS.contains(&one) || b"rqm".contains(&one));
+    let taken: Vec<u8> = item.bytes().filter(|one| IMMEDIATE_LETTERS.contains(one)).collect();
+    (letters && !taken.is_empty()).then_some(taken)
 }
 
 /// `text` with every asm call of flat code replaced by a call of its
@@ -391,7 +453,8 @@ fn flat_block(
     let text = unescape(text)?;
     // AArch64 has no dialect alternatives: its braces are register lists, and
     // `${0:w}` is the modifier that says which view of an operand.
-    if !flat.a64() && (text.contains('{') || text.contains("${")) {
+    let braces_outside_operands = text.match_indices('{').any(|(at, _)| !text[..at].ends_with('$'));
+    if !flat.a64() && braces_outside_operands {
         return Err("asm: dialect alternatives and operand modifiers are not carried".into());
     }
     // Operands in LLVM's order: the constraints that are not clobbers.
@@ -426,7 +489,32 @@ fn flat_block(
     }
     .into_iter();
     for item in constraints.split(',') {
-        let item = register_alternative(item).unwrap_or_else(|| item.to_owned());
+        let original = item;
+        let mut item = item.to_owned();
+        if let Some(letters) = immediate_letters(&item).filter(|_| !flat.a64()) {
+            let argument = arguments.get(next_argument).ok_or("asm: an operand without an argument")?;
+            match integer_constant(&argument.0, &argument.1) {
+                Some((value, width))
+                    if letters.iter().any(|letter| immediate_fits(*letter, value, width, flat.bits == 64)) =>
+                {
+                    next_argument += 1;
+                    operands.push((item, Some(Place::Immediate(immediate_value(value, width), width))));
+                    continue;
+                }
+                _ => {
+                    // A register alternative takes the operand as it is; none
+                    // left: say what this constraint wanted.
+                    item.retain(|one| matches!(one, 'r' | 'q' | 'm' | 'g'));
+                    if item.is_empty() {
+                        return Err(format!(
+                            "asm: constraint {} takes a constant it accepts; the operand `{} {}` is not carried",
+                            original, argument.0, argument.1
+                        ));
+                    }
+                }
+            }
+        }
+        let item = register_alternative(&item).unwrap_or(item);
         // Each operand of the block has a register of its own, so an
         // early-clobber output is never an input's register.
         let item = if flat.a64() { item.replace('&', "") } else { item };
@@ -531,7 +619,7 @@ fn flat_block(
             source.push('$');
             at += 2;
         } else if chars[at] == '$' && chars.get(at + 1).is_some_and(char::is_ascii_digit)
-            || flat.a64() && chars[at] == '$' && chars.get(at + 1) == Some(&'{')
+            || chars[at] == '$' && chars.get(at + 1) == Some(&'{')
         {
             let braced = chars[at + 1] == '{';
             let first = at + 1 + usize::from(braced);
@@ -558,7 +646,19 @@ fn flat_block(
                 .get(n)
                 .and_then(|(_, place)| place.as_ref())
                 .ok_or("asm: an operand number past the constraints")?;
+            if let Some(modifier) =
+                modifier.as_deref().filter(|_| !flat.a64() && !matches!(place, Place::Immediate(..)))
+            {
+                return Err(format!("asm: operand modifier {modifier} is not carried"));
+            }
             source.push_str(&match (place, intel) {
+                (Place::Immediate(value, _), _) => match modifier.as_deref() {
+                    Some("c" | "P") => value.to_string(),
+                    Some("n") => (-value).to_string(),
+                    Some(other) => return Err(format!("asm: operand modifier {other} is not carried")),
+                    None if intel || flat.a64() => value.to_string(),
+                    None => format!("${value}"),
+                },
                 (Place::Memory(register), _) if flat.a64() => format!("[{register}]"),
                 (Place::Memory(register), false) => format!("(%{register})"),
                 (Place::Memory(register), true) => format!("[{register}]"),
