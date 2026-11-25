@@ -324,6 +324,15 @@ pub struct Tuning {
     /// `rep_movs_at_size_max`; DEVIATE REP-STOS-OS bounds itself to the pin's
     /// limit (owner x86-m32, exit 2026-11-30).
     pub rep_stos_at_size_max: u64,
+    /// DEVIATE TRIAL-CAP (owner m68k, exit 2026-12-20): a size bound, not a
+    /// function condition. A function whose first build has more instructions
+    /// than this is built once, with every optional rewrite as that build
+    /// has it; the backend's trials build a function again per rewrite, and
+    /// a 17,000-instruction function took 21 builds (synth.c at -O1: 311 s,
+    /// 20 s capped). `None`: the pin's, which builds once. Other targets'
+    /// whole-function trials can read it: the m32 -Os hinted-call trial and
+    /// the arm64 ccmp trial (a `Tti`-level limit, default off).
+    pub trial_insts_max: Option<usize>,
     /// At `-Os` a constant `rep stos` takes the unit with the fewest bytes
     /// (value setup, count, string op and the inline tail), where the pin's
     /// unit is the destination's alignment: a `rep stosb` is a 2-byte `mov
@@ -1023,6 +1032,7 @@ impl Tuning {
         mul_chains_hot_at_size: false,
         rep_stos_at_size: false,
         rep_stos_at_size_max: 128,
+        trial_insts_max: None,
         rep_stos_priced_unit: false,
         rep_movs_at_size: false,
         rep_movs_at_size_max: 128,
