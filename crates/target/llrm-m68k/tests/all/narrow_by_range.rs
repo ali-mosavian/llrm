@@ -27,10 +27,10 @@ fn the_libcall_stays_where_the_extensions_cost_more_bytes() {
     assert_eq!(calls("68020", Level::O2, "__udivsi3"), 0, "the 68020 has divu.l: nothing to narrow to, no call either");
 }
 
-/// Calls of `routine` with no constant operand, direct or through the address
-/// register the call-target pass loaded it into (`lea routine, %aN`, `jsr
-/// (%aN)`): a count by name saw none while that pass held `%a6`, and none of
-/// the 26 constant multiplies of the kernel either way.
+/// Calls of `routine` with no constant push among the three lines before,
+/// direct or through the address register the call-target pass loaded it into
+/// (`lea routine, %aN`, `jsr (%aN)`): a count by name saw none while that pass
+/// held `%a6`, and none of the 26 constant multiplies of the kernel either way.
 fn variable_calls(
     cpu: &str,
     level: Level,
@@ -50,7 +50,7 @@ fn variable_calls(
         }
         let through = held.as_ref().is_some_and(|register| *line == format!("jsr\t(%{register})"));
         if (through || line.starts_with("jsr") && line.contains(routine))
-            && !lines[at.saturating_sub(2)..at].iter().any(|push| push.contains('#'))
+            && !lines[at.saturating_sub(3)..at].iter().any(|push| push.contains('#'))
         {
             count += 1;
         }
@@ -70,8 +70,9 @@ fn a_quotient_times_a_counter_is_a_half_multiply_at_o2() {
     assert!(asm.lines().any(|line| line.trim_start().starts_with("mulu")), "{asm}");
 }
 
-/// #9726 narrows a proven 16-bit multiply at every level: a `mulu` (2 B) where the call is two pushes, a `jsr` and a
-/// pop. The kernel calls `sink` each trip: without it -Os evaluates the whole loop to a constant (8 B) and no
+/// #9726 narrows a proven 16-bit multiply at every level: a `mulu` (2 B) where
+/// the call is two pushes, a `jsr` and a pop. The kernel calls `sink` each
+/// trip: without it -Os evaluates the whole loop to a constant (8 B) and no
 /// multiply is left to look at.
 #[test]
 fn a_proven_halfword_multiply_is_a_mulu_at_size_and_o1() {
