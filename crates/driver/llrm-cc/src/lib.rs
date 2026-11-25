@@ -1204,7 +1204,9 @@ fn build(
                     std::fs::write(&ir, fixed).map_err(|error| fail(format!("{}: {error}", ir.display())))?;
                 }
                 // flat x86 code: the mode the block is assembled and named in
-                let flat: Option<u8> = if target.triple.starts_with("x86_64") {
+                let flat: Option<u8> = if target.triple.starts_with("aarch64") || target.triple.starts_with("arm64") {
+                    Some(llrm_mir::intrinsics::AARCH64)
+                } else if target.triple.starts_with("x86_64") {
                     Some(64)
                 } else if target.triple.starts_with("i486")
                     || target.triple.starts_with("i386") && !target.triple.contains("code16")
@@ -1227,11 +1229,35 @@ fn build(
                             Command::new(program).args(args).status().map(|one| one.success()).unwrap_or(false)
                         };
                         let (sp, op, bp) = (s.display().to_string(), o.display().to_string(), b.display().to_string());
-                        let assembler = if flat == Some(64) { "x86_64-unknown-none" } else { "i386-unknown-none" };
-                        if !ran(&clang, &["-target", assembler, "-x", "assembler", "-c", &sp, "-o", &op])
-                            || !ran(Path::new("objcopy"), &["-O", "binary", "--only-section=.text", &op, &bp])
-                        {
-                            return Err(format!("asm: could not assemble\n{source}"));
+                        let assembler = match flat {
+                            Some(llrm_mir::intrinsics::AARCH64) => "aarch64-unknown-none",
+                            Some(64) => "x86_64-unknown-none",
+                            _ => "i386-unknown-none",
+                        };
+                        // A block is assembled by the pin clang the route resolves
+                        // (`clang_path`); LLRM_A64_CLANG names one built with the
+                        // AArch64 target, and a binutils objcopy for AArch64
+                        // (LLRM_A64_OBJCOPY) cuts out its `.text`.
+                        let (assembler_program, objcopy) = if flat == Some(llrm_mir::intrinsics::AARCH64) {
+                            (
+                                std::env::var_os("LLRM_A64_CLANG").map_or_else(|| clang.clone(), PathBuf::from),
+                                std::env::var_os("LLRM_A64_OBJCOPY")
+                                    .map_or_else(|| PathBuf::from("aarch64-linux-gnu-objcopy"), PathBuf::from),
+                            )
+                        } else {
+                            (clang.clone(), PathBuf::from("objcopy"))
+                        };
+                        if !ran(&assembler_program, &["-target", assembler, "-x", "assembler", "-c", &sp, "-o", &op]) {
+                            return Err(format!(
+                                "asm: could not assemble with {} (set LLRM_A64_CLANG to a pin clang with the AArch64 target)\n{source}",
+                                assembler_program.display()
+                            ));
+                        }
+                        if !ran(&objcopy, &["-O", "binary", "--only-section=.text", &op, &bp]) {
+                            return Err(format!(
+                                "asm: could not cut .text with {} (set LLRM_A64_OBJCOPY)\n{source}",
+                                objcopy.display()
+                            ));
                         }
                         std::fs::read(&b).map_err(|error| error.to_string())
                     };

@@ -102,6 +102,7 @@ pub(super) fn instructions() -> Vec<Inst> {
     out.push(Inst::BranchReg { link: true, rn });
     out.push(Inst::Svc { imm16: 0x80 });
     out.push(Inst::Brk { imm16: 1 });
+    out.push(Inst::Word { word: 0x9acc_0969 });
     out.push(Inst::Nop);
     out.push(Inst::Prefetch { op: 3, base: rn });
     for barrier in [Barrier::Ish, Barrier::IshLd, Barrier::IshSt] {
@@ -469,6 +470,7 @@ fn variant(inst: &Inst) -> &'static str {
         Inst::Atomic { .. } => "Atomic",
         Inst::Dmb { .. } => "Dmb",
         Inst::Brk { .. } => "Brk",
+        Inst::Word { .. } => "Word",
         Inst::Nop => "Nop",
         Inst::Prefetch { .. } => "Prefetch",
     }
@@ -477,7 +479,7 @@ fn variant(inst: &Inst) -> &'static str {
 /// The variants after frame lowering, which the body is never made from.
 const AFTER_FRAME: [&str; 3] = ["Mark", "Label", "Cfi"];
 
-const ALL: [&str; 80] = [
+const ALL: [&str; 81] = [
     "Mark",
     "Label",
     "Cfi",
@@ -556,6 +558,7 @@ const ALL: [&str; 80] = [
     "Atomic",
     "Dmb",
     "Brk",
+    "Word",
     "Nop",
     "Prefetch",
 ];

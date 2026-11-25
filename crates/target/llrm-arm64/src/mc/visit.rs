@@ -241,6 +241,7 @@ impl Inst {
             | Inst::BranchCond { .. }
             | Inst::Svc { .. }
             | Inst::Brk { .. }
+            | Inst::Word { .. }
             | Inst::Dmb { .. }
             | Inst::Nop => {}
             Inst::CompareBranch { rt, .. } | Inst::TestBranch { rt, .. } => f(G(rt), Role::Use),

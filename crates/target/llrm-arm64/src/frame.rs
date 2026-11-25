@@ -693,6 +693,15 @@ pub fn lower(
                     };
                     emitter.insts.push(Inst::Mark(FrameMark::Value { variable: *variable, reg }));
                 }
+                Op::Call { callee: Callee::Symbol(name), .. } if let Some(block) = llrm_mir::intrinsics::asm(name) => {
+                    // An inline assembly block: its words, in place of a `bl`.
+                    emitter.insts.extend(
+                        block
+                            .code
+                            .chunks_exact(4)
+                            .map(|word| Inst::Word { word: u32::from_le_bytes([word[0], word[1], word[2], word[3]]) }),
+                    );
+                }
                 Op::Call { callee, .. } => emitter.insts.push(match callee {
                     Callee::Symbol(name) => {
                         Inst::Branch { link: true, target: Target::Symbol { name: name.clone(), addend: 0 } }

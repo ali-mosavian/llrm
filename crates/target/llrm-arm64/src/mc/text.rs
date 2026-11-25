@@ -523,7 +523,8 @@ impl fmt::Display for Inst {
             Inst::VectorLoadLane { lanes, rt, index, base } => {
                 write!(out, "ld1 {{ v{}.{} }}[{index}], [{}]", rt.0, lane_letter(*lanes), gpr(*base, Width::X, true))
             }
-            Inst::VectorLoadStructure { count, lanes, rt, base } | Inst::VectorStoreStructure { count, lanes, rt, base } => {
+            Inst::VectorLoadStructure { count, lanes, rt, base }
+            | Inst::VectorStoreStructure { count, lanes, rt, base } => {
                 let name = if matches!(self, Inst::VectorLoadStructure { .. }) { "ld" } else { "st" };
                 let list: Vec<String> =
                     (0..u32::from(*count)).map(|at| format!("v{}.{}", rt.in_run(at).0, lanes.suffix())).collect();
@@ -673,6 +674,7 @@ impl fmt::Display for Inst {
                 }
             ),
             Inst::Brk { imm16 } => write!(out, "brk #{imm16}"),
+            Inst::Word { word } => write!(out, ".inst {word:#010x}"),
             Inst::Nop => out.write_str("nop"),
             Inst::Prefetch { op, base } => write!(out, "prfm #{op}, [{}]", gpr(*base, Width::X, true)),
         }

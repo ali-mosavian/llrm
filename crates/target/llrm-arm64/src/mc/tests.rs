@@ -494,6 +494,7 @@ fn branches() {
         all.push(Inst::AddCarry { op: AddSub { subtract, set_flags }, width, rd: Gpr(3), rn: Gpr(17), rm: Gpr(29) });
     }
     all.push(Inst::Brk { imm16: 1 });
+    all.push(Inst::Word { word: 0x9acc_0969 });
     all.push(Inst::Nop);
     for (page, offset) in [(false, 0), (false, 1023), (false, -1048576), (true, 0), (true, 4096), (true, -8192)] {
         all.push(Inst::Adr { page, rd: Gpr(1), target: Target::Offset(offset), got: false });

@@ -1873,6 +1873,10 @@ pub enum Inst {
     Brk {
         imm16: u16,
     },
+    /// One word of an inline assembly block, written as it was assembled.
+    Word {
+        word: u32,
+    },
     Nop,
     /// `prfm <op>, [<base>]`: a hint that the line at `base` is wanted; `op` is
     /// the 5-bit prefetch operation.

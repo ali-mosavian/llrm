@@ -90,10 +90,13 @@ pub fn translate(
 /// `@asm` line lists, with the family each belongs to.
 struct Flat {
     /// 32 or 64: the mode, the width of an address register, the prefix of the
-    /// block's name.
+    /// block's name; [`llrm_mir::intrinsics::AARCH64`] for AArch64.
     bits: u8,
     asm: Vec<String>,
     registers: Vec<llrm_target::registers::Register>,
+    /// The registers a pool operand may take (the target's `@scratch`): the
+    /// caller-saved ones, so the block's clobber costs no save.
+    scratch: Vec<String>,
 }
 
 impl Flat {
@@ -102,7 +105,18 @@ impl Flat {
             std::sync::LazyLock::new(|| Flat::parse(32, &llrm_target::Target::registers_text(&llrm_x86_m32::M32)));
         static FLAT64: std::sync::LazyLock<Flat> =
             std::sync::LazyLock::new(|| Flat::parse(64, &llrm_target::Target::registers_text(&llrm_x86_m64::M64)));
-        if bits == 64 { &FLAT64 } else { &FLAT32 }
+        static FLATA64: std::sync::LazyLock<Flat> = std::sync::LazyLock::new(|| {
+            Flat::parse(llrm_mir::intrinsics::AARCH64, include_str!("../../../target/llrm-arm64/src/registers.regs"))
+        });
+        match bits {
+            llrm_mir::intrinsics::AARCH64 => &FLATA64,
+            64 => &FLAT64,
+            _ => &FLAT32,
+        }
+    }
+
+    fn a64(&self) -> bool {
+        self.bits == llrm_mir::intrinsics::AARCH64
     }
 
     fn parse(
@@ -113,6 +127,7 @@ impl Flat {
             bits,
             asm: llrm_target::registers::asm_names(text),
             registers: llrm_target::registers::parse(text).expect("a target's register file parses"),
+            scratch: llrm_target::registers::scratch(text),
         }
     }
 
@@ -145,30 +160,88 @@ impl Flat {
 
     /// The view of `name`'s register an operand of the type `ty` takes in the
     /// block's text: `{cx}` holding an `i64` is `rcx`, an `i32` `ecx`. A
-    /// register of no width (x87) and a type of none keep the name.
+    /// register of no width (x87) and a type of none keep the name. On AArch64
+    /// an integer of up to 32 bits is the `w` view, a pointer or `i64` the
+    /// `x`, `float` the `s` and `double` the `d`; another type is refused.
     fn view(
         &self,
         name: &str,
         ty: &str,
-    ) -> String {
-        let width = match ty.strip_prefix('i').and_then(|bits| bits.parse::<u32>().ok()) {
-            Some(bits) => bits,
-            None if ty == "ptr" => u32::from(self.bits),
-            None => return name.to_owned(),
+    ) -> Result<String, String> {
+        let int = ty.strip_prefix('i').and_then(|bits| bits.parse::<u32>().ok());
+        let width = if self.a64() {
+            match (ty, int) {
+                ("float", _) => 32,
+                ("double", _) => 64,
+                ("ptr", _) => 64,
+                (_, Some(bits @ 1..=64)) => {
+                    if bits <= 32 {
+                        32
+                    } else {
+                        64
+                    }
+                }
+                ("", _) => return Ok(name.to_owned()),
+                _ => return Err(format!("asm: an operand of type {ty} is not carried")),
+            }
+        } else {
+            match int {
+                Some(bits) => bits,
+                None if ty == "ptr" => u32::from(self.bits),
+                None => return Ok(name.to_owned()),
+            }
         };
         let root = self.root(name);
-        self.registers
+        Ok(self
+            .registers
             .iter()
             .find(|one| one.root == root && one.bits == width && self.asm.contains(&one.name))
             .map_or(name, |one| one.name.as_str())
-            .to_owned()
+            .to_owned())
+    }
+
+    /// The view of `name`'s register that an operand modifier of AArch64's
+    /// (`${0:w}`, `:x`, `:s`, `:d`, `:q`) names.
+    fn modified(
+        &self,
+        name: &str,
+        modifier: &str,
+    ) -> Result<String, String> {
+        let (width, vector) = match modifier {
+            "w" => (32, false),
+            "x" => (64, false),
+            "s" => (32, true),
+            "d" => (64, true),
+            "q" => (128, true),
+            _ => return Err(format!("asm: operand modifier {modifier} is not carried")),
+        };
+        let root = self.root(name);
+        if root.starts_with('v') != vector {
+            return Err(format!("asm: operand modifier {modifier} on register {name}"));
+        }
+        let found = self
+            .registers
+            .iter()
+            .find(|one| one.root == root && one.bits == width && self.asm.contains(&one.name))
+            .ok_or_else(|| format!("asm: operand modifier {modifier} on register {name}"))?;
+        // The 128-bit view of a vector register is written `q16`.
+        Ok(if width == 128 { format!("q{}", &found.name[1..]) } else { found.name.clone() })
     }
 
     /// The vector registers an `x` operand may take, in the allocation order.
     fn vector_pool(&self) -> Vec<&str> {
         self.registers
             .iter()
-            .filter(|one| one.name.starts_with("xmm") && self.asm.contains(&one.name))
+            .filter(|one| {
+                self.asm.contains(&one.name)
+                    && if self.a64() {
+                        // v16..v31: the caller-saved ones outside the
+                        // arguments.
+                        one.name.strip_prefix('v').and_then(|n| n.parse::<u32>().ok()).is_some_and(|n| n >= 16)
+                    } else {
+                        one.name.starts_with("xmm")
+                    }
+            })
             .map(|one| one.name.as_str())
             .collect()
     }
@@ -176,6 +249,9 @@ impl Flat {
     /// The registers a pointer may be passed in: address width, in the
     /// allocation order.
     fn pool(&self) -> Vec<&str> {
+        if self.a64() {
+            return self.scratch.iter().map(String::as_str).collect();
+        }
         self.registers
             .iter()
             .filter(|one| u8::try_from(one.bits) == Ok(self.bits) && self.asm.contains(&one.name))
@@ -313,7 +389,9 @@ fn flat_block(
         })
         .collect();
     let text = unescape(text)?;
-    if text.contains('{') || text.contains("${") {
+    // AArch64 has no dialect alternatives: its braces are register lists, and
+    // `${0:w}` is the modifier that says which view of an operand.
+    if !flat.a64() && (text.contains('{') || text.contains("${")) {
         return Err("asm: dialect alternatives and operand modifiers are not carried".into());
     }
     // Operands in LLVM's order: the constraints that are not clobbers.
@@ -349,6 +427,9 @@ fn flat_block(
     .into_iter();
     for item in constraints.split(',') {
         let item = register_alternative(item).unwrap_or_else(|| item.to_owned());
+        // Each operand of the block has a register of its own, so an
+        // early-clobber output is never an input's register.
+        let item = if flat.a64() { item.replace('&', "") } else { item };
         let item = item.as_str();
         if let Some(name) = item.strip_prefix("~{").and_then(|one| one.strip_suffix('}')) {
             match name {
@@ -375,7 +456,7 @@ fn flat_block(
             input_values.push(argument.clone());
         } else if let Some(name) = item.strip_prefix("={").and_then(|one| one.strip_suffix('}')) {
             let register = flat.register(name)?;
-            let view = flat.view(&register, &output_types.next().unwrap_or_default());
+            let view = flat.view(&register, &output_types.next().unwrap_or_default())?;
             operands.push((item.to_owned(), Some(Place::Register(register.clone(), view))));
             outputs.push(register.clone());
             direct_outputs.push(register);
@@ -383,13 +464,17 @@ fn flat_block(
             let register = flat.register(name)?;
             let argument = arguments.get(next_argument).ok_or("asm: an operand without an argument")?;
             next_argument += 1;
-            let view = flat.view(&register, &argument.0);
+            let view = flat.view(&register, &argument.0)?;
             operands.push((item.to_owned(), Some(Place::Register(register.clone(), view))));
             inputs.push(register);
             input_values.push(argument.clone());
-        } else if matches!(item, "r" | "q" | "x" | "=r" | "=q" | "=x") {
+        } else if if flat.a64() {
+            matches!(item, "r" | "w" | "=r" | "=w")
+        } else {
+            matches!(item, "r" | "q" | "x" | "=r" | "=q" | "=x")
+        } {
             let output = item.starts_with('=');
-            let register = if item.ends_with('x') {
+            let register = if item.ends_with(if flat.a64() { 'w' } else { 'x' }) {
                 let mut vectors = flat.vector_pool();
                 vectors.retain(|one| !named.contains(&flat.root(one)));
                 vectors.retain(|one| {
@@ -403,14 +488,14 @@ fn flat_block(
             }
             .ok_or("asm: no register left for an operand")?;
             if output {
-                let view = flat.view(&register, &output_types.next().unwrap_or_default());
+                let view = flat.view(&register, &output_types.next().unwrap_or_default())?;
                 operands.push((item.to_owned(), Some(Place::Register(register.clone(), view))));
                 outputs.push(register.clone());
                 direct_outputs.push(register);
             } else {
                 let argument = arguments.get(next_argument).ok_or("asm: an operand without an argument")?;
                 next_argument += 1;
-                let view = flat.view(&register, &argument.0);
+                let view = flat.view(&register, &argument.0)?;
                 operands.push((item.to_owned(), Some(Place::Register(register.clone(), view))));
                 inputs.push(register);
                 input_values.push(argument.clone());
@@ -423,7 +508,7 @@ fn flat_block(
             };
             let argument = arguments.get(next_argument).ok_or("asm: an operand without an argument")?;
             next_argument += 1;
-            let view = flat.view(&register, &argument.0);
+            let view = flat.view(&register, &argument.0)?;
             operands.push((item.to_owned(), Some(Place::Register(register.clone(), view))));
             inputs.push(register);
             input_values.push(argument.clone());
@@ -434,30 +519,54 @@ fn flat_block(
     if next_argument != arguments.iter().filter(|one| !one.0.is_empty()).count() {
         return Err("asm: the arguments do not match the constraints".into());
     }
-    let mode = if flat.bits == 64 { ".code64\n" } else { ".code32\n" };
-    let mut source = String::from(if intel { ".intel_syntax noprefix\n" } else { "" });
-    source.push_str(mode);
+    let mut source = String::new();
+    if !flat.a64() {
+        source.push_str(if intel { ".intel_syntax noprefix\n" } else { "" });
+        source.push_str(if flat.bits == 64 { ".code64\n" } else { ".code32\n" });
+    }
     let chars: Vec<char> = text.chars().collect();
     let mut at = 0;
     while at < chars.len() {
         if chars[at] == '$' && chars.get(at + 1) == Some(&'$') {
             source.push('$');
             at += 2;
-        } else if chars[at] == '$' && chars.get(at + 1).is_some_and(char::is_ascii_digit) {
-            let mut end = at + 1;
+        } else if chars[at] == '$' && chars.get(at + 1).is_some_and(char::is_ascii_digit)
+            || flat.a64() && chars[at] == '$' && chars.get(at + 1) == Some(&'{')
+        {
+            let braced = chars[at + 1] == '{';
+            let first = at + 1 + usize::from(braced);
+            let mut end = first;
             while chars.get(end).is_some_and(char::is_ascii_digit) {
                 end += 1;
             }
-            let n: usize = chars[at + 1..end].iter().collect::<String>().parse().unwrap_or(usize::MAX);
+            let n: usize = chars[first..end]
+                .iter()
+                .collect::<String>()
+                .parse()
+                .map_err(|_| "asm: an operand modifier without a number")?;
+            let mut modifier = None;
+            if braced {
+                let close = chars[end..].iter().position(|one| *one == '}').ok_or("asm: an unclosed operand")? + end;
+                if chars.get(end) == Some(&':') {
+                    modifier = Some(chars[end + 1..close].iter().collect::<String>());
+                } else if close != end {
+                    return Err("asm: an operand modifier that is not carried".into());
+                }
+                end = close + 1;
+            }
             let place = operands
                 .get(n)
                 .and_then(|(_, place)| place.as_ref())
                 .ok_or("asm: an operand number past the constraints")?;
             source.push_str(&match (place, intel) {
+                (Place::Memory(register), _) if flat.a64() => format!("[{register}]"),
                 (Place::Memory(register), false) => format!("(%{register})"),
                 (Place::Memory(register), true) => format!("[{register}]"),
-                (Place::Register(_, view), false) => format!("%{view}"),
-                (Place::Register(_, view), true) => view.clone(),
+                (Place::Register(register, _), _) if modifier.is_some() => {
+                    flat.modified(register, modifier.as_deref().unwrap_or_default())?
+                }
+                (Place::Register(_, view), false) if !flat.a64() => format!("%{view}"),
+                (Place::Register(_, view), _) => view.clone(),
             });
             at = end;
         } else {
@@ -907,4 +1016,69 @@ fn register_alternative(item: &str) -> Option<String> {
         return letters.bytes().any(|one| matches!(one, b'm' | b'g')).then(|| format!("{prefix}m"));
     }
     letters.bytes().any(|one| matches!(one, b'r' | b'g' | b'q')).then(|| format!("{prefix}r"))
+}
+
+#[cfg(test)]
+mod a64_tests {
+    use llrm_mir::intrinsics::AARCH64;
+
+    use super::*;
+
+    fn run(ir: &str) -> (Result<String, String>, String) {
+        let mut seen = String::new();
+        let out = translate_flat(ir, AARCH64, &mut |source: &str| {
+            seen.push_str(source);
+            Ok(vec![0x20, 0x08, 0xc2, 0x9a])
+        });
+        (out, seen)
+    }
+
+    /// A `udiv`/`msub` block with an early-clobber output was refused
+    /// ("expected a constant, found asm") by the backend: each operand takes a
+    /// register of its own from x9.., and the block is one `llrm.a64.asm.*`.
+    #[test]
+    fn an_arm64_block_takes_registers_of_the_pool_for_its_operands() {
+        let ir = "  %4 = call { i64, i64 } asm \"udiv $0, $2, $3\\0A\\09msub $1, $0, $3, $2\", \"=&r,=r,r,r\"(i64 %0, i64 %1)\n";
+        let (out, seen) = run(ir);
+        assert_eq!(seen, "udiv x9, x11, x12\n\tmsub x10, x9, x12, x11\n", "{seen}");
+        let out = out.unwrap();
+        assert!(out.contains("%4 = call { i64, i64 } @\"llrm.a64.asm."), "{out}");
+        assert!(out.contains("(i64 %0, i64 %1)") && !out.contains(" asm "), "{out}");
+    }
+
+    /// `${0:w}` is the 32-bit view and the type picks the view of a bare `$0`:
+    /// an `i32` is `w`, a `double` `d`.
+    #[test]
+    fn an_arm64_operand_modifier_and_type_pick_the_view() {
+        let (_, seen) = run("  %2 = call i32 asm \"rev ${0:w}, ${1:x}\", \"=r,r\"(i32 %0)\n");
+        assert_eq!(seen, "rev w9, x10\n");
+        let (_, seen) = run("  %2 = call double asm \"fsqrt $0, $1\", \"=w,w\"(double %0)\n");
+        assert_eq!(seen, "fsqrt d16, d17\n");
+        let (_, seen) = run("  %2 = call double asm \"fsqrt ${0:s}, ${1:q}\", \"=w,w\"(double %0)\n");
+        assert_eq!(seen, "fsqrt s16, q17\n");
+    }
+
+    /// A memory output is an address in a register, `$0` the bracketed
+    /// register; a register list's braces are text, not a dialect alternative.
+    #[test]
+    fn an_arm64_memory_operand_is_a_bracketed_address_register() {
+        let ir = "  call void asm sideeffect \"str ${1:w}, $0\", \"=*m,r\"(ptr elementtype(i32) %0, i32 %1)\n";
+        assert_eq!(run(ir).1, "str w10, [x9]\n");
+        let list = "  call void asm sideeffect \"ld1 {v0.4s}, [$0]\", \"r,~{v0},~{memory}\"(ptr %0)\n";
+        assert_eq!(run(list).1, "ld1 {v0.4s}, [x9]\n");
+    }
+
+    /// A pool of x9..x15: an eighth register operand is a named error, as is a
+    /// constraint of another class, a type of no view and an unknown modifier.
+    #[test]
+    fn an_arm64_block_past_the_pool_or_of_an_unsupported_kind_is_refused_by_name() {
+        let many = "  call void asm sideeffect \"\", \"r,r,r,r,r,r,r,r\"(i64 %0, i64 %1, i64 %2, i64 %3, i64 %4, i64 %5, i64 %6, i64 %7)\n";
+        assert!(run(many).0.unwrap_err().contains("no register left"), "pool");
+        let class = "  call void asm sideeffect \"nop\", \"x\"(i32 %0)\n";
+        assert!(run(class).0.unwrap_err().contains("constraint x is not carried"), "class");
+        let vector = "  call void asm sideeffect \"nop\", \"r\"(<4 x i32> %0)\n";
+        assert!(run(vector).0.unwrap_err().contains("is not carried"), "type");
+        let modifier = "  call void asm sideeffect \"mov ${0:z}, #0\", \"r\"(i32 %0)\n";
+        assert!(run(modifier).0.unwrap_err().contains("modifier z is not carried"), "modifier");
+    }
 }
