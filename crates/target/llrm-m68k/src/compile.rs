@@ -431,6 +431,9 @@ pub fn items_with(
     let held = options.data_constants && wants_size;
     let options = Options { slot_registers: false, data_constants: false, ..options };
     let (mut kept, (shared, licm_changes), mut kept_options) = finished(options)?;
+    if prefixes.capped.get() {
+        return Ok(kept);
+    }
     // The shared `MachineCSE` lengthens live ranges, and across calls they
     // spill. A function it changed is built through the whole sequence both
     // ways (the other trials' choices depend on the shape), the cheaper kept.
@@ -513,6 +516,13 @@ fn items_trials(
     let mut options = options;
     let (mut kept, touched) = items_once(module, name, cpu, options, prefixes)?;
     let saved = touched.global_copies;
+    if crate::dagisel::function::tuning()
+        .trial_insts_max
+        .is_some_and(|most| kept.iter().filter(|item| matches!(item, Item::Inst(_))).count() > most)
+    {
+        prefixes.capped.set(true);
+        return Ok((kept, false, options, (false, false)));
+    }
     if llrm_support::debug::enabled("builds") {
         eprintln!(
             "[builds] {name} trials: tail_dup {} return_dup {} class_split {} compare_destinations {} carry_chain {} global_copies {} mul_trial {} remat_constants {} data_constants {} shared_cse {}",
@@ -937,6 +947,8 @@ struct Prefixes {
     late: Memo<(Selection, String), Prepared>,
     /// Some build had a spill slot ([`crate::slotreg`] has something to move).
     had_slots: std::cell::Cell<bool>,
+    /// The first build is over `Tuning::trial_insts_max`: no other is made.
+    capped: std::cell::Cell<bool>,
 }
 
 /// The options that only the stages after `MachineCSE` read, left out of the
