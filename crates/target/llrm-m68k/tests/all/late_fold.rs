@@ -130,3 +130,33 @@ e:
         assert_eq!(count(&out, "jsr\tf"), 1, "{cpu}: the call is made on both paths:\n{out}");
     }
 }
+
+/// Every merge rebuilds the block graph; the scan of a block's edges read all
+/// its instructions, so a function of long blocks took time in proportion to
+/// merges x instructions (`synth.c` at 68000 -O1 with `-funroll-loops`: over
+/// 8 minutes, 60 % of the first 100 s in `latefold`). The scan reads the
+/// block's last instructions only.
+#[test]
+fn the_edge_scan_reads_a_blocks_terminators_not_its_body() {
+    let mut body =
+        String::from("declare void @sink(ptr)\ndefine void @f(ptr %p, i32 %n) optsize {\nentry:\n  br label %b0\n");
+    for i in 0..40 {
+        body += &format!("b{i}:\n  %c{i} = icmp eq i32 %n, {i}\n  br i1 %c{i}, label %a{i}, label %b{}\n", i + 1);
+        body += &format!("a{i}:\n");
+        for j in 0..24 {
+            body += &format!(
+                "  %g{i}_{j} = getelementptr i32, ptr %p, i32 {}\n  store i32 {}, ptr %g{i}_{j}\n",
+                j,
+                i * 100 + j
+            );
+        }
+        body += "  call void @sink(ptr %p)\n  br label %end\n";
+    }
+    body += "b40:\n  br label %end\nend:\n  ret void\n}\n";
+    let before = llrm_m68k::latefold::edge_scans();
+    let _ = at_os(&body, "68020");
+    let (instructions, blocks) = llrm_m68k::latefold::edge_scans();
+    let (instructions, blocks) = (instructions - before.0, blocks - before.1);
+    assert!(blocks > 0, "the late fold scanned nothing");
+    assert!(instructions <= 4 * blocks, "{instructions} instructions read for {blocks} block scans");
+}
