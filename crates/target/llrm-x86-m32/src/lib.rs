@@ -99,6 +99,9 @@ static ADDRESS_FORMS: LazyLock<Vec<AddressForm>> = LazyLock::new(|| {
 /// fill clocks over its bytes (`line_fill_clocks` / `cache_line` of the CPU's
 /// sheet; 486: 5 / 16 = 312 milliclocks), so `speed_milliclocks_per_byte` is
 /// derived, never set. Owner llrm-target-x86-m32.
+/// `Tuning::trial_insts_max` of the m32 targets.
+pub const TRIAL_INSTS_MAX: usize = 2000;
+
 fn tuning(costs: &llrm_mir::target::OperationCosts) -> llrm_mir::target::Tuning {
     let per_byte = llrm_target::timings::derived_byte_rate(costs.cache_line, costs.line_fill_clocks);
     llrm_mir::target::Tuning {
@@ -115,6 +118,14 @@ fn tuning(costs: &llrm_mir::target::OperationCosts) -> llrm_mir::target::Tuning 
         // 100 puts it 1.039 over (225: 1.020). O1's gap is mostly SPEED-O1's
         // table module, not the bar.
         inline_threshold_o1: Some(125),
+        // DEVIATE TRIAL-CAP-M32 (owner llrm-target-x86-m32, exit 2026-12-20):
+        // the pin builds once. A module with a function of more than
+        // `TRIAL_INSTS_MAX` IR instructions takes no -Os trial: each re-runs
+        // the mid-end over all of it (such a module: 4.3x the compile time,
+        // +2% bytes). 208 files of tests/run/c and QB at -Os: two modules
+        // change, +0.087% bytes in all; caps of 5000 and 10000 change
+        // nothing.
+        trial_insts_max: Some(TRIAL_INSTS_MAX),
         inline_threshold_o2: Some(125),
         // DEVIATE MEMSET-PATTERN-SPEED (owner w10, exit 2026-11-24): fill_nest
         // -O2 filled 4096 words by a loop, 5 clk a word, where `rep stosw`

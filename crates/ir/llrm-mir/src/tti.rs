@@ -2535,6 +2535,11 @@ pub trait Tti {
         128
     }
 
+    /// `Tuning::trial_insts_max`.
+    fn trial_insts_max(&self) -> Option<usize> {
+        None
+    }
+
     /// `Tuning::rep_stos_at_size`.
     fn rep_stos_at_size(&self) -> bool {
         false
