@@ -1,7 +1,7 @@
 """A module with an empty .text is a measured 0, not a missing bar (qbbars once dropped it: 78 of 79 counted)."""
 import re, subprocess, tempfile, os, shutil
 src = open(os.path.join(os.path.dirname(__file__), 'qbbars.py')).read()
-ns = {'subprocess': subprocess}
+ns = {'subprocess': subprocess, 're': re}
 exec(re.search(r'def sizes\(o,prefixes\):.*?\n(?=def one)', src, re.S).group(0), ns)
 
 def obj(code):
@@ -112,3 +112,15 @@ def test_every_bar_carries_the_shared_external_flags(tmp_path):
                 assert flag in line.split(), f'{arch}: {flag} missing in {line}'
         assert (arch != 'm32') or any('-fexcess-precision=fast' in l.split() for l in lines), 'gcc -m32 cannot compile pfpu.c without it (the module was dropped)'
         assert any('-D__cdecl=' in l.split() for l in lines), 'gcc cannot compile qbrt.c without -D__cdecl= (the column dropped the module)'
+
+
+def test_code_in_any_executable_section_is_counted():
+    """A bar of `.text*` names misses code a compiler puts elsewhere (a named hot section, .init): one side then reads smaller than it is. Every SHF_EXECINSTR section counts, a data section does not."""
+    def build(asm):
+        d = tempfile.mkdtemp(); o = d + '/o.o'
+        subprocess.run(['gcc', '-c', '-x', 'assembler', '-', '-o', o], input=asm, text=True, check=True)
+        return o
+    plain = build('.text\nf: ret\n')
+    split = build('.text\nf: ret\n.section .text.unlikely,"ax",@progbits\ng: .zero 16\n.section .myhot,"ax",@progbits\nh: .zero 32\n.section .data.tbl,"aw",@progbits\nd: .zero 64\n')
+    assert ns['text'](split) - ns['text'](plain) == 48, (ns['text'](split), ns['text'](plain))
+    assert ns['whole'](split) - ns['whole'](plain) == 48 + 64
