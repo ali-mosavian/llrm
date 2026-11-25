@@ -111,14 +111,61 @@ struct Block {
     rows: Vec<(usize, Row)>,
 }
 
-/// Where each block is and who reaches it, indexed by block id.
+/// Where each block is and who reaches it, indexed by block id. Kept across
+/// the edits of a merge (`relink`, as LLVM's `addSuccessor` and
+/// `removeSuccessor` keep a block's predecessor list); the passes that rewrite
+/// many branches at once drop it for a rebuild.
 struct Graph {
     position: Vec<usize>,
     /// Label to block id, `usize::MAX` for none.
     by_label: Vec<usize>,
-    /// The predecessors of block `b` are `from[start[b]..start[b + 1]]`.
-    start: Vec<u32>,
-    from: Vec<u32>,
+    /// The blocks each block goes to, sorted.
+    successors: Vec<Vec<u32>>,
+    /// The blocks that go to each block, in no order.
+    predecessors: Vec<Vec<u32>>,
+}
+
+impl Graph {
+    /// Block `id` goes to `to` and no other block.
+    fn set_successors(
+        &mut self,
+        id: usize,
+        to: &[usize],
+    ) {
+        let old = std::mem::take(&mut self.successors[id]);
+        for &gone in old.iter().filter(|&&one| !to.contains(&(one as usize))) {
+            let list = &mut self.predecessors[gone as usize];
+            if let Some(at) = list.iter().position(|&one| one as usize == id) {
+                list.swap_remove(at);
+            }
+        }
+        for &new in to.iter().filter(|&&one| !old.contains(&(one as u32))) {
+            self.predecessors[new].push(id as u32);
+        }
+        self.successors[id] = to.iter().map(|&one| one as u32).collect();
+    }
+
+    /// A block `id` with `label` is at `at`; the blocks after it moved up.
+    fn insert_block(
+        &mut self,
+        blocks: &[Block],
+        id: usize,
+        label: usize,
+        at: usize,
+    ) {
+        if self.position.len() <= id {
+            self.position.resize(id + 1, usize::MAX);
+            self.successors.resize(id + 1, Vec::new());
+            self.predecessors.resize(id + 1, Vec::new());
+        }
+        if self.by_label.len() <= label {
+            self.by_label.resize(label + 1, usize::MAX);
+        }
+        self.by_label[label] = id;
+        for (index, block) in blocks.iter().enumerate().skip(at) {
+            self.position[block.id] = index;
+        }
+    }
 }
 
 struct Late {
@@ -278,26 +325,62 @@ impl Late {
                 by_label[label] = block.id;
             }
         }
-        let mut edges: Vec<(u32, u32)> = Vec::new();
+        let mut successors = vec![Vec::new(); size];
+        let mut predecessors = vec![Vec::new(); size];
         let mut out = Vec::new();
         for (at, block) in self.blocks.iter().enumerate() {
             self.edges_into(at, &by_label, &mut out);
-            edges.extend(out.iter().map(|&to| (to as u32, block.id as u32)));
+            for &to in &out {
+                predecessors[to].push(block.id as u32);
+            }
+            successors[block.id] = out.iter().map(|&to| to as u32).collect();
         }
-        let mut start = vec![0u32; size + 1];
-        for &(to, _) in &edges {
-            start[to as usize + 1] += 1;
+        Graph { position, by_label, successors, predecessors }
+    }
+
+    /// The kept graph is the graph of the blocks, as a rebuild would make it
+    /// (debug builds, after every edit).
+    #[cfg(debug_assertions)]
+    fn check_graph(&self) {
+        let cached = self.graph.borrow();
+        let Some(kept) = cached.as_ref() else { return };
+        let fresh = self.build_graph();
+        let sorted = |lists: &[Vec<u32>]| -> Vec<Vec<u32>> {
+            lists
+                .iter()
+                .map(|list| {
+                    let mut list = list.clone();
+                    list.sort_unstable();
+                    list
+                })
+                .collect()
+        };
+        let live = |graph: &Graph| -> Vec<usize> { self.blocks.iter().map(|block| graph.position[block.id]).collect() };
+        assert_eq!(live(kept), live(&fresh), "the kept positions are stale");
+        assert_eq!(sorted(&kept.successors), sorted(&fresh.successors), "the kept successors are stale");
+        assert_eq!(sorted(&kept.predecessors), sorted(&fresh.predecessors), "the kept predecessors are stale");
+        for block in &self.blocks {
+            if let Some(label) = block.label {
+                assert_eq!(kept.by_label[label], block.id, "the kept label {label} is stale");
+            }
         }
-        for b in 0..size {
-            start[b + 1] += start[b];
+    }
+
+    /// The graph after `ids` changed where they go (their branches or the
+    /// block after them), when it is kept.
+    fn relink(
+        &mut self,
+        ids: &[usize],
+    ) {
+        let Some(mut graph) = self.graph.get_mut().take() else { return };
+        let mut out = Vec::new();
+        for &id in ids {
+            self.edges_into(graph.position[id], &graph.by_label, &mut out);
+            graph.set_successors(id, &out);
         }
-        let mut next = start.clone();
-        let mut from = vec![0u32; edges.len()];
-        for &(to, source) in &edges {
-            from[next[to as usize] as usize] = source;
-            next[to as usize] += 1;
-        }
-        Graph { position, by_label, start, from }
+        *self.graph.get_mut() = Some(graph);
+        #[cfg(debug_assertions)]
+        self.check_graph();
     }
 
     fn edges(
@@ -375,7 +458,12 @@ impl Late {
         let label = self.next_label;
         self.next_label += 1;
         self.blocks[at].label = Some(label);
-        self.changed();
+        if let Some(graph) = self.graph.get_mut() {
+            if graph.by_label.len() <= label {
+                graph.by_label.resize(label + 1, usize::MAX);
+            }
+            graph.by_label[label] = block;
+        }
         label
     }
 
@@ -440,7 +528,7 @@ impl Late {
             .skip(1)
             .filter(|block| {
                 block.label.is_some_and(|label| forward.contains_key(&label))
-                    && self.graph(|graph| graph.start[block.id] == graph.start[block.id + 1])
+                    && self.graph(|graph| graph.predecessors[block.id].is_empty())
             })
             .map(|block| block.id)
             .collect();
@@ -499,16 +587,25 @@ impl TailMergeFunction for Late {
         &self,
         block: usize,
     ) -> Vec<usize> {
-        self.graph(|graph| self.edges(graph.position[block], &graph.by_label))
+        self.graph(|graph| graph.successors[block].iter().map(|&to| to as usize).collect())
     }
 
     fn predecessors(
         &self,
         block: usize,
     ) -> Vec<usize> {
-        self.graph(|graph| match (graph.start.get(block), graph.start.get(block + 1)) {
-            (Some(&from), Some(&to)) => graph.from[from as usize..to as usize].iter().map(|&b| b as usize).collect(),
-            _ => Vec::new(),
+        #[cfg(debug_assertions)]
+        {
+            self.graph(|_| ());
+            self.check_graph();
+        }
+        self.graph(|graph| {
+            let mut from: Vec<usize> = graph
+                .predecessors
+                .get(block)
+                .map_or_else(Vec::new, |list| list.iter().map(|&one| one as usize).collect());
+            from.sort_unstable_by_key(|&one| graph.position[one]);
+            from
         })
     }
 
@@ -646,7 +743,7 @@ impl TailMergeFunction for Late {
         }
         let len = self.blocks[at].insts.len();
         self.blocks[at].rows.iter_mut().for_each(|(index, _)| *index = (*index).min(len));
-        self.changed();
+        self.relink(&[block]);
     }
 
     fn insert_branch(
@@ -678,7 +775,7 @@ impl TailMergeFunction for Late {
                 self.blocks[at].insts.push(jump);
             }
         }
-        self.changed();
+        self.relink(&[block]);
     }
 
     fn split_block_at(
@@ -699,7 +796,10 @@ impl TailMergeFunction for Late {
         self.blocks[position].rows = kept;
         let rows = moved.into_iter().map(|(index, row)| (index - at, row)).collect();
         self.blocks.insert(position + 1, Block { id, label: Some(label), insts: tail, rows });
-        self.changed();
+        if let Some(graph) = self.graph.get_mut() {
+            graph.insert_block(&self.blocks, id, label, position + 1);
+        }
+        self.relink(&[block, id]);
         Some(id)
     }
 
@@ -717,7 +817,7 @@ impl TailMergeFunction for Late {
             let jump = mc::Inst { opcode: "BRA8", operands: vec![self.symbol(label)] };
             self.blocks[position].insts.push(jump);
         }
-        self.changed();
+        self.relink(&[block]);
     }
 }
 
