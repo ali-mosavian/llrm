@@ -66,6 +66,21 @@ pub enum Cpu {
 }
 
 impl Cpu {
+    /// DEVIATE INLINE-BAR-O2-ARM64 (owner qb-arm64-synth-gfx, exit 2026-12-20):
+    /// the inliner's `DefaultThreshold` at -O2, where the pin's 225 left QB
+    /// text 30,104 B over the best of gcc and clang (86 of 126 modules); gcc
+    /// inlines less. Measured tuning, `generic` only: the smallest bar of
+    /// 150, 160, 175, 200 and 225 at which no bench program newly exceeds the
+    /// best in instructions (150 puts one over; 160: text +11,588 B over the
+    /// best, instructions 0.953 of it against 0.952). A profile with no entry
+    /// keeps the pin's bar.
+    fn inline_threshold_o2(self) -> Option<i64> {
+        match self {
+            Cpu::Generic => Some(160),
+            Cpu::AppleM1 => None,
+        }
+    }
+
     fn name(self) -> &'static str {
         match self {
             Cpu::Generic => "generic",
@@ -800,6 +815,16 @@ impl Tti for AArch64 {
     }
 
     /// 250 clocks a byte (the bar's price, as UP1 and the speed inline rate).
+    fn inline_threshold_at_level(
+        &self,
+        level: u8,
+    ) -> Option<i64> {
+        match level {
+            2 => self.cpu.inline_threshold_o2(),
+            _ => None,
+        }
+    }
+
     fn speed_milliclocks_per_byte(&self) -> i64 {
         250_000
     }
