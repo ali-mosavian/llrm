@@ -128,6 +128,25 @@ static WRITEBACKS: LazyLock<Vec<Writeback>> = LazyLock::new(|| {
             address_dest: false,
         });
     }
+    // the word multiplies and divides: the pin has no memory source for them,
+    // [`super::wordmul`] has the `(An)` base
+    for (base, _) in super::wordmul::BASES {
+        let twin = leak(base.replace("j16", "o16"));
+        let defs = super::wordmul::base_desc(base).map_or(0, |desc| usize::from(desc.num_defs));
+        all.push(Writeback {
+            name: leak(format!("{twin}_WB")),
+            prints_as: twin,
+            load: true,
+            pre: false,
+            drop: defs,
+            base,
+            source: true,
+            memory_move: false,
+            slot: false,
+            drops: 1,
+            address_dest: false,
+        });
+    }
     // the compare of a long with `(An)+` whose destination is an address
     // register: the source twin of the pin's `CMP32dj` with the
     // address-destination encoding (`crate::addrcmp` makes it after allocation)
@@ -252,7 +271,21 @@ fn has_register_indirect_source(name: &str) -> bool {
 /// The piece of `name`'s encoding that holds the effective address mode of
 /// `(An)`: 3 bits at 3 with value 2.
 fn indirect_mode(name: &str) -> Option<usize> {
-    encoding(name)?.2.iter().position(|piece| matches!(piece, Piece::Const { lo: 3, width: 3, value: 2 }))
+    base_encoding(name)?.1.iter().position(|piece| matches!(piece, Piece::Const { lo: 3, width: 3, value: 2 }))
+}
+
+/// The description, text and encoding of a base row: the pin's, or one of
+/// [`super::wordmul`].
+fn base_desc(name: &str) -> Option<&'static InstrDesc> {
+    super::wordmul::base_desc(name).or_else(|| instrinfo::desc(code_of_pin(name)?))
+}
+
+fn base_asm(name: &str) -> Option<&'static (&'static str, &'static str, &'static [AsmOperand])> {
+    asm(name).or_else(|| super::wordmul::base_asm(name))
+}
+
+fn base_encoding(name: &str) -> Option<(u16, &'static [Piece])> {
+    encoding(name).map(|&(_, width, pieces)| (width, pieces)).or_else(|| super::wordmul::base_encoding(name))
 }
 
 fn code_of_pin(name: &str) -> Option<u16> {
@@ -275,6 +308,9 @@ pub fn name_of(code: u32) -> Option<&'static str> {
 /// The writeback that takes a memory source through `(An)+` in place of the
 /// register source of `user` (`ADD32dr` is `ADD32do_WB`).
 pub fn source_twin(user: &str) -> Option<&'static str> {
+    if let Some(stem) = super::wordmul::twin_stem(user) {
+        return WRITEBACKS.iter().find(|one| one.source && one.prints_as == stem).map(|one| one.name);
+    }
     // the register source is any register (`r`) or a data register (`d`)
     let stem = user.strip_suffix('r').or_else(|| user.strip_suffix('d'))?;
     WRITEBACKS.iter().find(|one| one.source && one.prints_as.strip_suffix('o') == Some(stem)).map(|one| one.name)
@@ -346,8 +382,7 @@ static DESCS: LazyLock<Vec<InstrDesc>> = LazyLock::new(|| {
     WRITEBACKS
         .iter()
         .map(|one| {
-            let base = instrinfo::desc(code_of_pin(one.base).expect("a writeback of a known instruction"))
-                .expect("a described instruction");
+            let base = base_desc(one.base).expect("a described instruction");
             let mut operands = Vec::new();
             if one.memory_move {
                 // the updated bases, then the pin's operands: the source base
@@ -415,7 +450,7 @@ pub fn source_asm(name: &str) -> Option<&'static (&'static str, &'static str, &'
             .iter()
             .filter(|one| one.source)
             .map(|one| {
-                let &(_, text, operands) = asm(one.base).expect("a printed row");
+                let &(_, text, operands) = base_asm(one.base).expect("a printed row");
                 let kept: Vec<AsmOperand> = operands
                     .iter()
                     .map(|one| AsmOperand {
@@ -448,7 +483,7 @@ pub fn source_encoding(name: &str) -> Option<(u16, &'static [Piece])> {
             .iter()
             .filter(|one| one.source)
             .map(|one| {
-                let &(_, width, pieces) = encoding(one.base).expect("an encoded row");
+                let (width, pieces) = base_encoding(one.base).expect("an encoded row");
                 let mut pieces = pieces.to_vec();
                 let at = indirect_mode(one.base).expect("the mode of (An)");
                 pieces[at] = Piece::Const { lo: 3, width: 3, value: 3 };
