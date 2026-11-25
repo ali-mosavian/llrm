@@ -678,6 +678,10 @@ mod tests {
             // `alloca` it builds (llrm only); it reads no flag off an
             // existing instruction.
             "zeromerge.rs",
+            // `narrowiv` gives the narrow increment `nuw` (zext) or `nsw` (sext) when the
+            // counter's range and the step fit the narrow width, so it cannot wrap there. It
+            // reads no flag off an existing instruction.
+            "narrowiv.rs",
         ];
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
         let reads =
