@@ -209,6 +209,11 @@ pub const MEMSET_Q: u32 = 0xF003;
 /// copy through a `d` register would drop the upper half.
 pub const SAVE_Q: u32 = 0xF004;
 
+/// An inline assembly block (`llrm.a64.asm.*`): chain, the block's name,
+/// the registers it reads, glue; it writes the registers the `CopyFromReg`
+/// after it read. Emitted as the block's words, with a call's clobbers.
+pub const LLRM_ASM: u32 = 0xF005;
+
 #[derive(Debug, Default)]
 pub struct Aarch64Calling {
     /// AAPCS64 of Linux rather than Darwin's.

@@ -58,11 +58,17 @@ pub fn of(op: &Op) -> Facts {
         ),
         may_store: matches!(
             op,
-            Op::I(Inst::Store { .. } | Inst::StorePair { .. } | Inst::Atomic { .. } | Inst::VectorStoreLane { .. } | Inst::VectorStoreStructure { .. })
+            Op::I(
+                Inst::Store { .. }
+                    | Inst::StorePair { .. }
+                    | Inst::Atomic { .. }
+                    | Inst::VectorStoreLane { .. }
+                    | Inst::VectorStoreStructure { .. }
+            )
         ),
         side_effects: matches!(
             op,
-            Op::I(Inst::Svc { .. } | Inst::Dmb { .. } | Inst::Atomic { .. } | Inst::Brk { .. })
+            Op::I(Inst::Svc { .. } | Inst::Dmb { .. } | Inst::Atomic { .. } | Inst::Brk { .. } | Inst::Word { .. })
         ),
         early_clobber: matches!(op, Op::I(Inst::Atomic { .. }) | Op::JumpTable { .. }),
     }

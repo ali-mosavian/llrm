@@ -27,7 +27,7 @@ fn operation(inst: &Inst) -> (Operation, bool) {
         Inst::Branch { link: true, .. } | Inst::BranchReg { link: true, .. } => (Operation::Call, false),
         Inst::BranchCond { .. } | Inst::CompareBranch { .. } | Inst::TestBranch { .. } => (Operation::Branch, false),
         Inst::Ret { .. } => (Operation::Return, false),
-        Inst::Brk { .. } => (Operation::Barrier, false),
+        Inst::Brk { .. } | Inst::Word { .. } => (Operation::Barrier, false),
         _ => (Operation::Binary, false),
     }
 }
