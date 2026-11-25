@@ -2754,6 +2754,15 @@ pub trait Tti {
         false
     }
 
+    /// DEVIATE MEMCPY-EXACT-TAIL: whether an inline copy's last piece
+    /// overlaps the one before it also where the next narrower type covers
+    /// the rest exactly (the pin only where it cannot), for a target whose
+    /// misaligned accesses are fast: a load straddling the split of a
+    /// narrower tail forwards from no single store.
+    fn overlapping_copy_tail(&self) -> bool {
+        false
+    }
+
     /// Whether a zero fill is stored as zero doubles through the FPU at `-Os`
     /// (`Tuning::x87_zero_fill_at_size`).
     fn x87_zero_fill_at_size(&self) -> bool {
