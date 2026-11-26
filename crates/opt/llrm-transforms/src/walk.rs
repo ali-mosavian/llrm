@@ -354,7 +354,9 @@ impl ProgramPass for Walk {
         // The target's tuning table, at the level the pass runs at.
         let level = self.inline.level();
         if let Some(threshold) = threshold_override(program.target.tti().as_deref(), level) {
-            params.cut_from = (threshold < params.default_threshold).then_some(params.default_threshold);
+            // A level entry of the tuning table is a cut; a flat bar is the
+            // target's own and keeps its verdict.
+            params.cut_from = cut_from(program.target.tti().as_deref(), level, params.default_threshold);
             params.default_threshold = threshold;
         }
         let size = self.inline.caller_size();
@@ -845,7 +847,7 @@ impl ProgramPass for Walk {
                                 // though the target states no rate: the copy
                                 // stays where the
                                 // module is no larger and the clocks fewer.
-                                let at_price = rate > 0 || params.cut_from.is_some();
+                                let at_price = rate > 0 || (params.cut_from.is_some() && self.speed_rate);
                                 let (saved, growth) = if size == crate::inlinecost::CallerSize::Speed && at_price {
                                     let costs = program.target.speed_trial_costs();
                                     let now = module.global(id).function().expect("a body");
@@ -1663,6 +1665,18 @@ impl SelfInline {
         }
         Ok(())
     }
+}
+
+/// The level's own bar `own`, where the target's tuning table states a lower
+/// one for `level`: that bar is a cut (`InlineParams::cut_from`). A flat bar of
+/// the target's is not one.
+fn cut_from(
+    tti: Option<&dyn llrm_mir::tti::Tti>,
+    level: Option<u8>,
+    own: i64,
+) -> Option<i64> {
+    let bar = tti?.inline_threshold_at_level(level?)?;
+    (bar < own).then_some(own)
 }
 
 /// The target's `DefaultThreshold` for a caller at `level` (1, 2, 3; none for
