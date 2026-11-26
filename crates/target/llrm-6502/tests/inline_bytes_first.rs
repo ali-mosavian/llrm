@@ -1,5 +1,5 @@
-//! A copy that grows the code is not made at -O2/-O3: bytes first at every
-//! level (6502-RATE).
+//! A copy that grows the code and repays too few clocks is not made at
+//! -O2/-O3 (3 clocks a byte, 6502-RATE).
 
 use llrm_6502::dagisel::hooks::Cpu;
 use llrm_6502::driver::{self, Level, Request};
