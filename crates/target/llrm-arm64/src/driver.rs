@@ -64,7 +64,9 @@ pub fn program(
     platform: Platform,
 ) -> Result<Program, String> {
     let (_, text) = without_triple(text);
+    let parsing = llrm_support::debug::span("arm64 parse IR");
     let mut module = llrm_mir::parse::module(&text).map_err(|error| error.to_string())?;
+    drop(parsing);
     llrm_mir::parse::upgrade_lifetimes(&mut module);
     // Atomics are calls the mid-end moves nothing across; the selector makes
     // them instructions.
@@ -281,9 +283,12 @@ fn lower_function(
     let global = module.global(id);
     let function = global.function().ok_or("not a function")?;
     let name = global.name.owned().ok_or("an unnamed function")?;
+    let selecting = llrm_support::debug::span("arm64 select");
     let mut machine =
         dag_select(module, &name, &program.layout, platform, lines).map_err(|why| format!("@{name}: {why}"))?;
+    drop(selecting);
     dump("Select", &machine);
+    let before_allocation = llrm_support::debug::span("arm64 machine passes before allocation");
     crate::mfunc::remove_unreachable_blocks(&mut machine);
     // `AArch64ConditionalCompares` runs just before early if-conversion and
     // skips an `optnone` function too; `LLRM_ARM64_CCMP=off` is
@@ -362,6 +367,8 @@ fn lower_function(
         machine.alloc_odds = Some(crate::layout::edge_odds(module, function, &program.layout, &machine));
         machine = crate::lir_body::round_trip(&machine)?;
     }
+    drop(before_allocation);
+    let allocating = llrm_support::debug::span("arm64 register allocation");
     // The shared greedy allocator, unless `LLRM_ARM64_LINEAR` asks for the
     // linear scan; a function greedy refuses goes to the scan, reported.
     // `x16`/`x17` are the lowerer's scratch pair where an offset does not
@@ -405,7 +412,9 @@ fn lower_function(
         machine = before;
         allocation = allocate(&mut machine, false);
     }
+    drop(allocating);
     dump("RegAlloc", &machine);
+    let after_allocation = llrm_support::debug::span("arm64 lowering after allocation");
     crate::copyprop::run(&mut machine);
     crate::postrasink::run(&mut machine);
     dump("PostRaSink", &machine);
@@ -434,6 +443,7 @@ fn lower_function(
     crate::jumptable::compress(&mut blocks, &mut tables).map_err(|why| format!("@{name}: {why}"))?;
     crate::trial::add(&machine, &blocks, &likelihood);
     let written = crate::ipra::written(&machine);
+    drop(after_allocation);
     Ok((
         crate::emit::Function {
             tables,
@@ -551,7 +561,9 @@ pub fn object_with(
     debug: bool,
 ) -> Result<llrm_debug::Described, String> {
     let (program, lowered) = compiled(text, platform, level.into(), debug, false)?;
+    let emitting = llrm_support::debug::span("arm64 object emit");
     let object = crate::emit::object(&program.modules[0], &program.layout, platform, name, &lowered)?;
+    drop(emitting);
     let debug = if debug { crate::debug::info(&program.modules[0], platform, &object, &lowered, name)? } else { None };
     Ok(llrm_debug::Described { object, debug })
 }
