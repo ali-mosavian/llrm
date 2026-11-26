@@ -951,15 +951,46 @@ type Found = (Vec<(String, llrm_lir::registers::RegId)>, Option<Vec<Line>>);
 
 /// One question put to [`crate::calltarget::choose`] and its answer: the
 /// search reads nothing but these, so a build that reaches the same function
-/// with the same allocation (a trial that left it as it was) takes the answer.
+/// with the same allocation (a trial that left it as it was, a lowering of the
+/// module that left it as it was) takes the answer.
 struct Search {
     function: crate::mfunc::MFunction,
     assignment: Vec<llrm_lir::registers::RegId>,
     slots: Vec<i32>,
-    /// What the expansion reads besides: size, the frame and argument pushes
-    /// and the short forms.
-    reads: (bool, bool, bool, bool),
+    /// What the expansion reads besides: the function's number, the cpu, size,
+    /// the frame and argument pushes and the short forms.
+    reads: (usize, Cpu, bool, bool, bool, bool),
     found: Found,
+}
+
+/// The instructions the searches kept hold: past this the kept ones go.
+const SEARCHES_KEPT_INSTS: usize = 3_000_000;
+
+thread_local! {
+    /// The searches made on this thread, by function name.
+    static SEARCHES: std::cell::RefCell<(usize, llrm_support::hash::HashMap<String, Vec<Search>>)> =
+        std::cell::RefCell::new((0, Default::default()));
+}
+
+fn remembered_search(
+    name: &str,
+    same: impl Fn(&Search) -> bool,
+) -> Option<Found> {
+    SEARCHES.with(|kept| kept.borrow().1.get(name)?.iter().find(|one| same(one)).map(|one| one.found.clone()))
+}
+
+fn remember_search(
+    name: &str,
+    search: Search,
+) {
+    SEARCHES.with(|kept| {
+        let mut kept = kept.borrow_mut();
+        if kept.0 > SEARCHES_KEPT_INSTS {
+            *kept = (0, Default::default());
+        }
+        kept.0 += search.function.blocks.iter().map(|block| block.insts.len()).sum::<usize>();
+        kept.1.entry(name.to_string()).or_default().push(search);
+    });
 }
 
 /// The function before allocation, with what its rewrites touched.
@@ -977,8 +1008,6 @@ struct Prefixes {
     emitted: Memo<Selection, Emission>,
     early: Memo<(Selection, String), Prepared>,
     late: Memo<(Selection, String), Prepared>,
-    /// What the call-target search was asked and what it answered.
-    searches: std::cell::RefCell<Vec<Search>>,
     /// Some build had a spill slot ([`crate::slotreg`] has something to move).
     had_slots: std::cell::Cell<bool>,
     /// The first build is over `Tuning::trial_insts_max`: no other is made.
@@ -1343,12 +1372,11 @@ fn items_once(
     }
     let mut priced = None;
     if options.short && options.call_targets {
-        let reads = (wants_size, options.push_frame, options.push_arguments, options.short);
+        let reads = (number, cpu, wants_size, options.push_frame, options.push_arguments, options.short);
         let same = |one: &Search| {
             one.reads == reads && one.assignment == assignment.0 && one.slots == slots && one.function == function
         };
-        let remembered = prefixes.searches.borrow().iter().find(|one| same(one)).map(|one| one.found.clone());
-        let (chosen, expansion) = match remembered {
+        let (chosen, expansion) = match remembered_search(name, same) {
             Some(found) => {
                 debug_assert!(
                     crate::calltarget::choose(&function, &assignment, cpu, price, unmetered)? == found,
@@ -1359,18 +1387,16 @@ fn items_once(
             None => {
                 counted(|runs| runs.searches += 1);
                 let found = crate::calltarget::choose(&function, &assignment, cpu, price, expand)?;
-                prefixes
-                    .searches
-                    .borrow_mut()
-                    .push(
-                        Search {
-                            function: function.clone(),
-                            assignment: assignment.0.clone(),
-                            slots: slots.clone(),
-                            reads,
-                            found: found.clone(),
-                        },
-                    );
+                remember_search(
+                    name,
+                    Search {
+                        function: function.clone(),
+                        assignment: assignment.0.clone(),
+                        slots: slots.clone(),
+                        reads,
+                        found: found.clone(),
+                    },
+                );
                 found
             }
         };
