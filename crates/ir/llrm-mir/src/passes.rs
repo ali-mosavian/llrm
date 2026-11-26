@@ -900,28 +900,20 @@ impl ModuleAnalysis for CalleeEffects {
         // function does not summarize every global again.
         if let Some(then) = then
             && let Some(moved) = analyses.declarations_moved_since(then)
-            && analyses.dropped.contains_key(&TypeId::of::<Self>())
+            && let Some(Ok(mut callees)) = analyses.take_unshared::<Self>()
         {
-            analyses.release_outer_holders();
-            if let Some(last) = analyses.take_dropped::<Self>() {
-                match Rc::try_unwrap(last) {
-                    Ok(mut callees) => {
-                        for id in moved {
-                            let global = module.global(id);
-                            match &global.kind {
-                                GlobalKind::Function(function) => {
-                                    callees.insert(id, crate::memory::global_summary(global.name.as_deref(), function));
-                                }
-                                GlobalKind::Variable(_) => {
-                                    callees.remove(&id);
-                                }
-                            }
-                        }
-                        return callees;
+            for id in moved {
+                let global = module.global(id);
+                match &global.kind {
+                    GlobalKind::Function(function) => {
+                        callees.insert(id, crate::memory::global_summary(global.name.as_deref(), function));
                     }
-                    Err(_) => {}
+                    GlobalKind::Variable(_) => {
+                        callees.remove(&id);
+                    }
                 }
             }
+            return callees;
         }
         SCANS.with(|scans| scans.set(scans.get() + 1));
         crate::memory::callees(module)
@@ -1022,6 +1014,7 @@ impl Uses {
             }
         }
         let GlobalKind::Function(function) = &module.global(id).kind else { return };
+        crate::counts::bump(crate::counts::Event::UseBodies);
         let mut names: BTreeMap<GlobalId, u32> = BTreeMap::new();
         for (_, inst) in function.walk() {
             for operand in &function.instruction(inst).operands {
@@ -1077,7 +1070,7 @@ impl ModuleAnalysis for FunctionUses {
     ) -> Self::Result {
         let now = Self::position(module, analyses);
         let then = analyses.memo::<UsesMade>().made.replace(now);
-        let before = analyses.take_dropped::<Self>().and_then(|held| Rc::try_unwrap(held).ok());
+        let before = analyses.take_unshared::<Self>().and_then(Result::ok);
         if let (Some(then), Some(mut uses)) = (then, before)
             && then.0 == now.0
             && then.2 == now.2
@@ -1268,9 +1261,8 @@ impl ModuleAnalysis for Declarations {
                 last.downcast_ref::<Vec<GlobalValue>>().is_some_and(|last| last.len() == module.globals.len())
             })
         {
-            analyses.release_outer_holders();
-            if let Some(last) = analyses.take_dropped::<Declarations>() {
-                match Rc::try_unwrap(last) {
+            if let Some(last) = analyses.take_unshared::<Declarations>() {
+                match last {
                     Ok(mut patched) => {
                         for id in edited {
                             let now = module.global(id).declaration();
@@ -2922,6 +2914,16 @@ impl ModuleAnalyses {
         let one = self.dropped.remove(&TypeId::of::<M>())?;
         self.taken.insert(TypeId::of::<M>());
         Some(one.downcast::<M::Result>().expect("keyed by its type"))
+    }
+
+    /// `take_dropped`, to be brought up to date in place: `Ok` once the outer
+    /// proxies let go of it, `Err` where something else still holds it.
+    pub fn take_unshared<M: ModuleAnalysis>(&mut self) -> Option<Result<M::Result, Rc<M::Result>>> {
+        if !self.dropped.contains_key(&TypeId::of::<M>()) {
+            return None;
+        }
+        self.release_outer_holders();
+        self.take_dropped::<M>().map(Rc::try_unwrap)
     }
 
     /// Lets go of every outer manager the functions' analyses stand under, for

@@ -3,12 +3,13 @@ use std::rc::Rc;
 
 use crate::context::Context;
 use crate::context::GlobalId;
+use crate::counts;
 use crate::datalayout::DataLayout;
 use crate::module::Function;
 use crate::module::{GlobalKind, Linkage, Module};
 use crate::opcode::Attribute;
 use crate::parse;
-use crate::passes::{Analyses, Analysis, ModuleAnalyses, ModuleAnalysis, ModulePass, PassManager, PreservedAnalyses};
+use crate::passes::{Analyses, Analysis, FunctionUses, ModuleAnalyses, ModuleAnalysis, ModulePass, PassManager, PreservedAnalyses};
 use crate::program::{Program, ProgramAnalyses, ProgramAnalysis, ProgramPass};
 use crate::target::Neutral;
 
@@ -203,6 +204,23 @@ fn a_module_analysis_reads_function_results_from_their_managers() {
     analyses.invalidate(&PreservedAnalyses::none());
     analyses.get::<AllBlocks>(&module);
     assert_eq!(BLOCKS.take(), 1);
+}
+
+/// The outer proxy held the last `FunctionUses`, so each edit walked every
+/// body of the module again: compile time grew with the square of the
+/// functions.
+#[test]
+fn an_edited_body_is_the_only_one_function_uses_walks_again() {
+    let module = module(
+        "define void @f() {\nentry:\n  ret void\n}\ndefine void @g() {\nentry:\n  call void @f()\n  ret void\n}\ndefine void @h() {\nentry:\n  ret void\n}\n",
+    );
+    let mut analyses = ModuleAnalyses::of(&module, Rc::new(Neutral));
+    analyses.require::<FunctionUses>();
+    analyses.outer(&module);
+    analyses.body_edited(module.named("g").unwrap(), &PreservedAnalyses::none());
+    let before = counts::get(counts::Event::UseBodies);
+    analyses.outer(&module);
+    assert_eq!(counts::get(counts::Event::UseBodies) - before, 1);
 }
 
 /// A declaration stands for the definition another module holds; the call
