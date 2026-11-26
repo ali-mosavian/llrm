@@ -885,7 +885,7 @@ struct Selection {
 }
 
 thread_local! {
-    static RUNS: std::cell::Cell<Runs> = const { std::cell::Cell::new(Runs { builds: 0, selections: 0, early: 0, late: 0, allocations: 0 }) };
+    static RUNS: std::cell::Cell<Runs> = const { std::cell::Cell::new(Runs { builds: 0, selections: 0, early: 0, late: 0, allocations: 0, expansions: 0 }) };
 }
 
 /// How often this thread ran each stage of a build: the regression tests of
@@ -900,6 +900,8 @@ pub struct Runs {
     pub late: usize,
     /// Builds that reached allocation.
     pub allocations: usize,
+    /// Expansions of a function to its instructions (`finish_with`).
+    pub expansions: usize,
 }
 
 pub fn runs() -> Runs {
@@ -1300,7 +1302,7 @@ fn items_once(
         }));
     }
     let price = crate::timing::Price::of(wants_size);
-    let expand = |function: &crate::mfunc::MFunction| {
+    let unmetered = |function: &crate::mfunc::MFunction| {
         finish_with(
             function,
             &assignment,
@@ -1312,15 +1314,28 @@ fn items_once(
             options.push_arguments.then_some(price),
         )
     };
+    let expand = |function: &crate::mfunc::MFunction| {
+        counted(|runs| runs.expansions += 1);
+        unmetered(function)
+    };
     if options.short && options.pc_calls {
         crate::pccall::local_calls(&mut function, |callee| is_local_callee(module, callee));
     }
+    let mut priced = None;
     if options.short && options.call_targets {
-        let chosen = crate::calltarget::choose(&function, &assignment, cpu, price, expand)?;
+        let (chosen, expansion) = crate::calltarget::choose(&function, &assignment, cpu, price, expand)?;
         crate::calltarget::through_registers(&mut function, &chosen)?;
+        // the search expanded the function as it now stands to price it
+        priced = expansion;
     }
     let word_tables = word_table_labels(&function, number);
-    let lines = expand(&function)?;
+    let lines = match priced {
+        Some(lines) => {
+            debug_assert!(unmetered(&function)? == lines, "the priced expansion is not the function's");
+            lines
+        }
+        None => expand(&function)?,
+    };
     let folded = {
         let fresh = lines
             .iter()

@@ -97,3 +97,30 @@ fn a_size_trial_whose_rewrite_finds_nothing_costs_neither_a_late_stage_nor_an_al
     let (without, with) = (stages(false, false), stages(true, true));
     assert_eq!(with, without, "(late stages, allocations): {with:?} with the two trials on, {without:?} with them off");
 }
+
+/// Choosing the call targets expanded the function to price it as it would
+/// stand with the choice, and the build expanded the same function again for
+/// its output: one expansion more than the search made, a build in the Os
+/// compile (`x expand lines` 4.6 % of the backend's time, QB 68020).
+#[test]
+fn the_expansion_the_call_target_search_priced_is_the_one_the_build_prints() {
+    let ir = "target datalayout = \"E-m:e-p:32:16:32-i8:8:8-i16:16:16-i32:16:32-n8:16:32-a:0:16-S16\"\ndeclare i32 @ext(i32)\ndefine i32 @f(i32 %a) {\n  %x = call i32 @ext(i32 %a)\n  %y = call i32 @ext(i32 %x)\n  %z = call i32 @ext(i32 %y)\n  ret i32 %z\n}\n";
+    let module = llrm_mir::parse::module(ir).expect("parses");
+    let expansions = |call_targets| {
+        let options = Options {
+            size: true,
+            mid_end: false,
+            call_targets,
+            relax_classes: false,
+            data_constants: false,
+            ..Options::default()
+        };
+        let before = runs().expansions;
+        items_with(&module, "f", Cpu::M68000, options).expect("compiles");
+        runs().expansions - before
+    };
+    let (off, on) = (expansions(false), expansions(true));
+    // the search expands once as it stands and once per set it tries (one
+    // callee here); the build adds none
+    assert!(on <= off + 1, "{on} expansions with the search, {off} without");
+}
