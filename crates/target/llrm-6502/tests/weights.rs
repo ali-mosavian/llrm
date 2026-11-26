@@ -1,6 +1,6 @@
 //! The weights the 6502's prices multiply a block's clocks by.
 
-use llrm_6502::weights::block_weights;
+use llrm_6502::weights::{CallSites, block_weights};
 use llrm_mir::datalayout::DataLayout;
 
 /// A loop whose body branches to a block that the branch's `!prof` says runs
@@ -54,4 +54,33 @@ fn a_branch_without_weights_leaves_the_loop_weight() {
     let weighted = weights(&plain);
     let at = |name: &str| weighted.iter().find(|(label, _)| label == name).map(|(_, weight)| *weight).unwrap();
     assert_eq!(at("bump"), 10, "{weighted:?}");
+}
+
+/// A callee whose loop runs to its parameter. Priced as written it weighed the
+/// guessed trips and the inlined copy its counted ones: the call looked cheaper
+/// than the faster copy, and stayed.
+#[test]
+fn a_loop_bounded_by_a_parameter_weighs_the_trips_the_calls_pass() {
+    let module = llrm_mir::parse::module(
+        "define void @f(i16 %n) {
+entry:
+  br label %loop
+loop:
+  %i = phi i16 [ 0, %entry ], [ %j, %loop ]
+  %j = add i16 %i, 1
+  %c = icmp ult i16 %j, %n
+  br i1 %c, label %loop, label %done
+done:
+  ret void
+}
+define void @main() {
+  call void @f(i16 98)
+  call void @f(i16 18)
+  ret void
+}
+",
+    )
+    .expect("parses");
+    let weights = CallSites::of(&module).block_weights(&module, "f", &DataLayout::default());
+    assert_eq!(weights.iter().max(), Some(&58), "{weights:?}");
 }
