@@ -316,7 +316,8 @@ fn lower_function(
     if llrm_support::env_flag!("LLRM_ARM64_STAGES") {
         llrm_support::debug::timed("arm64 stage observation", || crate::lir_body::stages::observe(&machine))?;
     }
-    llrm_support::debug::timed("arm64 phi elimination", || crate::mfunc::lower_phis(&mut machine)).map_err(|why| format!("@{name}: {why}"))?;
+    llrm_support::debug::timed("arm64 phi elimination", || crate::mfunc::lower_phis(&mut machine))
+        .map_err(|why| format!("@{name}: {why}"))?;
     dump("PhiElimination", &machine);
     if llrm_support::env_flag!("LLRM_ARM64_VERIFY") {
         let undefined = crate::mfunc::undefined_reads(&machine);
@@ -377,7 +378,8 @@ fn lower_function(
     // encode; they are the allocator's while the frame stays small. A
     // spill slot is at most 16 B, a register mostly 8: between the two
     // bounds the allocation is kept only if the frame came out small.
-    let (tight, loose) = llrm_support::debug::timed("arm64 scratch estimate", || crate::frame::scratch_estimate(&machine));
+    let (tight, loose) =
+        llrm_support::debug::timed("arm64 scratch estimate", || crate::frame::scratch_estimate(&machine));
     let snapshot = llrm_support::debug::timed("arm64 machine snapshot", || (tight && !loose).then(|| machine.clone()));
     crate::lir_view::set_frame_pointer_free(
         platform != Platform::Darwin
@@ -389,7 +391,9 @@ fn lower_function(
                 )),
     );
     crate::lir_view::set_quad_callee_saved_free(!machine.calls);
-    machine.alloc_odds = llrm_support::debug::timed("arm64 edge odds", || Some(crate::layout::edge_odds(module, function, &program.layout, &machine)));
+    machine.alloc_odds = llrm_support::debug::timed("arm64 edge odds", || {
+        Some(crate::layout::edge_odds(module, function, &program.layout, &machine))
+    });
     let allocate = |machine: &mut crate::mfunc::MFunc, scratch: bool| {
         crate::lir_view::set_scratch_free(scratch);
         // The shared greedy allocator, unless `LLRM_ARM64_LINEAR` asks for
