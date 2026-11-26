@@ -120,3 +120,26 @@ fn test_the_frequencies_of_one_cfg_are_worked_out_once_and_odds_make_another() {
     let skewed = MachineBlockFrequencyInfo::of(&body(succs, &[((0, 1), HALF / 2), ((0, 2), HALF + HALF / 2)]));
     assert_eq!(skewed.get_block_freq_relative_to_entry_block(1), 0.25, "other odds are worked out afresh");
 }
+
+/// exec.c -O2: reading one edge of a dispatch of N cases worked out the
+/// probabilities of all N, so reading them all looked up N^2 odds: 487 M of
+/// 9,178 M instructions. A block's are worked out once.
+#[test]
+fn test_the_edges_of_a_dispatch_are_each_read_from_one_working_out() {
+    let n = 64usize;
+    let none: &[i64] = &[];
+    let cases: Vec<i64> = (1..=n as i64).collect();
+    let mut succs: Vec<&[i64]> = vec![&cases];
+    succs.extend(std::iter::repeat_n(none, n));
+    let stated = ((1u64 << 31) / 128) as u32;
+    let odds: Vec<((i64, i64), u32)> = (1..=n as i64 / 2).map(|to| ((0, to), stated)).collect();
+    let dispatch = body(&succs, &odds);
+    let mbpi = MachineBranchProbabilityInfo::of(&dispatch);
+    ODDS_LOOKUPS.with(|one| one.set(0));
+    let read: Vec<BranchProbability> = (0..n).map(|edge| mbpi.get_edge_probability(0, edge)).collect();
+    assert_eq!(ODDS_LOOKUPS.with(std::cell::Cell::get), n, "an edge read looked at the odds of every edge again");
+    assert_eq!(read[0], BranchProbability::get_raw(stated));
+    let left = BranchProbability::get_raw(stated);
+    let share = (0..n / 2).fold(BranchProbability::get_zero(), |sum, _| sum + left).get_compl().div_u32(n as u32 / 2);
+    assert_eq!(read[n - 1], share);
+}
