@@ -478,11 +478,7 @@ fn trial_inlined(
 ) -> Result<(Program, Vec<llrm_transforms::trial::Site>, Option<Assembled>, bool), String> {
     use llrm_transforms::trial;
     let sites = trial::take_refused();
-    let limit = built
-        .target
-        .tti()
-        .and_then(|tti| tti.opt_size_inline_trial_limits())
-        .map_or(0, |(_, instructions)| instructions);
+    let limit = inline_trial_limit(&built);
     if !matches!(request.level, Level::O1 | Level::Os) || sites.is_empty() {
         return Ok((built, Vec::new(), None, false));
     }
@@ -585,11 +581,7 @@ fn judged_inlines(
 ) -> Result<Assembled, String> {
     use llrm_transforms::trial;
     let sites = trial::take_refused();
-    let limit = built
-        .target
-        .tti()
-        .and_then(|tti| tti.opt_size_inline_trial_limits())
-        .map_or(0, |(_, instructions)| instructions);
+    let limit = inline_trial_limit(&built);
     let debug = std::env::var_os("LLRM_DEBUG_TRIAL").is_some();
     if sites.is_empty() || instructions(&built) > limit {
         if debug && !sites.is_empty() {
@@ -606,11 +598,13 @@ fn judged_inlines(
     // The loops the copies hold that the threshold refused: the unroll trial
     // may take them with the pin's inlines made.
     let joint = !all_unroll.0.is_empty();
-    let finished = |built: Program, noted, inlined: &[trial::Site]| {
+    // The inline+unroll pair makes every inline of the pin's, so it is the
+    // kept side's alone: a candidate would build the same program again.
+    let finished = |built: Program, noted, inlined: &[trial::Site], joint: bool| {
         trial::restore(noted);
         trial::with_inlined(inlined, || trial_unrolled(built, None, joint, true, text, request))
     };
-    let mut best = finished(built, kept_unroll, &[])?;
+    let mut best = finished(built, kept_unroll, &[], joint)?;
     let mut chosen: Vec<trial::Site> = Vec::new();
     let groups = trial::groups(&sites, &[]);
     let mut all = Some((all, all_unroll));
@@ -625,7 +619,7 @@ fn judged_inlines(
             trial::take();
             continue;
         };
-        let Ok(priced) = finished(other, noted, &tried) else {
+        let Ok(priced) = finished(other, noted, &tried, false) else {
             continue;
         };
         let callers: std::collections::BTreeSet<&str> =
@@ -655,8 +649,13 @@ pub fn inline_pays(
     added: i64,
     callers: usize,
 ) -> bool {
-    added <= TRIAL_GROWTH_LIMIT.min(TRIAL_BYTES_PER_FUNCTION * callers.max(1) as i64)
+    added <= speed_growth_bound(callers)
         && i128::from(saved) * 1000 >= i128::from(added) * i128::from(TRIAL_MILLICLOCKS_PER_BYTE)
+}
+
+/// The largest program, in instructions, whose refused copies are tried.
+fn inline_trial_limit(program: &Program) -> usize {
+    program.target.tti().and_then(|tti| tti.opt_size_inline_trial_limits()).map_or(0, |(_, instructions)| instructions)
 }
 
 pub use llrm_transforms::walk::SizeRow;
@@ -1213,6 +1212,11 @@ const TRIAL_MILLICLOCKS_PER_BYTE: i64 = 3000;
 /// the pin's own bound is on size too.
 const TRIAL_BYTES_PER_FUNCTION: i64 = 300 * 2;
 
+/// The most a trial that grows `functions` functions may add at -O2 and -O3.
+fn speed_growth_bound(functions: usize) -> i64 {
+    TRIAL_GROWTH_LIMIT.min(TRIAL_BYTES_PER_FUNCTION * functions.max(1) as i64)
+}
+
 /// Whether a trial that saved `saved` clocks for `added` bytes in `functions`
 /// functions is kept. -Os and -O1: bytes first (user ruling 2026-11-14), so one
 /// that adds none, and saves no fewer clocks, or one that removes some. -O2 and
@@ -1232,7 +1236,7 @@ pub fn trial_pays(
         // strict: no more bytes and no more clocks (6502-UNROLL-O1)
         Level::O1 => llrm_transforms::loopunrollpass::trial::keeps_at_o1(saved, added, 0),
         Level::O2 | Level::O3 => {
-            added <= TRIAL_BYTES_PER_FUNCTION * functions.max(1) as i64
+            added <= speed_growth_bound(functions)
                 && llrm_transforms::loopunrollpass::trial::keeps_at_o1(saved, added, TRIAL_MILLICLOCKS_PER_BYTE)
         }
         _ => added < 0 || (added == 0 && saved >= 0),
@@ -1597,13 +1601,15 @@ fn write_constant(
 
 /// The trips each block of each function runs, from the module a function was
 /// selected from.
-fn estimate_weights(
-    module: &llrm_mir::module::Module,
+fn estimate_weights<'a>(
+    module: &'a llrm_mir::module::Module,
     names: &[String],
-    sources: &[Option<&llrm_mir::module::Module>],
+    sources: &[Option<&'a llrm_mir::module::Module>],
     layout: &llrm_mir::datalayout::DataLayout,
     level: Level,
 ) -> Vec<Vec<u64>> {
+    // the call sites of each module selected from, collected once
+    let mut sites: Vec<(&llrm_mir::module::Module, crate::weights::CallSites)> = Vec::new();
     names
         .iter()
         .zip(sources)
@@ -1611,7 +1617,11 @@ fn estimate_weights(
             let from = source.unwrap_or(module);
             // -O2 and -O3 judge clocks; -O1 and -Os break ties by them
             if matches!(level, Level::O2 | Level::O3) {
-                return crate::weights::block_weights_at_sites(from, name, layout);
+                let at = sites.iter().position(|(one, _)| std::ptr::eq(*one, from)).unwrap_or_else(|| {
+                    sites.push((from, crate::weights::CallSites::of(from)));
+                    sites.len() - 1
+                });
+                return sites[at].1.block_weights(from, name, layout);
             }
             let function = from.named(name).and_then(|id| from.global(id).function());
             function.map_or_else(Vec::new, |function| crate::weights::block_weights(from, function, layout))

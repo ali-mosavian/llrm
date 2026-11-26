@@ -47,6 +47,7 @@ fn measured(
 fn copies_the_outliner_shares_are_not_refused_on_their_bytes_before_it() {
     for level in ["-O2", "-O3"] {
         let (text, clocks) = measured("inline_shared_loops", level);
+        assert!(text.contains("jsr __outl_"), "{level}: the premise, the outliner shares the copies:\n{text}");
         let calls = text.matches("jsr mix\n").count();
         assert!(calls == 0 && clocks < MIX_CLOCKS, "{level}: {calls} calls, {clocks} clocks");
     }
@@ -58,8 +59,9 @@ fn copies_the_outliner_shares_are_not_refused_on_their_bytes_before_it() {
 #[test]
 fn a_copy_that_repays_its_bytes_once_unrolled_is_made() {
     for level in ["-O2", "-O3"] {
-        let (_, clocks) = measured("inline_site_bound", level);
-        assert!(clocks < BOUND_CLOCKS, "{level}: {clocks} clocks");
+        let (text, clocks) = measured("inline_site_bound", level);
+        let calls = text.matches("jsr mark\n").count();
+        assert!(calls == 0 && clocks < BOUND_CLOCKS, "{level}: {calls} calls, {clocks} clocks");
     }
 }
 
