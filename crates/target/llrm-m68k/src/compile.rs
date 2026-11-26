@@ -526,9 +526,13 @@ fn items_trials(
     let mut options = options;
     let (mut kept, touched) = items_once(module, name, cpu, options, prefixes)?;
     let saved = touched.global_copies;
-    if crate::dagisel::function::tuning()
-        .trial_insts_max
-        .is_some_and(|most| kept.iter().filter(|item| matches!(item, Item::Inst(_))).count() > most)
+    let tuning = crate::dagisel::function::tuning();
+    let cap = if size_build(module, name, options) {
+        tuning.trial_insts_max_at_size.or(tuning.trial_insts_max)
+    } else {
+        tuning.trial_insts_max
+    };
+    if cap.is_some_and(|most| kept.iter().filter(|item| matches!(item, Item::Inst(_))).count() > most)
     {
         prefixes.capped.set(true);
         return Ok((kept, false, options, (false, false)));
@@ -885,7 +889,7 @@ struct Selection {
 }
 
 thread_local! {
-    static RUNS: std::cell::Cell<Runs> = const { std::cell::Cell::new(Runs { builds: 0, selections: 0, early: 0, late: 0, allocations: 0, expansions: 0 }) };
+    static RUNS: std::cell::Cell<Runs> = const { std::cell::Cell::new(Runs { builds: 0, selections: 0, early: 0, late: 0, allocations: 0, expansions: 0, searches: 0 }) };
 }
 
 /// How often this thread ran each stage of a build: the regression tests of
@@ -902,6 +906,8 @@ pub struct Runs {
     pub allocations: usize,
     /// Expansions of a function to its instructions (`finish_with`).
     pub expansions: usize,
+    /// Call-target searches made (the others took an answer given before).
+    pub searches: usize,
 }
 
 pub fn runs() -> Runs {
@@ -942,6 +948,53 @@ impl<K: Eq + std::hash::Hash, V: Clone> Memo<K, V> {
         self.0.borrow_mut().insert(key, made.clone());
         Ok(made)
     }
+}
+
+/// The call targets chosen, and the expansion that priced the choice.
+type Found = (Vec<(String, llrm_lir::registers::RegId)>, Option<Vec<Line>>);
+
+/// One question put to [`crate::calltarget::choose`] and its answer: the
+/// search reads nothing but these, so a build that reaches the same function
+/// with the same allocation (a trial that left it as it was, a lowering of the
+/// module that left it as it was) takes the answer.
+struct Search {
+    function: crate::mfunc::MFunction,
+    assignment: Vec<llrm_lir::registers::RegId>,
+    slots: Vec<i32>,
+    /// What the expansion reads besides: the function's number, the cpu, size,
+    /// the frame and argument pushes and the short forms.
+    reads: (usize, Cpu, bool, bool, bool, bool),
+    found: Found,
+}
+
+/// The instructions the searches kept hold: past this the kept ones go.
+const SEARCHES_KEPT_INSTS: usize = 3_000_000;
+
+thread_local! {
+    /// The searches made on this thread, by function name.
+    static SEARCHES: std::cell::RefCell<(usize, llrm_support::hash::HashMap<String, Vec<Search>>)> =
+        std::cell::RefCell::new((0, Default::default()));
+}
+
+fn remembered_search(
+    name: &str,
+    same: impl Fn(&Search) -> bool,
+) -> Option<Found> {
+    SEARCHES.with(|kept| kept.borrow().1.get(name)?.iter().find(|one| same(one)).map(|one| one.found.clone()))
+}
+
+fn remember_search(
+    name: &str,
+    search: Search,
+) {
+    SEARCHES.with(|kept| {
+        let mut kept = kept.borrow_mut();
+        if kept.0 > SEARCHES_KEPT_INSTS {
+            *kept = (0, Default::default());
+        }
+        kept.0 += search.function.blocks.iter().map(|block| block.insts.len()).sum::<usize>();
+        kept.1.entry(name.to_string()).or_default().push(search);
+    });
 }
 
 /// The function before allocation, with what its rewrites touched.
@@ -1323,7 +1376,34 @@ fn items_once(
     }
     let mut priced = None;
     if options.short && options.call_targets {
-        let (chosen, expansion) = crate::calltarget::choose(&function, &assignment, cpu, price, expand)?;
+        let reads = (number, cpu, wants_size, options.push_frame, options.push_arguments, options.short);
+        let same = |one: &Search| {
+            one.reads == reads && one.assignment == assignment.0 && one.slots == slots && one.function == function
+        };
+        let (chosen, expansion) = match remembered_search(name, same) {
+            Some(found) => {
+                debug_assert!(
+                    crate::calltarget::choose(&function, &assignment, cpu, price, unmetered)? == found,
+                    "the search answered differently the second time"
+                );
+                found
+            }
+            None => {
+                counted(|runs| runs.searches += 1);
+                let found = crate::calltarget::choose(&function, &assignment, cpu, price, expand)?;
+                remember_search(
+                    name,
+                    Search {
+                        function: function.clone(),
+                        assignment: assignment.0.clone(),
+                        slots: slots.clone(),
+                        reads,
+                        found: found.clone(),
+                    },
+                );
+                found
+            }
+        };
         crate::calltarget::through_registers(&mut function, &chosen)?;
         // the search expanded the function as it now stands to price it
         priced = expansion;

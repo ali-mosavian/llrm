@@ -78,6 +78,24 @@ fn a_function_over_the_trial_cap_is_built_once() {
     assert_eq!(chain_builds(cap + 100), 1, "a function over the cap ran its trials");
 }
 
+/// The cap was 5,000 instructions at every level: QB's `exec_loop` (66 builds,
+/// the whole of exec.c's backend compile) and the other functions between
+/// 3,000 and 5,000 ran every -Os trial for no byte (3,000 loses none over 113
+/// modules). At -O1 the same trials shrink exec.c by a third and stay.
+#[test]
+fn a_function_of_3100_instructions_is_built_once_at_size_and_tried_at_speed() {
+    let builds = |links: usize, size: bool| {
+        let module = module_with_chain(links);
+        let before = runs().builds;
+        let options = Options { size, strict: true, ..Options::default() };
+        items_with(&module, "f", Cpu::M68000, options).expect("compiles");
+        runs().builds - before
+    };
+    assert!(builds(2900, true) > 1, "premise: the small function's -Os trials fire");
+    assert_eq!(builds(3100, true), 1, "a function over 3,000 instructions ran its -Os trials");
+    assert!(builds(3100, false) > 1, "the -O1 trials of a function under 5,000 instructions did not run");
+}
+
 /// The class relaxation and the held data constants each built the function
 /// again at -Os, allocation and all, and ran the late stage again for their
 /// own key: over QB (68020) 49 % of the relaxed builds and 81 % of the
@@ -123,4 +141,21 @@ fn the_expansion_the_call_target_search_priced_is_the_one_the_build_prints() {
     // the search expands once as it stands and once per set it tries (one
     // callee here); the build adds none
     assert!(on <= off + 1, "{on} expansions with the search, {off} without");
+}
+
+/// Every build of a function ran the call-target search, though a trial that
+/// leaves the function as it was asks it the same question: 60-70 % of the
+/// searches of QB's lexer, control and file modules at -Os repeated one made
+/// before, and the search is a fifth to a third of those compiles.
+#[test]
+fn a_build_that_reaches_the_same_function_takes_the_call_targets_chosen_before() {
+    let ir = "target datalayout = \"E-m:e-p:32:16:32-i8:8:8-i16:16:16-i32:16:32-n8:16:32-a:0:16-S16\"\ndeclare i32 @ext(i32)\ndeclare i32 @g(i32, i32)\ndefine i32 @f(i32 %a, i32 %b) {\n  %p = icmp eq i32 %a, 0\n  br i1 %p, label %t, label %e\nt:\n  %x = call i32 @ext(i32 %b)\n  %y = call i32 @ext(i32 %x)\n  br label %m\ne:\n  %u = call i32 @ext(i32 %a)\n  %v = call i32 @ext(i32 %u)\n  br label %m\nm:\n  %r = phi i32 [%y, %t], [%v, %e]\n  %q = call i32 @g(i32 %r, i32 %b)\n  ret i32 %q\n}\n";
+    let module = llrm_mir::parse::module(ir).expect("parses");
+    let options = Options { size: true, mid_end: false, ..Options::default() };
+    let before = runs();
+    items_with(&module, "f", Cpu::M68000, options).expect("compiles");
+    let after = runs();
+    let (allocated, searches) = (after.allocations - before.allocations, after.searches - before.searches);
+    assert!(allocated >= 2, "premise: {allocated} build reached the search");
+    assert!(searches < allocated, "{searches} searches for {allocated} builds");
 }
