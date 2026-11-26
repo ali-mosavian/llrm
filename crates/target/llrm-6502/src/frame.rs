@@ -13,7 +13,8 @@
 //! expand to nothing; a frame with variable-sized objects adjusts `rs0` around
 //! each call instead.
 //!
-//! An object aligned past [`REALIGN_ABOVE`] realigns the soft stack
+//! An object stating an alignment above [`STACK_ALIGN`] (the pipeline leaves
+//! one only past [`REALIGN_ABOVE`]) realigns the soft stack
 //! (`needsStackRealignment`): the prologue is one `ALIGNSP`, `rs0 = (rs0 -
 //! size) & -align`, which also stores the old `rs0` in a frame slot; the
 //! epilogue reloads `rs0` from it (`RESTORESP`), and a stack argument is read

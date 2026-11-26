@@ -251,6 +251,11 @@ fn program(
         // the 6502 has no scaled or indexed 16-bit address: a stepping pointer,
         // not `base + i * size` every trip
         program.modules.iter_mut().try_for_each(llrm_transforms::memsetpattern::expanded_stepping)?;
+    }
+    // the frame takes each `alloca`'s stated alignment: clamped here at every
+    // level, `-O0` included, and for any a pass added
+    llrm_transforms::pipeline::constrain_allocas(&mut program)?;
+    if request.level != Level::O0 {
         let static_locals = !request.passes.iter().any(|flag| flag == "-fno-static-locals")
             && std::env::var_os("LLRM_6502_NO_STATIC_LOCALS").is_none();
         if static_locals {

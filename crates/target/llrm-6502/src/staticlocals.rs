@@ -15,7 +15,7 @@
 //! the function left from an earlier call.
 //!
 //! A function with an `alloca` outside the entry block, a counted `alloca`,
-//! or a stack save keeps its stack. An object aligned past `REALIGN_ABOVE`
+//! or a stack save keeps its stack. An object the frame realigns for
 //! stays on it. The objects of a module together stay
 //! under [`BUDGET`] bytes of RAM.
 //!
@@ -135,10 +135,11 @@ fn objects_of(
                     if *block != entry || address_space != 0 || !instruction.operands.is_empty() {
                         return None;
                     }
-                    // global storage is not aligned: an over-aligned object
-                    // stays in the frame, which realigns
+                    // global storage is not aligned: an object still stating
+                    // more than the frame keeps stays in the frame, which
+                    // realigns
                     if align.unwrap_or_else(|| layout.align(&module.context.types, allocated))
-                        > crate::frame::REALIGN_ABOVE
+                        > crate::frame::STACK_ALIGN as u64
                     {
                         continue;
                     }

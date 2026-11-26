@@ -374,12 +374,12 @@ fn alloca_sizes(
             },
             Some(_) => return Err("an alloca with a count that is not a constant".into()),
         };
-        // what the frame keeps is 1: only an object past `REALIGN_ABOVE` is
-        // aligned
+        // as stated: `constrain_allocas` has clamped what the frame does not
+        // keep
         let wanted = align.unwrap_or_else(|| layout.align(&module.context.types, allocated));
         sizes[*index as usize] = Local {
             size: layout.alloc_size(&module.context.types, allocated) as i64 * count,
-            align: if wanted > crate::frame::REALIGN_ABOVE { wanted as i64 } else { 1 },
+            align: wanted as i64,
         };
     }
     Ok(sizes)
