@@ -226,6 +226,28 @@ pub struct TargetLowering {
     min_stack_argument_alignment: u32,
 }
 
+/// The C library's routines of `RuntimeLibcalls.def` that
+/// [`TargetLowering::set_libm_libcall_names`] names, by `f32`, `f64`, `f80`.
+const LIBM: [(ISD, [&str; 3]); 10] = [
+    (ISD::FRem, ["fmodf", "fmod", "fmodl"]),
+    (ISD::FRint, ["rintf", "rint", "rintl"]),
+    (ISD::FSqrt, ["sqrtf", "sqrt", "sqrtl"]),
+    (ISD::FMA, ["fmaf", "fma", "fmal"]),
+    (ISD::FSin, ["sinf", "sin", "sinl"]),
+    (ISD::FCos, ["cosf", "cos", "cosl"]),
+    (ISD::FExp, ["expf", "exp", "expl"]),
+    (ISD::FExp2, ["exp2f", "exp2", "exp2l"]),
+    (ISD::FLog, ["logf", "log", "logl"]),
+    (ISD::FLog2, ["log2f", "log2", "log2l"]),
+];
+
+/// Whether `name` is one of the C library's routines a libcall names (libm's),
+/// a symbol the target spells as its ABI spells C symbols, unlike
+/// compiler-rt's `__addsf3`.
+pub fn is_c_library_routine(name: &str) -> bool {
+    name == "rintl" || LIBM.iter().any(|(_, names)| names.contains(&name))
+}
+
 impl TargetLowering {
     /// Every action `Legal`: a table nothing has been set in.
     pub fn empty(types: TargetLoweringInfo) -> TargetLowering {
@@ -322,25 +344,27 @@ impl TargetLowering {
 
     /// `RTLIB::RINT_F32` and the other libm routines of `RuntimeLibcalls.def`:
     /// the C library's names, `f` for `float`, none for `double`, `l` for
-    /// the 80-bit `long double`.
+    /// the 80-bit `long double`. They are C symbols: a target decorates them
+    /// as its ABI does ([`is_c_library_routine`]); compiler-rt's are not.
     pub fn set_libm_libcall_names(&mut self) {
-        const LIBM: [(ISD, [&str; 3]); 10] = [
-            (ISD::FRem, ["fmodf", "fmod", "fmodl"]),
-            (ISD::FRint, ["rintf", "rint", "rintl"]),
-            (ISD::FSqrt, ["sqrtf", "sqrt", "sqrtl"]),
-            (ISD::FMA, ["fmaf", "fma", "fmal"]),
-            (ISD::FSin, ["sinf", "sin", "sinl"]),
-            (ISD::FCos, ["cosf", "cos", "cosl"]),
-            (ISD::FExp, ["expf", "exp", "expl"]),
-            (ISD::FExp2, ["exp2f", "exp2", "exp2l"]),
-            (ISD::FLog, ["logf", "log", "logl"]),
-            (ISD::FLog2, ["log2f", "log2", "log2l"]),
-        ];
         for (op, names) in LIBM {
             for (vt, name) in [MVT::F32, MVT::F64, MVT::F80].into_iter().zip(names) {
                 self.set_libcall_name(op, vt, name);
             }
         }
+    }
+
+    /// Every routine the target may call after legalization (the names of
+    /// both libcall tables, and `RINT_F128`): the symbols a whole-program
+    /// link must keep a definition of (`InputFile::Symbol::isLibcall`).
+    pub fn libcall_routines(&self) -> std::collections::BTreeSet<&'static str> {
+        let tables = [&self.maps.libcall_names, &self.maps.size_libcall_names];
+        let mut names: std::collections::BTreeSet<_> =
+            tables.into_iter().flat_map(|one| one.values().copied()).collect();
+        if self.maps.libcall_names.contains_key(&(ISD::FRint, MVT::F80)) {
+            names.insert("rintl");
+        }
+        names
     }
 
     /// `setLibcallName` for the integer operation `op` of `vt`.

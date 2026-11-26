@@ -30,6 +30,10 @@ fn table() -> &'static TargetLowering {
 pub struct MosIrLowering;
 
 impl Lowering for MosIrLowering {
+    fn libcall_routines(&self) -> Vec<&'static str> {
+        table().libcall_routines().into_iter().collect()
+    }
+
     fn runs_cgp_step(
         &self,
         step: CgpStep,
