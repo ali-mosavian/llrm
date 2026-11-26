@@ -769,7 +769,7 @@ fn vector_inst(
             Arrangement::D2 => "i64",
             Arrangement::B8 | Arrangement::H4 | Arrangement::S2 => unreachable!("listed above"),
         };
-        if name == format!("DUP{suffix}") {
+        if is_name(name, &["DUP", suffix]) {
             return Some(match operands {
                 [Operand::Fpr(rn), Operand::Imm(index)] => {
                     Ok(Inst::VectorDupScalar { lanes, rd, rn: *rn, index: *index as u8 })
@@ -809,8 +809,7 @@ fn vector_inst(
         VectorLongOp::Umlal,
         VectorLongOp::Smlal,
     ] {
-        let Some(rest) = name.strip_prefix(&op.mnemonic().to_uppercase()).and_then(|rest| rest.strip_prefix('v'))
-        else {
+        let Some(rest) = strip_mnemonic(name, op.mnemonic()).and_then(|rest| rest.strip_prefix('v')) else {
             continue;
         };
         let narrow = rest.split('_').next().unwrap_or(rest);
@@ -885,7 +884,7 @@ fn vector_inst(
             (Arrangement::D2, false) => "v2i32",
             _ => "v4i32",
         };
-        if name == format!("XTN{narrow}") {
+        if is_name(name, &["XTN", narrow]) {
             return Some(match operands {
                 [Operand::Fpr(rn)] | [Operand::Fpr(_), Operand::Fpr(rn)] => {
                     Ok(Inst::VectorNarrow { high, shift: None, wide, rd, rn: *rn })
@@ -893,7 +892,7 @@ fn vector_inst(
                 _ => wrong(),
             });
         }
-        if name == format!("SHRN{narrow}_shift") {
+        if is_name(name, &["SHRN", narrow, "_shift"]) {
             return Some(match operands {
                 [Operand::Fpr(rn), Operand::Imm(amount)]
                 | [Operand::Fpr(_), Operand::Fpr(rn), Operand::Imm(amount)] => {
@@ -923,7 +922,7 @@ fn vector_inst(
                 Arrangement::H4 => "v4i16",
                 Arrangement::S2 => "v2i32",
             };
-            if name == format!("{}{lane}", kind.stem()) {
+            if is_name(name, &[kind.stem(), lane]) {
                 return Some(match operands {
                     [Operand::Fpr(rn), Operand::Fpr(rm)] => {
                         Ok(Inst::VectorPermute { kind, lanes, rd, rn: *rn, rm: *rm })
@@ -1097,6 +1096,38 @@ fn vector_inst(
         });
     }
     None
+}
+
+/// Whether `name` is `parts` written one after another: the comparison
+/// `name == parts.concat()` without building the string.
+fn is_name(
+    name: &str,
+    parts: &[&str],
+) -> bool {
+    let mut rest = name;
+    for part in parts {
+        match rest.strip_prefix(part) {
+            Some(after) => rest = after,
+            None => return false,
+        }
+    }
+    rest.is_empty()
+}
+
+/// `name` without its leading `mnemonic`, which the name writes in capitals.
+fn strip_mnemonic<'a>(
+    name: &'a str,
+    mnemonic: &str,
+) -> Option<&'a str> {
+    let head = name.get(..mnemonic.len())?;
+    head.eq_ignore_ascii_case(mnemonic).then(|| &name[mnemonic.len()..])
+}
+
+/// Whether `name` is a float or vector row `float_inst` reads: the question
+/// the emitter asks of every selected node, so it must cost no allocation.
+#[doc(hidden)]
+pub fn names_a_float_row(name: &str) -> bool {
+    float_inst(name, Vreg(0), Gpr(0), &[]).is_some()
 }
 
 /// A float machine node as an instruction: the float arithmetic, compare,

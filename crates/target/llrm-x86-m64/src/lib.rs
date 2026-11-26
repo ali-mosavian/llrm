@@ -13,6 +13,9 @@ use llrm_target::CostModel;
 use llrm_target::machine::Machine;
 
 /// A Linux user program: flat, no ports.
+/// `Tuning::trial_insts_max` of the m64 target.
+pub const TRIAL_INSTS_MAX: usize = 2000;
+
 pub const LINUX64: &str = include_str!("../../../../machine/platform/linux/flat64.toml");
 
 /// The processors flat code is priced for: the columns of `timings.times`.
@@ -546,6 +549,13 @@ impl llrm_target::Target for M64 {
                             // though the bytes reach the bar there.
                             inline_threshold_o1: Some(112),
                             inline_threshold_o2: Some(150),
+                            // DEVIATE TRIAL-CAP-M64 (owner x86-m64, exit
+                            // 2026-12-20), as TRIAL-CAP-M32: the pin builds
+                            // once. A module with a function of more
+                            // than `TRIAL_INSTS_MAX` IR instructions takes
+                            // no -Os trial, each of which re-runs the mid-end
+                            // over all of it.
+                            trial_insts_max: Some(TRIAL_INSTS_MAX),
                             rep_stos_at_size: true,
                             rep_stos_at_size_max: u64::MAX,
                             // DEVIATE REP-STOS-UNIT (owner llrm-target-x86-m64,

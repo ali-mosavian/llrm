@@ -104,6 +104,10 @@ pub(super) fn loop_of<'a>(
     cx.loops.get_loop_for(header).filter(|one| one.get_header() == header).expect("a loop header")
 }
 
+/// The size of expression (`ExpressionSize`) from which whether it holds a
+/// recurrence of a loop is kept: under it the walk costs less than the lookup.
+pub const MEMOIZED_TREE_SIZE: u16 = 8;
+
 impl ScalarEvolution {
     /// `ScalarEvolution::getLoopDisposition`; `None` is the function body.
     pub fn get_loop_disposition(
@@ -376,6 +380,38 @@ impl ScalarEvolution {
         op: Scev,
     ) -> bool {
         self.expr_contains(s, &|expr| expr == op)
+    }
+
+    /// `containsAddRecDependentOnLoop`: whether the tree of `s` holds a
+    /// recurrence of the loop headed by `l`. A node never changes, so the walk
+    /// is made once for an expression and loop.
+    pub fn contains_add_rec_dependent_on_loop(
+        &self,
+        s: Scev,
+        l: BlockId,
+    ) -> bool {
+        // The root answers without a walk: a recurrence of `l`, or a leaf.
+        if self.addrec_header(s) == Some(l) {
+            return true;
+        }
+        if matches!(self.node(s).kind, Kind::Constant(_) | Kind::Unknown(_)) {
+            return false;
+        }
+        // A small tree is walked again for less than the lookup costs.
+        let memoized = self.expression_size(s) >= MEMOIZED_TREE_SIZE;
+        if memoized && let Some(&held) = self.add_rec_dependence.borrow().get(&(s, l)) {
+            return held;
+        }
+        let visited = std::cell::Cell::new(0);
+        let found = self.expr_contains(s, &|expr| {
+            visited.set(visited.get() + 1);
+            self.addrec_header(expr) == Some(l)
+        });
+        llrm_mir::counts::add(llrm_mir::counts::Event::ScevContainsVisits, visited.get());
+        if memoized {
+            self.add_rec_dependence.borrow_mut().insert((s, l), found);
+        }
+        found
     }
 
     /// `SCEVExprContains`: whether any node of the tree of `root` satisfies

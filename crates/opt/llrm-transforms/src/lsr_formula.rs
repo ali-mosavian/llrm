@@ -329,15 +329,6 @@ fn frame_address_space(
     }
 }
 
-/// `containsAddRecDependentOnLoop`.
-fn contains_add_rec_dependent_on_loop(
-    se: &ScalarEvolution,
-    s: Scev,
-    l: BlockId,
-) -> bool {
-    se.expr_contains(s, &|expr| se.addrec_header(expr) == Some(l))
-}
-
 /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/LoopStrengthReduce.cpp#L543
 /// `DoInitialMatch`.
 fn do_initial_match(
@@ -483,7 +474,7 @@ impl Formula {
             return false;
         }
 
-        if contains_add_rec_dependent_on_loop(se, scaled, l) {
+        if se.contains_add_rec_dependent_on_loop(scaled, l) {
             return true;
         }
 
@@ -491,7 +482,7 @@ impl Formula {
         // the current loop, meanwhile BaseRegs contains a recurrent expr reg
         // related with the current loop, we want to swap the reg in BaseRegs
         // with ScaledReg.
-        !self.base_regs.iter().any(|&reg| contains_add_rec_dependent_on_loop(se, reg, l))
+        !self.base_regs.iter().any(|&reg| se.contains_add_rec_dependent_on_loop(reg, l))
     }
 
     /// `Formula::canonicalize`: every formula having more than one base
@@ -525,8 +516,8 @@ impl Formula {
         // BaseRegs containing the recurrent expr related with Loop L, and swap
         // the reg with ScaledReg.
         let scaled = self.scaled_reg.expect("a scaled register");
-        if !contains_add_rec_dependent_on_loop(se, scaled, l)
-            && let Some(at) = self.base_regs.iter().position(|&reg| contains_add_rec_dependent_on_loop(se, reg, l))
+        if !se.contains_add_rec_dependent_on_loop(scaled, l)
+            && let Some(at) = self.base_regs.iter().position(|&reg| se.contains_add_rec_dependent_on_loop(reg, l))
         {
             self.scaled_reg = Some(self.base_regs[at]);
             self.base_regs[at] = scaled;
