@@ -323,6 +323,25 @@ fn has_pointer_parameter(
         )
 }
 
+impl Walk {
+    /// `callee`'s body as the Simplify list `stage` would leave it. The module
+    /// keeps the body it had.
+    fn cleaned(
+        &mut self,
+        module: &mut Module,
+        analyses: &mut ModuleAnalyses,
+        callee: GlobalId,
+        stage: &str,
+    ) -> llrm_mir::module::Function {
+        let held = function_mut(module, callee).1.clone();
+        (self.simplify)(module, analyses, callee, stage);
+        let cleaned = std::mem::replace(function_mut(module, callee).1, held);
+        analyses.changed(callee);
+        analyses.invalidate_bodies(&PreservedAnalyses::none().preserve_module::<GlobalsAA>());
+        cleaned
+    }
+}
+
 impl ProgramPass for Walk {
     fn name(&self) -> &'static str {
         "walk"
@@ -857,38 +876,16 @@ impl ProgramPass for Walk {
                                 let at_price = rate > 0 || (params.cut_from.is_some() && self.speed_rate);
                                 let (saved, growth) = if size == crate::inlinecost::CallerSize::Speed && at_price {
                                     let costs = program.target.speed_trial_costs();
-                                    // The copy met the cleanup list a second
-                                    // time. The callee it is compared with must
-                                    // too, or what a second run finds in any
-                                    // body reads as saved by inlining.
-                                    let stage = if light { TRIAL_LIGHT } else { "walk.trial." };
-                                    let mut run = 0;
-                                    for callee in calls.iter().filter_map(|one| trials[one].callee) {
-                                        if module.global(callee).function().is_none() {
-                                            continue;
-                                        }
-                                        if let Some(&known) = settled.get(&(callee, light)) {
-                                            run += known;
-                                            continue;
-                                        }
-                                        let held = function_mut(module, callee).1.clone();
-                                        (self.simplify)(module, &mut modules[at], callee, stage);
-                                        let body = module.global(callee).function().expect("a body");
-                                        let clocks = trial_clocks(by_trips, module, &program.layout, tti, body);
-                                        *function_mut(module, callee).1 = held;
-                                        modules[at].changed(callee);
-                                        modules[at].invalidate_bodies(
-                                            &PreservedAnalyses::none().preserve_module::<GlobalsAA>(),
-                                        );
-                                        settled.insert((callee, light), clocks);
-                                        run += clocks;
-                                    }
                                     let now = module.global(id).function().expect("a body");
                                     let callees: Vec<&llrm_mir::module::Function> = calls
                                         .iter()
                                         .filter_map(|one| trials[one].callee)
                                         .filter_map(|callee| module.global(callee).function())
                                         .collect();
+                                    let run: i64 = callees
+                                        .iter()
+                                        .map(|body| trial_clocks(by_trips, module, &program.layout, tti, body))
+                                        .sum();
                                     let gone: i64 = if credit > 0 {
                                         let sites: Vec<GlobalId> =
                                             calls.iter().filter_map(|one| trials[one].callee).collect();
@@ -917,17 +914,44 @@ impl ProgramPass for Walk {
                                     // copy among them: the callee's
                                     // run and saves are what the site's
                                     // frequency repeats.
-                                    let saved = if by_trips {
-                                        (kept_clocks as f64 + (run + saves) as f64 * trips - now_clocks as f64) as i64
-                                    } else {
-                                        ((kept_clocks + run + saves - now_clocks) as f64 * trips) as i64
+                                    let saved_over = |run: i64| {
+                                        if by_trips {
+                                            (kept_clocks as f64 + (run + saves) as f64 * trips - now_clocks as f64)
+                                                as i64
+                                        } else {
+                                            ((kept_clocks + run + saves - now_clocks) as f64 * trips) as i64
+                                        }
                                     };
-                                    (
-                                        saved,
-                                        function_bytes(module, &program.layout, &costs, now)
-                                            - function_bytes(module, &program.layout, &costs, &kept)
-                                            - gone,
-                                    )
+                                    let growth = function_bytes(module, &program.layout, &costs, now)
+                                        - function_bytes(module, &program.layout, &costs, &kept)
+                                        - gone;
+                                    let mut saved = saved_over(run);
+                                    // The copy met the cleanup list a second
+                                    // time. Where its clocks would buy growth,
+                                    // the callee they are compared with meets
+                                    // it too, or what a second run finds in
+                                    // any body reads as saved by inlining.
+                                    if growth > 0 && growth * rate <= saved * 1000 {
+                                        let stage = if light { TRIAL_LIGHT } else { "walk.trial." };
+                                        let mut run = 0;
+                                        for callee in calls.iter().filter_map(|one| trials[one].callee) {
+                                            if module.global(callee).function().is_none() {
+                                                continue;
+                                            }
+                                            run += match settled.get(&(callee, light)) {
+                                                Some(&known) => known,
+                                                None => {
+                                                    let body = self.cleaned(module, &mut modules[at], callee, stage);
+                                                    let clocks =
+                                                        trial_clocks(by_trips, module, &program.layout, tti, &body);
+                                                    settled.insert((callee, light), clocks);
+                                                    clocks
+                                                }
+                                            };
+                                        }
+                                        saved = saved_over(run);
+                                    }
+                                    (saved, growth)
                                 } else {
                                     // At size the units count a call by its
                                     // parameters, not the words and address
