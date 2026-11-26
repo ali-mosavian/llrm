@@ -404,8 +404,8 @@ fn test_a_constant_read_three_times_is_loaded_once_where_bytes_are_strict() {
 }
 
 /// Every call's argument area rebuilt the block and walked all of it again
-/// looking for immediate pushes: 4.9 G instructions of 6.4 G compiling one
-/// file of 400 calls at -O0.
+/// looking for immediate pushes, so compile time grew with the square of the
+/// calls in a block.
 #[test]
 fn argument_areas_are_not_rescanned_once_per_call() {
     use std::sync::Arc;
