@@ -81,3 +81,22 @@ fn the_zero_an_fp128_phi_starts_from_takes_no_frame_object() {
     assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
     assert!(asm.contains("global.get\t__stack_pointer\n\ti32.const\t16\n\ti32.sub"), "frame is not 16 bytes in:\n{asm}");
 }
+
+/// A `double` or `float` widened to `fp128` panicked ("operand softened before its user"): the
+/// operand is a legal wasm type, passed to the routine as it is.
+#[test]
+fn a_legal_float_widened_to_fp128_is_the_argument_of_the_routine() {
+    for level in ["-O0", "-O2"] {
+        let ir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/ir/fp128_extend.ll");
+        let out = Command::new(env!("CARGO_BIN_EXE_llrm-wasm-llc"))
+            .args(["-S", level, "-o", "-"])
+            .arg(ir)
+            .output()
+            .expect("llrm-wasm-llc");
+        let asm = String::from_utf8_lossy(&out.stdout).into_owned();
+        assert!(out.status.success(), "{level}: {}", String::from_utf8_lossy(&out.stderr));
+        for want in ["call\t__extenddftf2", "call\t__extendsftf2", "call\t__trunctfdf2"] {
+            assert!(asm.contains(want), "{level}: no `{want}` in:\n{asm}");
+        }
+    }
+}
