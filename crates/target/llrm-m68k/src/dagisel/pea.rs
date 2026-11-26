@@ -16,6 +16,9 @@
 use super::asm::AsmOperand;
 use super::enc::{Enc, Piece};
 
+pub(crate) const TABLE: super::local::Table =
+    super::local::Table { code_of: |_| None, name_of: |_| None, desc: |_| None, text: pea_asm, bits: pea_encoding };
+
 /// The name of the instruction: operand 0 is the immediate.
 pub const NAME: &str = "PEAaw";
 

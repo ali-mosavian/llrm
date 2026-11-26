@@ -27,6 +27,9 @@ use super::asm::AsmOperand;
 use super::enc::{Enc, Piece};
 use super::generated::instrinfo;
 
+pub(crate) const TABLE: super::local::Table =
+    super::local::Table { code_of, name_of, desc, text: widemul_asm, bits: widemul_encoding };
+
 /// Codes of the widening multiplies, above the divide-remainders.
 pub const FIRST: u16 = 0xF300;
 

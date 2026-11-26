@@ -10,6 +10,8 @@ use llrm_transforms::pipeline::{Applied, Options};
 
 use crate::machine::{Arm64Machine, Platform};
 
+mod stages;
+
 /// `text`, LLVM IR, without the lines and words MIR's reader leaves out of
 /// LLVM (`target triple`, comments, `dso_local`), and the triple it stated.
 pub fn without_triple(text: &str) -> (Option<String>, String) {
@@ -201,6 +203,26 @@ pub fn optimized_dumping(
     level: Level,
     dumped: bool,
 ) -> Result<(), String> {
+    mid_end(program, level, dumped)?;
+    merged_globals(program, level)
+}
+
+thread_local! {
+    static MID_ENDS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many times this thread has run the mid-end.
+pub fn mid_ends() -> usize {
+    MID_ENDS.with(std::cell::Cell::get)
+}
+
+/// The mid-end at `level`, and what it leaves lowered for selection.
+fn mid_end(
+    program: &mut Program,
+    level: Level,
+    dumped: bool,
+) -> Result<(), String> {
+    MID_ENDS.with(|runs| runs.set(runs.get() + 1));
     let dump = std::env::var_os("LLRM_MIR_STAGES").filter(|one| !one.is_empty() && dumped).map(Into::into);
     let mut options = level.options();
     {
@@ -210,7 +232,15 @@ pub fn optimized_dumping(
     }
     options.library = c_library();
     llrm_transforms::pipeline::applied(program, &Applied { dump, options, ..Applied::default() })?;
-    lowered_before_selection(program)?;
+    lowered_before_selection(program)
+}
+
+/// What runs between the mid-end and selection on the whole program
+/// (`addIRPasses`).
+fn merged_globals(
+    program: &mut Program,
+    level: Level,
+) -> Result<(), String> {
     // `addIRPasses`: GlobalMerge, after the mid-end, before selection.
     if let Some(mut merge) = program.target.global_merge(level == Level::O3) {
         // DEVIATE GM-TRIAL (`crate::trial`): the trial compile merges as the
@@ -619,45 +649,10 @@ fn compiled(
     // The sites the compile in force inlines whatever the guard says.
     let forced: std::cell::RefCell<Vec<llrm_transforms::trial::Site>> = std::cell::RefCell::new(Vec::new());
     let dumping = std::cell::Cell::new(true);
+    let stages = stages::Stages::new(text, platform, level, debug, refuse_aliases);
     let once = |(unrotated, more, unmerged, divided, hinted): (bool, bool, bool, bool, u8)| -> Result<Built, String> {
-        let mut program = program(text, platform)?;
-        if refuse_aliases {
-            // The text carries no alias: refuse it rather than drop the symbol.
-            program.modules[0].refuse_aliases("arm64")?;
-        }
-        if debug {
-            llrm_mir::dbgimport::types_and_globals(&mut program.modules[0]);
-        }
-        if level != Level::O0 {
-            let run = |program: &mut Program| {
-                with_aliases(!refuse_aliases, || optimized_dumping(program, level, dumping.get()))
-            };
-            let go = |program: &mut Program| match (unrotated, more) {
-                (true, _) => llrm_transforms::trial::with_unrotated(|| run(program)),
-                (_, true) => llrm_transforms::trial::with_more_rotation(|| run(program)),
-                _ => run(program),
-            };
-            // `hinted`: 1 keeps the hinted calls, 2 those and the negative
-            // ones; bit 4 the calls at a loop site
-            // (INLINEHINT-LOOP-TRIAL).
-            let go = |program: &mut Program| match hinted & 3 {
-                0 => go(program),
-                1 => llrm_transforms::trial::with_kept_hinted_calls(|| go(program)),
-                _ => llrm_transforms::trial::with_kept_hinted_calls(|| {
-                    llrm_transforms::trial::with_kept_negative_calls(|| go(program))
-                }),
-            };
-            let go = |program: &mut Program| {
-                if hinted & 4 != 0 { llrm_transforms::trial::with_kept_loop_calls(|| go(program)) } else { go(program) }
-            };
-            let go = |program: &mut Program| {
-                let sites = forced.borrow().clone();
-                llrm_transforms::trial::with_inlined(&sites, || go(program))
-            };
-            if unmerged { crate::trial::without_merge(|| go(&mut program))? } else { go(&mut program)? }
-        } else {
-            lowered_before_selection(&mut program)?;
-        }
+        let settings = stages::MidEnd { unrotated, more_rotation: more, hinted, inlined: forced.borrow().clone() };
+        let program = stages.built(settings, unmerged, dumping.get())?;
         let mut notes = Notes::default();
         if divide_trial {
             notes.divides = crate::trial::divides_by_constant(&program.modules[0]);
@@ -728,10 +723,10 @@ fn compiled(
         return Ok((best.0, best.1));
     }
     let mut state = (false, false, false, 0u8);
-    let mut try_one = |best: &mut Built,
-                       other: (bool, bool, bool, bool, u8),
-                       what: &str,
-                       pays: &dyn Fn(crate::trial::Price, crate::trial::Price) -> bool|
+    let try_one = |best: &mut Built,
+                   other: (bool, bool, bool, bool, u8),
+                   what: &str,
+                   pays: &dyn Fn(crate::trial::Price, crate::trial::Price) -> bool|
      -> Result<bool, String> {
         trial::clear_rotated_loops();
         let other_built = once(other)?;
