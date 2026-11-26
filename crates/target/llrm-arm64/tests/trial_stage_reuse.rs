@@ -28,5 +28,5 @@ fn a_trial_of_the_backend_alone_runs_no_second_mid_end() {
 fn a_trial_of_global_merge_runs_no_second_mid_end() {
     let (mid, priced) = counts(include_str!("data/particle_os.ll"));
     assert!(priced >= 2, "premise: the merge was tried ({priced} priced)");
-    assert!(mid < priced, "{mid} mid-end runs for {priced} builds");
+    assert_eq!(mid, 1, "the mid-end ran {mid} times");
 }
