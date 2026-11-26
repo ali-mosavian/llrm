@@ -246,3 +246,15 @@ def test_a_program_marked_references_false_is_no_bar_by_construction_not_a_missi
     only = {"sfm16_float_add/c/Os": cell(700, 9000)}
     assert by_row(only)[("sfm16_float_add", "c", "Os")][10] == "NO_BAR_BY_CONSTRUCTION"
     assert by_row({"sieve/c/Os": cell(100, 900)})[("sieve", "c", "Os")][10] == "NO_BAR", "a program that should have references and has none stays NO_BAR"
+
+
+def test_an_o3_cell_is_judged_against_the_references_o2_build():
+    """No reference compiler has -O3: all 49 C rows and 42 Nib rows at O3 read NO_BAR (2026-11-25 table), a level nobody judged."""
+    slower = {"sieve/c/O3": cell(300, 1000), **refs("sieve", "O2", 400, 900)}
+    row = by_row(slower)[("sieve", "c", "O3")]
+    assert row[10] == "WORSE" and "clocks 1000>900" in row[11], row
+    faster = {"sieve/c/O3": cell(500, 800), **refs("sieve", "O2", 400, 900)}
+    row = by_row(faster)[("sieve", "c", "O3")]
+    assert row[10] == "OK" and "bytes +100 (reported)" in row[11], row
+    got = table.reference_coverage(faster)
+    assert all(measured == asked for measured, asked in got.values()), got
