@@ -2285,6 +2285,49 @@ fn placing_replicated_dispatch_tests_each_handler_pair_in_linear_probes() {
     }
 }
 
+/// exec.c -O2: the dispatch copied into 156 blocks, each ending in the same
+/// 194-entry table, asked `hasSameSuccessors` of each pair and probed the set
+/// for every entry of every copy: `lir jumps` 3.58 G of 10.96 G. A copy whose
+/// list is the one the set was made from is the same set at once.
+#[test]
+fn placing_dispatch_copies_of_one_table_compares_each_pair_once() {
+    let probes = |handlers: i64| {
+        let ids: Vec<i64> = (0..handlers).map(|one| 10_000 + 10 * one).collect();
+        let copies: Vec<i64> = (0..handlers).map(|one| 100 + 10 * one).collect();
+        let mut blocks = vec![block(1, vec![_jump(1, copies[0])], vec![copies[0]])];
+        for &at in &copies {
+            let table = Semantics {
+                name: Some("jmp".into()),
+                sources: vec![bx()],
+                indirect: true,
+                table: ids.clone(),
+                ..Semantics::new(Operation::Jump)
+            };
+            let dispatch = Arc::new(Insn::new(at + 1, Some((at + 1, at + 1)), Some(table), Vec::new(), Vec::new()));
+            blocks.push(block(at, vec![_move(at, imm(at)), dispatch], ids.clone()));
+        }
+        for (index, &at) in ids.iter().enumerate() {
+            let (back, other) = (copies[index % copies.len()], copies[(index + 1) % copies.len()]);
+            blocks.push(block(
+                at,
+                vec![_compare(at), _branch(at + 1, "je", other), _jump(at + 2, back)],
+                vec![other, back],
+            ));
+        }
+        super::placement::SUCCESSOR_PROBES.with(|one| one.set((0, 0)));
+        let mut copied = body("f", 1, blocks.into_iter().collect());
+        copied.address_symbols =
+            Arc::new(ids.iter().map(|&at| (at, format!("L{at}"))).collect::<std::collections::BTreeMap<_, _>>());
+        _placed(&copied, false, true, Some(8), None, 0).unwrap();
+        super::placement::SUCCESSOR_PROBES.with(|one| one.get())
+    };
+    for handlers in [24, 96] {
+        let (calls, probes) = probes(handlers);
+        assert!(calls > 0, "premise: the copies are asked");
+        assert!(probes <= 2 * calls, "{probes} probes in {calls} tests at {handlers} copies of one table");
+    }
+}
+
 /// A table jump to one passage in several entries freed the passage once for
 /// each, and its edge to the exit was taken off the count each time: the
 /// count wrapped, the exit was thought unentered and removed while a block

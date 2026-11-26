@@ -611,18 +611,32 @@ impl Placer {
     }
 
     /// `hasSameSuccessors`: `successors` is the set the pin keeps (a
-    /// `SmallPtrSet`), so a test is one probe per successor, not a scan of the
-    /// list.
+    /// `SmallPtrSet`) of the list `list`, so a test is one probe per
+    /// successor, not a scan of the list; a block whose list is `list` itself
+    /// (a dispatch copied into its handlers) is all of them in one comparison.
     fn has_same_successors(
         &self,
         block: usize,
+        list: &[usize],
         successors: &HashSet<usize>,
     ) -> bool {
-        #[cfg(test)]
-        SUCCESSOR_PROBES.with(|one| one.set((one.get().0 + 1, one.get().1 + 1 + self.succ[block].len())));
-        self.succ[block].len() == successors.len()
-            && !successors.contains(&block)
-            && self.succ[block].iter().all(|to| successors.contains(to))
+        let theirs = &self.succ[block];
+        let probed = |probes: usize| {
+            #[cfg(test)]
+            SUCCESSOR_PROBES.with(|one| one.set((one.get().0 + 1, one.get().1 + probes)));
+            #[cfg(not(test))]
+            let _ = probes;
+        };
+        if theirs.len() != successors.len() || successors.contains(&block) {
+            probed(1);
+            return false;
+        }
+        if theirs == list {
+            probed(1);
+            return true;
+        }
+        probed(1 + theirs.len());
+        theirs.iter().all(|to| successors.contains(to))
     }
 
     /// `isTrellis`: `block` and the other blocks that go to its two viable
@@ -659,7 +673,7 @@ impl Placer {
                 if !seen.insert(from) {
                     continue;
                 }
-                if !self.has_same_successors(from, &successor_set) {
+                if !self.has_same_successors(from, successors, &successor_set) {
                     return false;
                 }
             }

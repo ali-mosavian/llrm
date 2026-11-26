@@ -332,18 +332,55 @@ impl ScalarEvolution {
     }
 }
 
-/// A stable merge sort by `less`, which need not be a strict weak order.
+/// `std::stable_sort`'s chunk of insertion-sorted elements (libstdc++).
+const INSERTION_CHUNK: usize = 7;
+
+/// A stable sort by `less`, which need not be a strict weak order: runs of up
+/// to `INSERTION_CHUNK` by insertion, longer ones by merging through one
+/// buffer made for the whole sort (a short list, the usual one, makes none).
+// Kept out of line, as the recursive merge sort was: inlined, it changes how
+// its callers (`get_add_expr` and `get_mul_expr`) are inlined, +0.05% of a
+// compile on typical files.
+#[inline(never)]
 fn merge_sort(
     items: &mut [Use],
     less: &dyn Fn(Use, Use) -> bool,
 ) {
-    if items.len() < 2 {
+    if items.len() <= INSERTION_CHUNK {
+        insertion_sort(items, less);
+        return;
+    }
+    llrm_mir::counts::bump(llrm_mir::counts::Event::ScevSortBuffers);
+    merge_sort_through(items, less, &mut Vec::with_capacity(items.len()));
+}
+
+fn insertion_sort(
+    items: &mut [Use],
+    less: &dyn Fn(Use, Use) -> bool,
+) {
+    for at in 1..items.len() {
+        let mut j = at;
+        // Move left only past a strictly greater element: ties keep order.
+        while j > 0 && less(items[j], items[j - 1]) {
+            items.swap(j, j - 1);
+            j -= 1;
+        }
+    }
+}
+
+fn merge_sort_through(
+    items: &mut [Use],
+    less: &dyn Fn(Use, Use) -> bool,
+    merged: &mut Vec<Use>,
+) {
+    if items.len() <= INSERTION_CHUNK {
+        insertion_sort(items, less);
         return;
     }
     let middle = items.len() / 2;
-    merge_sort(&mut items[..middle], less);
-    merge_sort(&mut items[middle..], less);
-    let mut merged: Vec<Use> = Vec::with_capacity(items.len());
+    merge_sort_through(&mut items[..middle], less, merged);
+    merge_sort_through(&mut items[middle..], less, merged);
+    merged.clear();
     let (mut left, mut right) = (0, middle);
     while left < middle && right < items.len() {
         // Take from the right only if it is strictly less: ties keep order.
@@ -357,5 +394,35 @@ fn merge_sort(
     }
     merged.extend_from_slice(&items[left..middle]);
     merged.extend_from_slice(&items[right..]);
-    items.copy_from_slice(&merged);
+    items.copy_from_slice(merged);
+}
+
+#[cfg(test)]
+mod tests {
+    use llrm_mir::counts::{Event, get};
+
+    use super::*;
+
+    fn uses(keys: &[u32]) -> Vec<Use> {
+        keys.iter().map(|&key| Use::of(Scev(key))).collect()
+    }
+
+    /// Each merge of the sort made a buffer of its own, however short the
+    /// operand list. Up to 7 operands make none, longer ones one.
+    #[test]
+    fn a_short_list_is_sorted_without_a_buffer_and_a_long_one_with_one() {
+        let by_key = |a: Use, b: Use| (a.scev.0 / 10) < (b.scev.0 / 10);
+        let before = get(Event::ScevSortBuffers);
+        let mut short = uses(&[31, 12, 35, 11, 30, 13]);
+        merge_sort(&mut short, &by_key);
+        assert_eq!(short, uses(&[12, 11, 13, 31, 35, 30]), "by tens, ties in their order");
+        assert_eq!(get(Event::ScevSortBuffers) - before, 0);
+        let keys: Vec<u32> = (0..40).map(|i| (i * 7919) % 40 + 100 * (i % 3)).collect();
+        let mut long = uses(&keys);
+        merge_sort(&mut long, &by_key);
+        let mut expected = uses(&keys);
+        expected.sort_by_key(|u| u.scev.0 / 10);
+        assert_eq!(long, expected, "the std stable sort's order");
+        assert_eq!(get(Event::ScevSortBuffers) - before, 1);
+    }
 }
