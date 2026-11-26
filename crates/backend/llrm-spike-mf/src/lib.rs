@@ -13,6 +13,7 @@ pub mod cfg;
 pub mod commute;
 pub mod deadmi;
 pub mod fold;
+mod graph;
 pub mod livephys;
 pub mod mfunc;
 pub mod placement;
