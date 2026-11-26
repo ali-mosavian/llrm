@@ -1472,10 +1472,14 @@ mod tests {
             ops.push(branch_to(&format!("b{}", at + 1)));
             function.blocks.push(MBlock { label: format!("b{at}"), ops: ops.into() });
         }
-        function.blocks.push(MBlock {
-            label: "b3000".into(),
-            ops: vec![add(0, shared.0, shared.0), Op::Return { uses: vec![], tail: None }].into(),
-        });
+        function
+            .blocks
+            .push(
+                MBlock {
+                    label: "b3000".into(),
+                    ops: vec![add(0, shared.0, shared.0), Op::Return { uses: vec![], tail: None }].into(),
+                },
+            );
         let live = live_in(&function, &cfg(&function));
         assert_eq!(live.tracked(), 1, "every register the function names was tracked");
         assert!(live.contains(1_500, Reg::Gpr(shared)) && !live.contains(0, Reg::Gpr(shared)));
