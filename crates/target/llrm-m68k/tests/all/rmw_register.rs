@@ -56,10 +56,12 @@ fn names() -> Vec<String> {
     all
 }
 
+/// A C `main` with no libc: its result is the exit code.
+const SYS: &str = "static long sys1(long n, long a) {\n    register long d0 __asm__(\"d0\") = n, d1 __asm__(\"d1\") = a;\n    __asm__ volatile(\"trap #0\" : \"+d\"(d0) : \"d\"(d1) : \"memory\");\n    return d0;\n}\n";
+const START: &str = "void _start(void) { sys1(1, main()); for (;;) ; }\n";
+
 fn main_c() -> String {
-    let mut text = String::from(
-        "static long sys1(long n, long a) {\n    register long d0 __asm__(\"d0\") = n, d1 __asm__(\"d1\") = a;\n    __asm__ volatile(\"trap #0\" : \"+d\"(d0) : \"d\"(d1) : \"memory\");\n    return d0;\n}\n",
-    );
+    let mut text = String::from(SYS);
     for (_, _, c) in WIDTHS {
         for (op, _) in OPS {
             for (bits, _, ty) in WIDTHS {
@@ -86,7 +88,8 @@ fn main_c() -> String {
             }
         }
     }
-    text += "    { long a[4] = { 9, 100, -5, 1 }; for (int i = 0; i < 4; ++i) rsub32(a, i, 1000); if (a[0] != 991 || a[1] != 900 || a[2] != 1005 || a[3] != 999) return n + 1; }\n    return 0;\n}\nvoid _start(void) { sys1(1, main()); for (;;) ; }\n";
+    text += "    { long a[4] = { 9, 100, -5, 1 }; for (int i = 0; i < 4; ++i) rsub32(a, i, 1000); if (a[0] != 991 || a[1] != 900 || a[2] != 1005 || a[3] != 999) return n + 1; }\n    return 0;\n}\n";
+    text += START;
     text
 }
 
@@ -124,8 +127,12 @@ fn a_memory_operation_with_a_register_is_one_memory_destination_instruction() {
     }
 }
 
-#[test]
-fn every_operation_width_and_mode_computes_what_c_computes_when_run() {
+/// Compiles `ir`, links it with the C `main` and runs it: `main` returns 0.
+fn runs(
+    ir: &str,
+    names: &[String],
+    main_source: &str,
+) {
     let (Some(root), Some(qemu)) = (support::oracle_root(), support::qemu()) else { return };
     let tool = |name: &str| {
         let mut command = Command::new(format!("{root}/usr/bin/m68k-linux-gnu-{name}"));
@@ -133,9 +140,8 @@ fn every_operation_width_and_mode_computes_what_c_computes_when_run() {
         command
     };
     for (cpu, level) in [("68000", Level::O1), ("68000", Level::Os), ("68020", Level::O2)] {
-        let mut text =
-            assembly(&ir(), cpu_of(cpu).unwrap(), level).unwrap_or_else(|why| panic!("{cpu} {level:?}: {why}"));
-        for name in names() {
+        let mut text = assembly(ir, cpu_of(cpu).unwrap(), level).unwrap_or_else(|why| panic!("{cpu} {level:?}: {why}"));
+        for name in names {
             text = text.replace(&format!("{name}:"), &format!(".globl {name}\n{name}:"));
         }
         let source = support::unique_path("rmwr-s");
@@ -143,7 +149,7 @@ fn every_operation_width_and_mode_computes_what_c_computes_when_run() {
         let main = support::unique_path("rmwr-m");
         let exe = support::unique_path("rmwr-exe");
         std::fs::write(&source, format!(".text\n{text}")).unwrap();
-        std::fs::write(&main, main_c()).unwrap();
+        std::fs::write(&main, main_source).unwrap();
         assert!(tool("as").arg(format!("-m{cpu}")).arg("-o").arg(&object).arg(&source).status().unwrap().success());
         let mut link = tool("gcc");
         link.args(["-msoft-float", &format!("-m{cpu}"), "-O1", "-nostdlib", "-static", "-ffreestanding"]);
@@ -153,4 +159,38 @@ fn every_operation_width_and_mode_computes_what_c_computes_when_run() {
         let code = support::run(&qemu, &["-cpu", &format!("m{cpu}")], &exe);
         assert_eq!(code, Some(0), "{cpu} {level:?}: wrong result at check number {code:?}");
     }
+}
+
+#[test]
+fn every_operation_width_and_mode_computes_what_c_computes_when_run() {
+    runs(&ir(), &names(), &main_c());
+}
+
+/// The stored value is also returned: folded into the memory operation and
+/// then recomputed from memory, it took the operand twice. `pred[c] += x`
+/// followed by a use of `pred[c]` gave `2x`, and `jpeg_fixed` wrong pixels.
+#[test]
+fn a_stored_value_with_another_use_is_computed_once() {
+    let mut ir =
+        String::from("target datalayout = \"E-m:e-p:32:16:32-i8:8:8-i16:16:16-i32:16:32-n8:16:32-a:0:16-S16\"\n");
+    let mut names = Vec::new();
+    let mut main = String::from(SYS);
+    let mut checks = String::new();
+    for (op, sign) in OPS {
+        for (source, operand) in [("reg", "%v"), ("imm", "5")] {
+            let name = format!("{op}{source}");
+            ir += &format!(
+                "define i32 @{name}(ptr %p, i32 %v) {{\n  %o = load i32, ptr %p\n  %r = {op} i32 %o, {operand}\n  store i32 %r, ptr %p\n  ret i32 %r\n}}\n"
+            );
+            let value = if source == "reg" { "100" } else { "5" };
+            main += &format!("long {name}(long *p, long v);\n");
+            checks += &format!(
+                "    {{ long a = 777, e = 777 {sign} {value}; long r = {name}(&a, 100); if (a != e || r != e) return {}; }}\n",
+                names.len() + 1
+            );
+            names.push(name);
+        }
+    }
+    main += &format!("int main(void) {{\n{checks}    return 0;\n}}\n{START}");
+    runs(&ir, &names, &main);
 }

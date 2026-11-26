@@ -18,7 +18,8 @@
 //!
 //! Translation: gcc's memory-destination `addhi3`/`addsi3` and `addqsi3`
 //! patterns (`config/m68k/m68k.md`), and
-//! `X86DAGToDAGISel::foldLoadStoreIntoMemOperand`.
+//! `X86DAGToDAGISel::foldLoadStoreIntoMemOperand`, guarded as
+//! `isFusableLoadOpStorePattern`.
 //!
 //! DEVIATE M68K-RMW-MODES: the pin has the `store (add (load a), imm), a`
 //! patterns for `(An)` only (`M68kInstrArithmetic.td`, "add imm, (An)"), the
@@ -79,6 +80,12 @@ fn read_modify_write(
         _ => return None,
     };
     if adapter.dag.value_type(Value { node: value.node, res: 0 }) != info.mem_vt {
+        return None;
+    }
+    // `isFusableLoadOpStorePattern`'s `StoredVal.hasOneUse()`: the operation
+    // is gone once it is in the store, and another user would compute it again
+    // from the memory the store already changed
+    if !Dag::has_n_uses_of_value(adapter, value, 1) {
         return None;
     }
     let (first, second) = (Dag::operand(adapter, value.node, 0), Dag::operand(adapter, value.node, 1));
