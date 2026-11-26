@@ -428,32 +428,46 @@ pub fn module_priced(
     let speed = !matches!(request.level, Level::Os | Level::Oz);
     let (mut bytes, mut reached) = (0, std::collections::HashSet::new());
     let at = std::rc::Rc::as_ptr(&selected) as usize;
-    let names: Vec<&str> = selected.iter().map(|(name, ..)| name.as_str()).collect();
-    let mut own = vec![0u64; names.len()];
-    let mut calls: Vec<Vec<(usize, f64)>> = vec![Vec::new(); names.len()];
+    let mut forms = Vec::with_capacity(selected.len());
     for (number, (name, ..)) in selected.iter().enumerate() {
         let lines = lines_in(&selected, &alternatives, name, number, request)?;
         let ((one_bytes, one_clocks), called) = expand::price_emitted_calls(&lines, speed);
         bytes += one_bytes;
-        own[number] = one_clocks;
-        for (callee, times) in called {
-            if let Some(to) = names.iter().position(|one| format!("_{one}") == callee || *one == callee) {
-                calls[number].push((to, times));
-            }
-        }
+        forms.push((name.as_str(), one_clocks, called));
         reached.extend(crate::runtime_size::referenced(&lines));
         KEPT_LINES.with(|kept| kept.borrow_mut().insert((at, name.clone(), number), lines));
     }
-    // the runs of each function from the roots down, a back edge of a recursion
-    // ignored
-    let mut called = vec![false; names.len()];
+    let clocks = run_clocks(&forms.iter().map(|(name, own, calls)| (*name, *own, &calls[..])).collect::<Vec<_>>());
+    let image = crate::data::image_bytes(&crate::data::text_at(ir, request)?);
+    Ok((bytes + crate::runtime_size::reached(&reached) + image, clocks))
+}
+
+/// The module's clocks from each function's own: by name, its clocks for one
+/// entry and the functions it calls with how often. Each is run as often as the
+/// calls to it say, from the roots down, a back edge of a recursion ignored.
+fn run_clocks(functions: &[(&str, u64, &[(String, f64)])]) -> u64 {
+    let calls: Vec<Vec<(usize, f64)>> = functions
+        .iter()
+        .map(|(.., called)| {
+            called
+                .iter()
+                .filter_map(|(callee, times)| {
+                    functions
+                        .iter()
+                        .position(|(one, ..)| format!("_{one}") == *callee || one == callee)
+                        .map(|to| (to, *times))
+                })
+                .collect()
+        })
+        .collect();
+    let mut called = vec![false; functions.len()];
     for list in &calls {
         list.iter().for_each(|(to, _)| called[*to] = true);
     }
-    let mut runs = vec![0.0f64; names.len()];
-    let mut state = vec![0u8; names.len()];
+    let mut runs = vec![0.0f64; functions.len()];
+    let mut state = vec![0u8; functions.len()];
     let mut order = Vec::new();
-    for root in (0..names.len()).filter(|&one| !called[one]) {
+    for root in (0..functions.len()).filter(|&one| !called[one]) {
         runs[root] = 1.0;
         let mut stack = vec![(root, 0usize)];
         state[root] = 1;
@@ -474,7 +488,7 @@ pub fn module_priced(
             }
         }
     }
-    let mut position = vec![usize::MAX; names.len()];
+    let mut position = vec![usize::MAX; functions.len()];
     order.iter().rev().enumerate().for_each(|(at, function)| position[*function] = at);
     for &function in order.iter().rev() {
         for &(to, times) in &calls[function] {
@@ -483,9 +497,7 @@ pub fn module_priced(
             }
         }
     }
-    let clocks = own.iter().zip(&runs).map(|(own, runs)| *own as f64 * runs.max(1.0)).sum::<f64>().round() as u64;
-    let image = crate::data::image_bytes(&crate::data::text_at(ir, request)?);
-    Ok((bytes + crate::runtime_size::reached(&reached) + image, clocks))
+    functions.iter().zip(&runs).map(|((_, own, _), runs)| *own as f64 * runs.max(1.0)).sum::<f64>().round() as u64
 }
 
 /// The module's code bytes at `request.level`: its functions as emitted and the
@@ -1262,8 +1274,16 @@ mod tests {
     #[test]
     fn at_o1_a_call_is_priced_against_its_own_function_not_the_module() {
         let routines = std::collections::HashSet::from(["__ashlsi3".to_owned()]);
-        let hot_loop = (4000, 40_000_000, std::collections::HashSet::new());
-        let step = ("step".to_owned(), (30, 700, routines), Some((44, 120, std::collections::HashSet::new())));
+        let priced = |name: &str, bytes, clocks, reached| Priced {
+            name: name.to_owned(),
+            bytes,
+            clocks,
+            reached,
+            calls: Vec::new(),
+        };
+        let hot_loop = priced("main", 4000, 40_000_000, Default::default());
+        let step =
+            ("step".to_owned(), priced("step", 30, 700, routines), Some(priced("step", 44, 120, Default::default())));
         let variants: Variants = (vec![hot_loop], vec![step]);
         let (calls, inline) = (std::collections::HashSet::new(), std::collections::HashSet::from([0]));
         let module = |form| module_price(&variants, form);
@@ -4104,7 +4124,14 @@ fn decomposes(
 /// The priced forms of the module's functions: those with one form, and
 /// those that call `__mulsi3` with the form built with shifts and adds too
 /// (bytes, runtime routines reached).
-type Priced = (u32, u64, std::collections::HashSet<String>);
+struct Priced {
+    name: String,
+    bytes: u32,
+    /// For one entry of the function.
+    clocks: u64,
+    reached: std::collections::HashSet<String>,
+    calls: Vec<(String, f64)>,
+}
 type Variants = (Vec<Priced>, Vec<(String, Priced, Option<Priced>)>);
 
 fn variants(
@@ -4115,14 +4142,14 @@ fn variants(
     let speed = !matches!(request.level, Level::Os | Level::Oz);
     // the printed form of every function, and for those with an alternative
     // the form with the shifts
-    let priced = |lines: Vec<Line>| {
-        let (bytes, clocks) = expand::price_emitted(&lines, speed);
-        (bytes, clocks, crate::runtime_size::referenced(&lines))
+    let priced = |name: &str, lines: Vec<Line>| {
+        let ((bytes, clocks), calls) = expand::price_emitted_calls(&lines, speed);
+        Priced { name: name.to_owned(), bytes, clocks, reached: crate::runtime_size::referenced(&lines), calls }
     };
     let mut fixed: Vec<Priced> = Vec::new();
     let mut either: Vec<(String, Priced, Option<Priced>)> = Vec::new();
     for (one, ..) in selected.iter() {
-        let call = lines_of(selected, one, 0, request).ok().map(priced);
+        let call = lines_of(selected, one, 0, request).ok().map(|lines| priced(one, lines));
         let Some(call) = call else { continue };
         if !alternatives.iter().any(|(other, ..)| other == one) {
             fixed.push(call);
@@ -4132,35 +4159,35 @@ fn variants(
             let (a, b) = (machine_function_with(selected, one, true), machine_function_with(alternatives, one, true));
             !matches!((a, b), (Ok(a), Ok(b)) if format!("{a:?}") == format!("{b:?}"))
         };
-        let decomposed = if differs { lines_of(alternatives, one, 0, request).ok().map(priced) } else { None };
+        let decomposed =
+            if differs { lines_of(alternatives, one, 0, request).ok().map(|lines| priced(one, lines)) } else { None };
         either.push((one.clone(), call, decomposed));
     }
     (fixed, either)
 }
 
 /// The module's bytes with the functions of `decomposes` built with shifts
-/// and adds: theirs and the runtime routines reached, each linked once.
+/// and adds, theirs and the runtime routines reached, each linked once; and its
+/// clocks, each function as often as it is called ([`run_clocks`]).
 fn module_price(
     (fixed, either): &Variants,
     decomposes: &std::collections::HashSet<usize>,
 ) -> (u32, u64) {
     use std::collections::HashSet;
-    let mut reached: HashSet<String> = HashSet::new();
-    let (mut bytes, mut clocks) = (0, 0);
-    for (one_bytes, one_clocks, refs) in fixed {
-        bytes += one_bytes;
-        clocks += one_clocks;
-        reached.extend(refs.iter().cloned());
-    }
-    for (at, (_, call, decomposed)) in either.iter().enumerate() {
-        let (one_bytes, one_clocks, refs) = match decomposed {
-            Some(decomposed) if decomposes.contains(&at) => decomposed,
-            _ => call,
-        };
-        bytes += one_bytes;
-        clocks += one_clocks;
-        reached.extend(refs.iter().cloned());
-    }
+    let chosen = either
+        .iter()
+        .enumerate()
+        .map(
+            |(at, (_, call, decomposed))| match decomposed {
+                Some(decomposed) if decomposes.contains(&at) => decomposed,
+                _ => call,
+            },
+        );
+    let forms: Vec<&Priced> = fixed.iter().chain(chosen).collect();
+    let reached: HashSet<String> = forms.iter().flat_map(|one| one.reached.iter().cloned()).collect();
+    let bytes: u32 = forms.iter().map(|one| one.bytes).sum();
+    let clocks =
+        run_clocks(&forms.iter().map(|one| (one.name.as_str(), one.clocks, &one.calls[..])).collect::<Vec<_>>());
     (bytes + crate::runtime_size::reached(&reached), clocks)
 }
 
@@ -4190,23 +4217,23 @@ fn own_price(
     use std::collections::HashSet;
     let others: HashSet<String> = fixed
         .iter()
-        .flat_map(|(.., refs)| refs.iter())
+        .flat_map(|one| one.reached.iter())
         .chain(either.iter().enumerate().filter(|(one, _)| *one != at).flat_map(|(one, (_, call, decomposed))| {
             match decomposed {
-                Some(decomposed) if decomposes.contains(&one) => decomposed.2.iter(),
-                _ => call.2.iter(),
+                Some(decomposed) if decomposes.contains(&one) => decomposed.reached.iter(),
+                _ => call.reached.iter(),
             }
         }))
         .cloned()
         .collect();
     let (_, call, decomposed) = &either[at];
-    let (bytes, clocks, refs) = match decomposed {
+    let one = match decomposed {
         Some(decomposed) if decomposes.contains(&at) => decomposed,
         _ => call,
     };
     let mut with = others.clone();
-    with.extend(refs.iter().cloned());
-    (bytes + crate::runtime_size::reached(&with) - crate::runtime_size::reached(&others), *clocks)
+    with.extend(one.reached.iter().cloned());
+    (one.bytes + crate::runtime_size::reached(&with) - crate::runtime_size::reached(&others), one.clocks)
 }
 
 /// The functions of the module that call `__mulsi3`, built with the shifts
