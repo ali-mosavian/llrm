@@ -1,6 +1,6 @@
 //! An object aligned past what the frame keeps was refused
 //! ("needs stack realignment, not supported yet"),
-//! so `over_aligned_local_after_even_pushes` had no 6502 build. The frame now
+//! so a function with such a local had no 6502 build. The frame now
 //! rounds `rs0` down in the prologue, keeps the old one in a slot and reads
 //! stack arguments from it.
 
