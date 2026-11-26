@@ -288,25 +288,28 @@ pub fn run(
     function: &mut MFunc,
     optsize: bool,
 ) {
-    dead_code(function);
-    unsplit_edges(function);
+    use llrm_support::debug::timed;
+    timed("arm64 prepass dead code", || dead_code(function));
+    timed("arm64 prepass unsplit edges", || unsplit_edges(function));
     if function.blocks.len() < 2 && function.blocks.iter().all(|block| block.ops.len() < 3) {
         return;
     }
     // No stage below adds, removes or retargets a block: the edges stay.
-    let graph = cfg(function);
-    cse(function, &graph, optsize);
-    hoist(function, &graph);
+    let graph = timed("arm64 prepass cfg", || cfg(function));
+    timed("arm64 prepass cse", || cse(function, &graph, optsize));
+    timed("arm64 prepass hoist", || hoist(function, &graph));
     // What was hoisted from several blocks is one value in the preheader.
-    cse(function, &graph, optsize);
-    sink(function, &graph);
-    crate::sinkfold::run(function, &graph);
-    dead_definitions(function);
-    non_flag_setting(function);
-    redundant_zero_extends(function);
-    redundant_zero_high_moves(function);
-    narrow_extension_uses(function);
-    dead_code(function);
+    timed("arm64 prepass cse", || cse(function, &graph, optsize));
+    timed("arm64 prepass sink", || sink(function, &graph));
+    timed("arm64 prepass sink fold", || crate::sinkfold::run(function, &graph));
+    timed("arm64 prepass dead definitions", || dead_definitions(function));
+    timed("arm64 prepass non flag setting", || non_flag_setting(function));
+    timed("arm64 prepass extensions", || {
+        redundant_zero_extends(function);
+        redundant_zero_high_moves(function);
+        narrow_extension_uses(function);
+    });
+    timed("arm64 prepass dead code", || dead_code(function));
 }
 
 /// The registers `op` reads as 32 bits: the operands of a `W` form and of the
@@ -1418,6 +1421,38 @@ mod tests {
         assert!(liveness_runs() > before, "the premise: a merge asks what is live");
     }
 
+    /// Two loops, each with a back edge block holding one phi copy: both are
+    /// merged, and liveness is made once for the two (it was made again after
+    /// each merge: 56 of the 84 M instructions `unsplit_edges` spent on one
+    /// module's 23 functions).
+    #[test]
+    fn liveness_is_made_once_however_many_edges_are_merged() {
+        let mut function = MFunc::new("f");
+        let (a, b, d, e, c1, c2) = (64, 65, 67, 68, 70, 71);
+        function.next_register = 80;
+        let cbnz = |reg: u32, target: &str| {
+            Op::I(Inst::CompareBranch {
+                nonzero: true,
+                width: Width::X,
+                rt: Gpr(reg),
+                target: Target::Label(target.into()),
+            })
+        };
+        let copy = |dst: u32, src: u32| Op::Copy { dst: Reg::Gpr(Gpr(dst)), src: Reg::Gpr(Gpr(src)) };
+        function.blocks = vec![
+            MBlock { label: "entry".into(), ops: vec![movz(a, 1), movz(b, 2), branch_to("one")].into() },
+            MBlock { label: "one".into(), ops: vec![add(d, a, b), cbnz(d, "one.e1"), branch_to("two")].into() },
+            MBlock { label: "one.e1".into(), ops: vec![copy(c1, a), branch_to("one")].into() },
+            MBlock { label: "two".into(), ops: vec![add(e, a, b), cbnz(e, "two.e2"), branch_to("exit")].into() },
+            MBlock { label: "two.e2".into(), ops: vec![copy(c2, b), branch_to("two")].into() },
+            MBlock { label: "exit".into(), ops: vec![Op::Return { uses: vec![], tail: None }].into() },
+        ];
+        let before = liveness_runs();
+        unsplit_edges(&mut function);
+        assert_eq!(function.blocks.len(), 4, "the premise: both back edge blocks are merged");
+        assert_eq!(liveness_runs() - before, 1);
+    }
+
     /// Every stage of `run` built the block graph again (13 times in queens'
     /// one function, 0.3 M of its prepass) although none changes the edges.
     #[test]
@@ -2047,10 +2082,18 @@ pub fn unsplit_edges(function: &mut MFunc) {
             Op::I(Inst::Branch { .. } | Inst::BranchCond { .. } | Inst::CompareBranch { .. } | Inst::TestBranch { .. })
         )
     };
+    if !function.blocks.iter().any(|block| is_edge(&block.label)) {
+        return;
+    }
+    // What is live into each block, made when an edge first asks and kept: an
+    // unsplit moves copies the other successors do not read, to the end of a
+    // block that read what they read, so it changes no block's live-in
+    // registers that a later edge asks about. `numbered` maps each block now
+    // to its row when the liveness was made (a removed block shifts the rest).
+    let mut live: Option<Liveness> = None;
+    let mut numbered: Vec<usize> = Vec::new();
     loop {
         let graph = cfg(function);
-        // Only an edge that passes every other test asks what is live.
-        let mut live: Option<Liveness> = None;
         let found = (0..function.blocks.len()).find_map(|edge| {
             let block = &function.blocks[edge];
             if !is_edge(&block.label) || graph.predecessors[edge].len() != 1 {
@@ -2085,8 +2128,11 @@ pub fn unsplit_edges(function: &mut MFunc) {
                 return None;
             }
             let touched = defined.clone();
-            let live = live.get_or_insert_with(|| live_in(function, &graph));
-            if others.iter().any(|&one| touched.iter().any(|reg| live.contains(one, *reg))) {
+            let live = live.get_or_insert_with(|| {
+                numbered = (0..function.blocks.len()).collect();
+                live_in(function, &graph)
+            });
+            if others.iter().any(|&one| touched.iter().any(|reg| live.contains(numbered[one], *reg))) {
                 return None;
             }
             let reads_defined = function.blocks[from]
@@ -2122,6 +2168,9 @@ pub fn unsplit_edges(function: &mut MFunc) {
             ops.insert(at + offset, copy.0);
         }
         function.blocks.remove(edge);
+        if !numbered.is_empty() {
+            numbered.remove(edge);
+        }
     }
 }
 

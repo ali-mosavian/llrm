@@ -64,7 +64,9 @@ pub fn program(
     platform: Platform,
 ) -> Result<Program, String> {
     let (_, text) = without_triple(text);
+    let parsing = llrm_support::debug::span("arm64 parse IR");
     let mut module = llrm_mir::parse::module(&text).map_err(|error| error.to_string())?;
+    drop(parsing);
     llrm_mir::parse::upgrade_lifetimes(&mut module);
     // Atomics are calls the mid-end moves nothing across; the selector makes
     // them instructions.
@@ -281,9 +283,12 @@ fn lower_function(
     let global = module.global(id);
     let function = global.function().ok_or("not a function")?;
     let name = global.name.owned().ok_or("an unnamed function")?;
+    let selecting = llrm_support::debug::span("arm64 select");
     let mut machine =
         dag_select(module, &name, &program.layout, platform, lines).map_err(|why| format!("@{name}: {why}"))?;
+    drop(selecting);
     dump("Select", &machine);
+    let before_allocation = llrm_support::debug::span("arm64 machine passes before allocation");
     crate::mfunc::remove_unreachable_blocks(&mut machine);
     // `AArch64ConditionalCompares` runs just before early if-conversion and
     // skips an `optnone` function too; `LLRM_ARM64_CCMP=off` is
@@ -294,22 +299,25 @@ fn lower_function(
         // DEVIATE CCMP-OS (owner x87, exit 2026-12-31): the pin takes the
         // code-size branch of `shouldConvert` at `minsize`; here at `optsize`
         // too (-Os is optsize alone, D8).
-        crate::ccmp::run(&mut machine, flagged(function, &["minsize", "optsize"]), ccmp.as_deref() == Ok("stress"));
+        llrm_support::debug::timed("arm64 ccmp", || {
+            crate::ccmp::run(&mut machine, flagged(function, &["minsize", "optsize"]), ccmp.as_deref() == Ok("stress"))
+        });
         dump("ConditionalCompares", &machine);
     }
     // `EarlyIfConverter` skips an `optnone` function (`skipFunction`).
     if !flagged(function, &["optnone"])
         && let Some(mode) = crate::ifcvt::mode_from_env()
     {
-        crate::ifcvt::run(&mut machine, mode);
+        llrm_support::debug::timed("arm64 early if-conversion", || crate::ifcvt::run(&mut machine, mode));
         dump("EarlyIfConversion", &machine);
     }
     // The shared phases that need SSA see the body as selection made it,
     // phis and all; the private phases below see it after phi elimination.
     if llrm_support::env_flag!("LLRM_ARM64_STAGES") {
-        crate::lir_body::stages::observe(&machine)?;
+        llrm_support::debug::timed("arm64 stage observation", || crate::lir_body::stages::observe(&machine))?;
     }
-    crate::mfunc::lower_phis(&mut machine).map_err(|why| format!("@{name}: {why}"))?;
+    llrm_support::debug::timed("arm64 phi elimination", || crate::mfunc::lower_phis(&mut machine))
+        .map_err(|why| format!("@{name}: {why}"))?;
     dump("PhiElimination", &machine);
     if llrm_support::env_flag!("LLRM_ARM64_VERIFY") {
         let undefined = crate::mfunc::undefined_reads(&machine);
@@ -321,23 +329,23 @@ fn lower_function(
     machine.unwind = crate::cfi::Unwind::of(function);
     let optsize = flagged(function, &["optsize", "minsize"]);
     machine.optnone = flagged(function, &["optnone"]);
-    crate::prepass::run(&mut machine, optsize);
+    llrm_support::debug::timed("arm64 prepass", || crate::prepass::run(&mut machine, optsize));
     dump("Prepass", &machine);
     if !llrm_support::env_flag!("LLRM_ARM64_NO_COMBINE") {
-        crate::combine::run(&mut machine, optsize);
+        llrm_support::debug::timed("arm64 combine", || crate::combine::run(&mut machine, optsize));
         dump("Combine", &machine);
     }
-    crate::cmpzero::run(&mut machine);
+    llrm_support::debug::timed("arm64 cmpzero", || crate::cmpzero::run(&mut machine));
     dump("CmpZero", &machine);
-    crate::flagcse::run(&mut machine);
+    llrm_support::debug::timed("arm64 flagcse", || crate::flagcse::run(&mut machine));
     dump("FlagCse", &machine);
     // The pin runs it after MachineCSE and MachineCombiner, which make the
     // value read once and the `msub` it must leave alone.
-    crate::condbrtuning::run(&mut machine);
+    llrm_support::debug::timed("arm64 condbrtuning", || crate::condbrtuning::run(&mut machine));
     dump("CondBrTuning", &machine);
-    crate::memcluster::run(&mut machine);
+    llrm_support::debug::timed("arm64 memcluster", || crate::memcluster::run(&mut machine));
     dump("MemCluster", &machine);
-    crate::sibcall::run(&mut machine);
+    llrm_support::debug::timed("arm64 sibcall", || crate::sibcall::run(&mut machine));
     dump("SibCall", &machine);
     machine.calls_never_return = {
         let has = |attrs: &[llrm_mir::opcode::Attribute], name: &str| {
@@ -354,7 +362,7 @@ fn lower_function(
             },
         )
     };
-    crate::prepass::order_copies(&mut machine);
+    llrm_support::debug::timed("arm64 order copies", || crate::prepass::order_copies(&mut machine));
     dump("OrderCopies", &machine);
     if crate::lir_body::checking() {
         // The body carries the edge odds by block position; no pass between
@@ -362,14 +370,17 @@ fn lower_function(
         machine.alloc_odds = Some(crate::layout::edge_odds(module, function, &program.layout, &machine));
         machine = crate::lir_body::round_trip(&machine)?;
     }
+    drop(before_allocation);
+    let allocating = llrm_support::debug::span("arm64 register allocation");
     // The shared greedy allocator, unless `LLRM_ARM64_LINEAR` asks for the
     // linear scan; a function greedy refuses goes to the scan, reported.
     // `x16`/`x17` are the lowerer's scratch pair where an offset does not
     // encode; they are the allocator's while the frame stays small. A
     // spill slot is at most 16 B, a register mostly 8: between the two
     // bounds the allocation is kept only if the frame came out small.
-    let (tight, loose) = crate::frame::scratch_estimate(&machine);
-    let snapshot = (tight && !loose).then(|| machine.clone());
+    let (tight, loose) =
+        llrm_support::debug::timed("arm64 scratch estimate", || crate::frame::scratch_estimate(&machine));
+    let snapshot = llrm_support::debug::timed("arm64 machine snapshot", || (tight && !loose).then(|| machine.clone()));
     crate::lir_view::set_frame_pointer_free(
         platform != Platform::Darwin
             && !(machine.dynamic
@@ -380,7 +391,9 @@ fn lower_function(
                 )),
     );
     crate::lir_view::set_quad_callee_saved_free(!machine.calls);
-    machine.alloc_odds = Some(crate::layout::edge_odds(module, function, &program.layout, &machine));
+    machine.alloc_odds = llrm_support::debug::timed("arm64 edge odds", || {
+        Some(crate::layout::edge_odds(module, function, &program.layout, &machine))
+    });
     let allocate = |machine: &mut crate::mfunc::MFunc, scratch: bool| {
         crate::lir_view::set_scratch_free(scratch);
         // The shared greedy allocator, unless `LLRM_ARM64_LINEAR` asks for
@@ -405,7 +418,9 @@ fn lower_function(
         machine = before;
         allocation = allocate(&mut machine, false);
     }
+    drop(allocating);
     dump("RegAlloc", &machine);
+    let after_allocation = llrm_support::debug::span("arm64 lowering after allocation");
     crate::copyprop::run(&mut machine);
     crate::postrasink::run(&mut machine);
     dump("PostRaSink", &machine);
@@ -434,6 +449,7 @@ fn lower_function(
     crate::jumptable::compress(&mut blocks, &mut tables).map_err(|why| format!("@{name}: {why}"))?;
     crate::trial::add(&machine, &blocks, &likelihood);
     let written = crate::ipra::written(&machine);
+    drop(after_allocation);
     Ok((
         crate::emit::Function {
             tables,
@@ -551,7 +567,9 @@ pub fn object_with(
     debug: bool,
 ) -> Result<llrm_debug::Described, String> {
     let (program, lowered) = compiled(text, platform, level.into(), debug, false)?;
+    let emitting = llrm_support::debug::span("arm64 object emit");
     let object = crate::emit::object(&program.modules[0], &program.layout, platform, name, &lowered)?;
+    drop(emitting);
     let debug = if debug { crate::debug::info(&program.modules[0], platform, &object, &lowered, name)? } else { None };
     Ok(llrm_debug::Described { object, debug })
 }
