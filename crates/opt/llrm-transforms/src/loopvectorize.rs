@@ -65,7 +65,7 @@ use llrm_analysis::loopaccessinfo::LoopAccessInfo;
 use llrm_analysis::memory;
 use llrm_analysis::scev::analysis::ScevSession;
 use llrm_analysis::scev::{Cx, ScalarEvolution};
-use llrm_mir::context::{Constant, ConstantKind};
+use llrm_mir::context::{Constant, ConstantKind, Context};
 use llrm_mir::dense::IdMap;
 use llrm_mir::edit::Position;
 use llrm_mir::intrinsics::Intrinsic;
@@ -2337,6 +2337,15 @@ impl FunctionPass for LoopVectorize {
         }
         let mut changed = crate::loopsimplify::simplified(unit.function);
         let mut session = ScevSession::of(unit.context, unit.function, &outer);
+        let inner: Vec<BlockId> = {
+            let (_, env) = session.split(unit.layout, &outer.globals, &outer.metadata);
+            let loops = env.loops.get_loops_in_preorder();
+            loops.into_iter().filter(|one| one.is_innermost()).flat_map(|one| one.get_blocks().to_vec()).collect()
+        };
+        if folded_one_incoming_phis(unit.context, unit.function, &inner) {
+            changed = true;
+            session = ScevSession::of(unit.context, unit.function, &outer);
+        }
         // The loops, and the vector factor an epilogue loop is forced to (the
         // remainder of a main loop widened in turn, pushed as it is made).
         let mut worklist: Vec<(BlockId, Option<u32>)> = {
@@ -2852,6 +2861,24 @@ fn why(
 }
 
 /// `Function::hasOptSize`.
+/// A phi of one incoming value is that value, as VPlan reads it; the planners
+/// look for the instruction that makes a value, which such a phi hides (the
+/// step of an induction, when rotation could not merge the latch). `blocks`
+/// are of innermost loops, so no phi here is an inner loop's LCSSA phi.
+fn folded_one_incoming_phis(
+    context: &Context,
+    function: &mut Function,
+    blocks: &[BlockId],
+) -> bool {
+    let mut folded = false;
+    for &block in blocks {
+        if function.predecessors(block).len() == 1 {
+            folded |= crate::local::fold_single_entry_phi_nodes(context, function, block);
+        }
+    }
+    folded
+}
+
 fn has_opt_size(function: &Function) -> bool {
     use llrm_mir::opcode::Attribute;
     function
