@@ -49,14 +49,22 @@ fn a_68000_standard_arithmetic_is_the_published_base_plus_the_address() {
     assert_eq!(clocks(Cpu::M68000, "cmp.w (%a0), %d0"), 4 + 4);
 }
 
-/// MC68000UM Table 8-5 (p. 8-5), Immediate: `ADDI.L #,Dn` 16, `ANDI.L #,Dn`
-/// 14, `CMPI.L #,Dn` 14, `MOVEQ` 4.
+/// MC68000UM Table 8-5 (p. 8-5), Immediate: `ADDI.L #,Dn` 16, `CMPI.L #,Dn`
+/// 14, `MOVEQ` 4.
 #[test]
 fn a_68000_immediate_form_is_the_published_cell() {
     assert_eq!(clocks(Cpu::M68000, "add.l #1, %d0"), 16);
-    assert_eq!(clocks(Cpu::M68000, "and.l #255, %d0"), 14);
     assert_eq!(clocks(Cpu::M68000, "cmpi.l #0, %d0"), 14);
     assert_eq!(clocks(Cpu::M68000, "moveq #1, %d0"), 4);
+}
+
+/// Table 8-5 misprints `ANDI.L #,Dn` (14) and `ADDQ.W #,An` (4); the processor
+/// takes 16 and 8. The misprints priced a mask and a word step too cheap.
+#[test]
+fn a_68000_misprinted_immediate_cell_is_what_the_processor_takes() {
+    assert_eq!(clocks(Cpu::M68000, "and.l #255, %d0"), 16);
+    assert_eq!(clocks(Cpu::M68000, "addq.w #2, %a0"), 8);
+    assert_eq!(clocks(Cpu::M68000, "subq.w #2, %a0"), 8);
 }
 
 /// MC68000UM Table 8-7 (p. 8-6), Shift: `LSL.L #n,Dn` 8+2n, `ASR.W #n,Dn` 6+2n.
