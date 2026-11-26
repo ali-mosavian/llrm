@@ -13,8 +13,48 @@ use super::asm::{AsmOperand, asm};
 use super::enc::{Piece, encoding};
 use super::{adda, bfextu, bfffo, cmpa, dbf, divrem, indexed, pea, scaled, short, widemul, wordjump};
 
+/// An instruction's `asm` row.
+pub type Text = (&'static str, &'static str, &'static [AsmOperand]);
+
+/// A name's answer from the tables, kept. A lookup that is not in a table
+/// misses it before the next is asked, and the late passes ask again for every
+/// instruction they read (`code_of`, `text` and `bits`: 6 % of lexer.c's
+/// compile). The pin indexes its tables by opcode.
+type Kept<T> = std::thread::LocalKey<std::cell::RefCell<llrm_support::hash::HashMap<Box<str>, Option<T>>>>;
+
+thread_local! {
+    static CODES: std::cell::RefCell<llrm_support::hash::HashMap<Box<str>, Option<u16>>> = Default::default();
+    static TEXTS: std::cell::RefCell<llrm_support::hash::HashMap<Box<str>, Option<&'static Text>>> = Default::default();
+    static BITS: std::cell::RefCell<llrm_support::hash::HashMap<Box<str>, Option<(u16, &'static [Piece])>>> =
+        Default::default();
+    static SEARCHES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+fn cached<T: Copy>(
+    kept: &'static Kept<T>,
+    name: &str,
+    search: impl FnOnce(&str) -> Option<T>,
+) -> Option<T> {
+    if let Some(found) = kept.with_borrow(|map| map.get(name).copied()) {
+        return found;
+    }
+    SEARCHES.set(SEARCHES.get() + 1);
+    let found = search(name);
+    kept.with_borrow_mut(|map| map.insert(name.into(), found));
+    found
+}
+
+/// How many names this thread has looked up in the tables.
+pub fn table_searches() -> usize {
+    SEARCHES.get()
+}
+
 /// The machine code of the instruction named `name`, the pin's or a local one.
 pub fn code_of(name: &str) -> Option<u16> {
+    cached(&CODES, name, search_code)
+}
+
+fn search_code(name: &str) -> Option<u16> {
     short::code_of(name)
         .or_else(|| scaled::code_of(name))
         .or_else(|| indexed::code_of(name))
@@ -59,8 +99,12 @@ pub fn desc(code: u16) -> Option<&'static InstrDesc> {
 }
 
 /// The pin's `asm` row of `name`, or the local instruction's.
-pub fn text(name: &str) -> Option<&'static (&'static str, &'static str, &'static [AsmOperand])> {
+pub fn text(name: &str) -> Option<&'static Text> {
     TEXT_LOOKUPS.with(|count| count.set(count.get() + 1));
+    cached(&TEXTS, name, search_text)
+}
+
+fn search_text(name: &str) -> Option<&'static Text> {
     asm(name)
         .or_else(|| short::short_asm(name))
         .or_else(|| scaled::scaled_asm(name))
@@ -89,6 +133,10 @@ pub fn text_lookups() -> usize {
 
 /// The pin's encoding of `name`, or the local instruction's.
 pub fn bits(name: &str) -> Option<(u16, &'static [Piece])> {
+    cached(&BITS, name, search_bits)
+}
+
+fn search_bits(name: &str) -> Option<(u16, &'static [Piece])> {
     encoding(name)
         .map(|&(_, width, pieces)| (width, pieces))
         .or_else(|| short::short_encoding(name))
@@ -125,6 +173,17 @@ mod tests {
             let desc = desc(code_of(cmpa).unwrap()).unwrap();
             assert_eq!(desc.flags, pin(base), "{cmpa} describes {base}");
         }
+    }
+
+    /// Every lookup of a name walked the tables again: 6 % of lexer.c's
+    /// compile.
+    #[test]
+    fn a_name_is_searched_for_once() {
+        let ask = || (code_of("CMPA32p"), text("MOVE32rr").map(|row| row.0), bits("MOVE32rr").map(|row| row.0));
+        let first = ask();
+        let searched = table_searches();
+        assert_eq!(ask(), first);
+        assert_eq!(table_searches(), searched, "a name already found was searched for again");
     }
 
     fn instrinfo_desc(name: &str) -> &'static InstrDesc {
