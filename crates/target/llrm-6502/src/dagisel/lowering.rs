@@ -194,6 +194,8 @@ pub fn target_lowering() -> TargetLowering {
     tl.set_operation_action(SetCCCarry, MVT::I32, Action::Custom);
     // softened floats: compiler-rt's routines
     tl.set_soft_float_libcall_names();
+    // RuntimeLibcalls.def: the C library's `rint`, `sqrt`, ... for every target
+    tl.set_libm_libcall_names();
     tl
 }
 
@@ -315,7 +317,13 @@ impl Hooks for MosLowering {
             };
             count as usize
         ];
-        let callee = dag.get_target_external_symbol(EVT::I16, name);
+        // the C library's routines are C symbols; the runtime's are as named
+        let symbol = if llrm_codegen::backend::selectiondag::actions::is_c_library_routine(name) {
+            crate::abi::c_symbol(name)
+        } else {
+            name.to_owned()
+        };
+        let callee = dag.get_target_external_symbol(EVT::I16, &symbol);
         let root = dag.entry_node();
         let (_chain, values) = lower_call(dag, root, callee, &outs, &ins).ok()?;
         join_words(dag, &values, ret)
