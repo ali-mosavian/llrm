@@ -240,6 +240,11 @@ pub struct InlineParams {
     /// DEVIATE LASTCALL-NOGROWTH: the bonus also applies where size growth
     /// is barred (the call's block ends in `unreachable`). Off: the pin's.
     pub last_call_when_growth_barred: bool,
+    /// The level's own `DefaultThreshold` where the target's tuning table
+    /// states a lower one in `default_threshold`: a speed site the lower bar
+    /// refuses and the own bar would inline is `blocked`, for the priced
+    /// trial to decide. No pin counterpart. None: no bar was cut.
+    pub cut_from: Option<i64>,
     /// Which target's answers `getInstructionCost` and its kin give (D2).
     pub tti: Tti,
 }
@@ -276,6 +281,7 @@ impl InlineParams {
             cold_site_ignores_sinks: false,
             last_call_in_cold_site: false,
             last_call_when_growth_barred: false,
+            cut_from: None,
             tti: Tti::Generic,
         }
     }
@@ -3184,6 +3190,16 @@ fn stores_through(
     }
 }
 
+/// Whether the call passes at least one argument and every one is a constant:
+/// the callee's copy may fold whole (a pure function of constants), which the
+/// cost does not follow past a loop. A trial costs the caller's cleanup list
+/// once more, so only such a site earns one.
+fn every_argument_is_constant(site: &Site) -> bool {
+    let operands = &site.caller.instruction(site.call).operands;
+    let arguments = &operands[..operands.len().saturating_sub(1)];
+    !arguments.is_empty() && arguments.iter().all(|one| matches!(one, llrm_mir::module::Operand::Constant(_)))
+}
+
 /// `getInlineCost` (InlineCost.cpp:3265): what the call costs, or why it is
 /// always or never to be inlined.
 pub fn inline_cost(
@@ -3199,12 +3215,25 @@ pub fn inline_cost(
     let mut analyzer = Analyzer::new(site, params);
     let verdict = analyzer.analyze();
     if analyzer.decided_by_threshold {
+        // The target's cut bar refused a speed site the level's own bar
+        // inlines: the priced trial decides it (`InlineParams::cut_from`).
+        let cut_refused = verdict.is_err()
+            && !analyzer.blocked_by_bound
+            && !params.o1_bound
+            && site.caller_size == CallerSize::Speed
+            && every_argument_is_constant(site)
+            && params.cut_from.is_some_and(|own| {
+                let mut pin = Analyzer::new(site, InlineParams { default_threshold: own, cut_from: None, ..params });
+                // Inlined at the own bar, or held there by the rate alone.
+                pin.analyze().is_ok() || pin.blocked_by_bound
+            });
         return InlineCost::Cost {
             cost: analyzer.cost,
             threshold: analyzer.threshold,
             static_bonus: analyzer.static_bonus_applied,
-            blocked: analyzer.blocked_by_bound,
+            blocked: analyzer.blocked_by_bound || cut_refused,
             hot: !analyzer.blocked_by_bound
+                && !cut_refused
                 && analyzer.verdict_is_over_threshold()
                 && (!params.o1_bound || site.caller_size != CallerSize::Speed)
                 && site
