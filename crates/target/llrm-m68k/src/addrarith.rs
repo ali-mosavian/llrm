@@ -400,8 +400,8 @@ fn address_copy(
     // folded the add's `+ 1` as a displacement): those read `y` instead
     let own = &uses[x as usize];
     let others = own.iter().filter(|one| matches!(one, Use::Other)).count();
-    // those of the add itself, which the rewrite replaces. None where it reads
-    // `x` as an operand of either class: a data read counted in its place was a
+    // the one data read must be the add's, which the rewrite replaces. An add
+    // that reads `x` as either class has none, and the one counted was a
     // store, which then took `y` and its address register
     let adds_own = match insts[at].kind {
         Kind::Op(name) => insts[at]
@@ -430,7 +430,7 @@ fn address_copy(
     // only in the wide run of a size build, which the trial keeps where it is
     // smaller: one more address register live can cost a spill (-O1's bench
     // cells grew 4 to 16 bytes with it)
-    if others != adds_own || !addresses_only || (own.len() > 1 && !(wide && size)) {
+    if others != 1 || adds_own != 1 || !addresses_only || (own.len() > 1 && !(wide && size)) {
         return None;
     }
     match function.classes[y as usize] {
