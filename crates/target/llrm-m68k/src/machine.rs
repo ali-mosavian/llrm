@@ -1041,11 +1041,15 @@ impl Tti for M68k {
         i32::try_from(imm).is_ok()
     }
 
-    /// DEVIATE 17: a size build keeps a store or copy loop (a `memset` call
-    /// is three pushes, `jsr` and `lea`: 16 B, the loop 10 to 14). Exit
-    /// 2026-11-12.
-    fn memory_idioms_at_optsize(&self) -> bool {
-        false
+    /// DEVIATE 17 (gcc 15.2 -Os: a call for a constant length, the loop for a
+    /// runtime one): a `memset` call is three pushes, `jsr` and `lea` (16 B,
+    /// the loop 10 to 14), repaid in clocks by a long constant copy. Owner
+    /// m68k. Review: 2026-12-20.
+    fn memory_idioms_at_optsize(
+        &self,
+        constant_length: bool,
+    ) -> bool {
+        constant_length
     }
 
     fn arithmetic_cost(
