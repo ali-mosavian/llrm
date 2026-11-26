@@ -384,6 +384,8 @@ impl ProgramPass for Walk {
                 .collect();
             let remarks = llrm_support::env_flag!("LLRM_INLINE_REMARKS");
             let mut visited: BTreeSet<GlobalId> = BTreeSet::new();
+            // SZ2 at speed: each callee's clocks after the list its copy gets.
+            let mut settled: BTreeMap<(GlobalId, bool), i64> = BTreeMap::new();
             for members in components {
                 for &id in &members {
                     // `DevirtSCCRepeatedPass<4>`: a call the simplification
@@ -855,16 +857,38 @@ impl ProgramPass for Walk {
                                 let at_price = rate > 0 || (params.cut_from.is_some() && self.speed_rate);
                                 let (saved, growth) = if size == crate::inlinecost::CallerSize::Speed && at_price {
                                     let costs = program.target.speed_trial_costs();
+                                    // The copy met the cleanup list a second
+                                    // time. The callee it is compared with must
+                                    // too, or what a second run finds in any
+                                    // body reads as saved by inlining.
+                                    let stage = if light { TRIAL_LIGHT } else { "walk.trial." };
+                                    let mut run = 0;
+                                    for callee in calls.iter().filter_map(|one| trials[one].callee) {
+                                        if module.global(callee).function().is_none() {
+                                            continue;
+                                        }
+                                        if let Some(&known) = settled.get(&(callee, light)) {
+                                            run += known;
+                                            continue;
+                                        }
+                                        let held = function_mut(module, callee).1.clone();
+                                        (self.simplify)(module, &mut modules[at], callee, stage);
+                                        let body = module.global(callee).function().expect("a body");
+                                        let clocks = trial_clocks(by_trips, module, &program.layout, tti, body);
+                                        *function_mut(module, callee).1 = held;
+                                        modules[at].changed(callee);
+                                        modules[at].invalidate_bodies(
+                                            &PreservedAnalyses::none().preserve_module::<GlobalsAA>(),
+                                        );
+                                        settled.insert((callee, light), clocks);
+                                        run += clocks;
+                                    }
                                     let now = module.global(id).function().expect("a body");
                                     let callees: Vec<&llrm_mir::module::Function> = calls
                                         .iter()
                                         .filter_map(|one| trials[one].callee)
                                         .filter_map(|callee| module.global(callee).function())
                                         .collect();
-                                    let run: i64 = callees
-                                        .iter()
-                                        .map(|body| trial_clocks(by_trips, module, &program.layout, tti, body))
-                                        .sum();
                                     let gone: i64 = if credit > 0 {
                                         let sites: Vec<GlobalId> =
                                             calls.iter().filter_map(|one| trials[one].callee).collect();
