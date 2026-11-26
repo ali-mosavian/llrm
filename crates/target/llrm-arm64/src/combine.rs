@@ -310,8 +310,7 @@ impl Counts {
 /// and the walks between two instructions answered by search, not by a scan
 /// back through the block per query (a block of N instructions took N
 /// scans of up to N operations; a block of thousands of independent compares
-/// spent half its compile in
-/// them).
+/// spent half its compile in them).
 #[derive(Default)]
 struct Definitions(HashMap<Reg, Vec<usize>>);
 
