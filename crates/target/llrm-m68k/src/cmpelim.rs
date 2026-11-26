@@ -38,7 +38,6 @@
 
 use llrm_spike_mf::{Inst, Kind, Operand, Reg};
 
-use crate::addrarith::is_data;
 use crate::ccr;
 use crate::dagisel::local;
 use crate::mfunc::MFunction;
@@ -187,14 +186,12 @@ pub fn eliminate_adjacent_tests(
                     before.operands.first(),
                     Some(Operand::Def(def)) if physical(*def) == physical(tested)
                 );
-                // a load of a frame slot the allocator made again and a copy
-                // into a data register are each a `move`, which sets the codes
-                // in hardware though the allocator does not count it as the
-                // setter. Identity copies are gone by now
+                // a copy's `move` sets the codes in hardware though the
+                // allocator does not count it as the setter
                 let moved = result
                     && size == Some('l')
-                    && is_data(physical(tested))
-                    && copied_from(before).is_some_and(|source| physical(source) != physical(tested));
+                    && copied_from(before)
+                        .is_some_and(|source| crate::expand::copy_sets_codes(physical(tested), physical(source)));
                 mnemonic == "tst"
                     && (before.sets_flags() || is_frame_load(before) || moved)
                     && flags_read_after(&block.insts, at).is_some_and(|needed| {
