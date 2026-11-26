@@ -1445,9 +1445,10 @@ mod tests {
 
     /// 3,000 blocks each make and read four registers of their own and one
     /// value crosses them: the rows ran over all 12,001 registers, one bit row
-    /// of 188 words per block (`memory_expansion` -O2 spent 17% of its compile
-    /// in the walk of them). Only a register some block reads before it writes
-    /// can be live into a block: the rows run over that one.
+    /// of 188 words per block (a function of thousands of blocks and vregs
+    /// spent a sixth of its compile in the walk of them). Only a register some
+    /// block reads before it writes can be live into a block: the rows run over
+    /// that one.
     #[test]
     fn liveness_tracks_only_the_registers_that_cross_blocks() {
         let mut function = MFunc::new("f");
