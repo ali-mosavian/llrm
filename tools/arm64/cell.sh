@@ -22,7 +22,7 @@ read -r value instrs _ < <("${UNICORN_PYTHON:-python3}" "$H/count.py" --kernel "
 [ -n "$instrs" ] || unmeasured "count failed, see $O/err.$P.$L.$C"
 status=$(python3 "$H/expect.py" "$P" "$L" "$value" "$(expected_file)" 2>>"$O/err.$P.$L.$C") || unmeasured "value $value is not the expected one"  # a program that failed (-1) is no measurement
 case $C in gccn|gccnnv) python3 "$H/flagset.py" --check-gcc "$X.flags" 2>>"$O/err.$P.$L.$C" || unmeasured "gcc flags differ from the neutral set, see $O/err.$P.$L.$C";; esac
-libcalls=$("${V:-$HOME/scratch/llvm-build-aarch64/bin}/llvm-objdump" -r "$X.o" 2>/dev/null | awk '$2 ~ /CALL26|JUMP26/ {print $3}' | grep -E '^(memset|memcpy|memmove|memcmp|bcmp|strlen|strcpy|strcmp)$' | sort -u | tr '\n' ' ')
+libcalls=$(python3 "$H/libcalls.py" --object "$X.o" 2>>"$O/err.$P.$L.$C") || unmeasured "libcalls failed, see $O/err.$P.$L.$C"
 echo "$libcalls" > "$X.libcalls"
 [ -z "$libcalls" ] || echo "cell.sh: $P $L $C: count is kernel-only; the runtime calls ${libcalls}are not in it" >&2
 flags=$([ -f "$X.flags" ] && python3 "$H/flagset.py" "$X.flags" || echo unknown)
