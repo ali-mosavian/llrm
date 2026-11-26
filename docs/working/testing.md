@@ -143,6 +143,16 @@ compiles: the list may only shrink. It is skipped, loudly, when the binaries are
 
 Binaries are found at `LLRM_BIN`, else `$CARGO_TARGET_DIR/release`, else `target/release` (`tools/llrmbin.py`).
 
+## Code byte ceilings
+
+`tests/test_byte_ceilings.py` (step `pytest-programs`) holds each program of a target's corpus, per level, to the code bytes
+in `tools/byte_ratchet_TARGET.tsv`. A cell over its ceiling or no longer building fails. To accept a change, or lock in a
+smaller one:
+
+    python3 tools/byte_ratchet.py z80 --update
+
+A target joins with a table in `tools/byte_ratchet.toml` and a first `--update`. It needs `sdasz80` and the pin's clang.
+
 ## Identity
 
 `tools/identity.sh` proves a change left a target's code alone: two builds make byte-identical objects for a whole corpus. The
