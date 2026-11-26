@@ -314,7 +314,7 @@ fn lower_function(
     if llrm_support::env_flag!("LLRM_ARM64_STAGES") {
         crate::lir_body::stages::observe(&machine)?;
     }
-    crate::mfunc::lower_phis(&mut machine).map_err(|why| format!("@{name}: {why}"))?;
+    llrm_support::debug::timed("arm64 phi elimination", || crate::mfunc::lower_phis(&mut machine)).map_err(|why| format!("@{name}: {why}"))?;
     dump("PhiElimination", &machine);
     if llrm_support::env_flag!("LLRM_ARM64_VERIFY") {
         let undefined = crate::mfunc::undefined_reads(&machine);
@@ -326,23 +326,23 @@ fn lower_function(
     machine.unwind = crate::cfi::Unwind::of(function);
     let optsize = flagged(function, &["optsize", "minsize"]);
     machine.optnone = flagged(function, &["optnone"]);
-    crate::prepass::run(&mut machine, optsize);
+    llrm_support::debug::timed("arm64 prepass", || crate::prepass::run(&mut machine, optsize));
     dump("Prepass", &machine);
     if !llrm_support::env_flag!("LLRM_ARM64_NO_COMBINE") {
-        crate::combine::run(&mut machine, optsize);
+        llrm_support::debug::timed("arm64 combine", || crate::combine::run(&mut machine, optsize));
         dump("Combine", &machine);
     }
-    crate::cmpzero::run(&mut machine);
+    llrm_support::debug::timed("arm64 cmpzero", || crate::cmpzero::run(&mut machine));
     dump("CmpZero", &machine);
-    crate::flagcse::run(&mut machine);
+    llrm_support::debug::timed("arm64 flagcse", || crate::flagcse::run(&mut machine));
     dump("FlagCse", &machine);
     // The pin runs it after MachineCSE and MachineCombiner, which make the
     // value read once and the `msub` it must leave alone.
-    crate::condbrtuning::run(&mut machine);
+    llrm_support::debug::timed("arm64 condbrtuning", || crate::condbrtuning::run(&mut machine));
     dump("CondBrTuning", &machine);
-    crate::memcluster::run(&mut machine);
+    llrm_support::debug::timed("arm64 memcluster", || crate::memcluster::run(&mut machine));
     dump("MemCluster", &machine);
-    crate::sibcall::run(&mut machine);
+    llrm_support::debug::timed("arm64 sibcall", || crate::sibcall::run(&mut machine));
     dump("SibCall", &machine);
     machine.calls_never_return = {
         let has = |attrs: &[llrm_mir::opcode::Attribute], name: &str| {
@@ -359,7 +359,7 @@ fn lower_function(
             },
         )
     };
-    crate::prepass::order_copies(&mut machine);
+    llrm_support::debug::timed("arm64 order copies", || crate::prepass::order_copies(&mut machine));
     dump("OrderCopies", &machine);
     if crate::lir_body::checking() {
         // The body carries the edge odds by block position; no pass between
@@ -387,7 +387,7 @@ fn lower_function(
                 )),
     );
     crate::lir_view::set_quad_callee_saved_free(!machine.calls);
-    machine.alloc_odds = Some(crate::layout::edge_odds(module, function, &program.layout, &machine));
+    machine.alloc_odds = llrm_support::debug::timed("arm64 edge odds", || Some(crate::layout::edge_odds(module, function, &program.layout, &machine)));
     let allocate = |machine: &mut crate::mfunc::MFunc, scratch: bool| {
         crate::lir_view::set_scratch_free(scratch);
         // The shared greedy allocator, unless `LLRM_ARM64_LINEAR` asks for
