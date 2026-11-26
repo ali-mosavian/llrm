@@ -566,11 +566,8 @@ fn cold_calls(
     function
         .walk()
         .filter(|&(_, inst)| {
-            let Opcode::Call(info) = &function.instruction(inst).opcode else { return false };
-            Fact::Cold.stated_by(&info.attrs)
-                || llrm_mir::memory::callee(context, function, inst)
-                    .and_then(|one| globals.get(one.0 as usize)?.function())
-                    .is_some_and(|one| Fact::Cold.stated_by(&one.attrs))
+            matches!(function.instruction(inst).opcode, Opcode::Call(_))
+                && llrm_analysis::effects::states(context, globals, function, inst, Fact::Cold)
         })
         .map(|(_, inst)| inst)
         .collect()
@@ -597,30 +594,14 @@ fn accesses(
 }
 
 /// `FindAllMemoryUses`: `value` is read only where its computation folds or
-/// sinks: as [`crate::spill::address_only`], or as an argument of a cold call.
+/// sinks: as an address, or as an argument of a cold call.
 fn folds_in_every_use(
     function: &Function,
     cold: &Cold,
     value: ValueId,
     depth: u32,
 ) -> bool {
-    let users = function.users(value);
-    !users.is_empty()
-        && users.iter().all(|one| {
-            let user = function.instruction(one.user);
-            match user.opcode {
-                Opcode::Load { .. } => user.operands.first() == Some(&Operand::Value(value)),
-                Opcode::Store { .. } => {
-                    user.operands.get(1) == Some(&Operand::Value(value))
-                        && user.operands.first() != Some(&Operand::Value(value))
-                }
-                Opcode::GetElementPtr { .. } => {
-                    depth > 0 && user.result.is_some_and(|result| folds_in_every_use(function, cold, result, depth - 1))
-                }
-                Opcode::Call(_) => cold.contains(&one.user),
-                _ => false,
-            }
-        })
+    crate::spill::address_only_or(function, value, depth, &|user| cold.contains(&user))
 }
 
 /// The bytes an access moves: the pin's `AccessTy`, which AArch64's scaled
