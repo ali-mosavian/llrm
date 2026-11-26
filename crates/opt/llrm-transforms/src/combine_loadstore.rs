@@ -92,8 +92,9 @@ use llrm_analysis::loads::{Available, DEF_MAX_INSTS_TO_SCAN, find_available_load
 use llrm_analysis::memory::Unit;
 use llrm_mir::context::ConstantKind;
 use llrm_mir::edit::Position;
+use llrm_mir::facts::Fact;
 use llrm_mir::module::{InstId, Operand};
-use llrm_mir::opcode::{CastOp, Flags, Opcode};
+use llrm_mir::opcode::{Attribute, CastOp, Flags, Opcode};
 use llrm_mir::types::Type;
 use llrm_mir::valuetracking::nonzero::null_pointer_is_defined;
 
@@ -446,7 +447,8 @@ impl Combiner<'_> {
         let Opcode::Store { volatile: false, .. } = self.function.instruction(store).opcode else { return false };
         let [value, ptr] = self.function.instruction(store).operands[..] else { return false };
         let store_bb = self.function.parent(store).expect("a placed store");
-        let Some(&Operand::Block(dest_bb)) = self.function.instruction(self.function.terminator(store_bb).expect("terminated")).operands.first()
+        let Some(&Operand::Block(dest_bb)) =
+            self.function.instruction(self.function.terminator(store_bb).expect("terminated")).operands.first()
         else {
             return false;
         };
@@ -534,7 +536,8 @@ impl Combiner<'_> {
             .metadata
             .iter()
             .filter(|(kind, node)| {
-                kind == "tbaa" && self.function.instruction(other_store).metadata.iter().any(|(k, n)| k == kind && n == node)
+                kind == "tbaa"
+                    && self.function.instruction(other_store).metadata.iter().any(|(k, n)| k == kind && n == node)
             })
             .cloned()
             .collect();
@@ -671,10 +674,8 @@ impl Combiner<'_> {
     /// global, and the copy and the lifetime markers go.
     ///
     /// DEVIATE 6: the source is a constant global itself (not a constant
-    /// expression of one); its alignment is not raised
-    /// (`getOrEnforceKnownAlignment`); a call that takes the alloca as an
-    /// argument keeps the alloca. Exit: constant-GEP sources, then the
-    /// `nocapture readonly` arguments of `isOnlyCopiedFromConstantMemory`.
+    /// expression of one) and its alignment is not raised
+    /// (`getOrEnforceKnownAlignment`). Exit: constant-GEP sources.
     fn replace_alloca_copied_from_constant(
         &mut self,
         alloca: InstId,
@@ -706,9 +707,10 @@ impl Combiner<'_> {
     /// ([:46](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/InstCombine/InstCombineLoadStoreAlloca.cpp#L46)):
     /// the one `memcpy`/`memmove` that writes the alloca, whose source is
     /// constant memory, and the lifetime markers, when nothing else writes
-    /// it or lets it escape: only loads, `memcpy` sources, and pointer
-    /// arithmetic and phis and selects of it. A copy through an offset
-    /// pointer, or after a phi or select, is rejected.
+    /// it or lets it escape: only loads, `memcpy` sources, calls that
+    /// neither keep nor write it, and pointer arithmetic and phis and
+    /// selects of it. A copy through an offset pointer, or after a phi or
+    /// select, is rejected.
     fn only_copied_from_constant_memory(
         &self,
         alloca: InstId,
@@ -742,6 +744,10 @@ impl Combiner<'_> {
                         });
                         work.push((result?, is_offset || !zero));
                     }
+                    // The callee called is read; so is an argument the call
+                    // neither keeps nor writes through.
+                    Opcode::Call(_) if one.index as usize + 1 == instruction.operands.len() => {}
+                    Opcode::Call(_) if self.is_only_read_by(one.user, one.index as usize) => {}
                     Opcode::Call(_) => match self.intrinsic_of(one.user)? {
                         Intrinsic::LifetimeStart | Intrinsic::LifetimeEnd => markers.push(one.user),
                         Intrinsic::MemCpy | Intrinsic::MemMove => {
@@ -776,6 +782,27 @@ impl Combiner<'_> {
             }
         }
         Some((copy?, markers))
+    }
+
+    /// `doesNotCapture(i) && (onlyReadsMemory() || onlyReadsMemory(i))` of
+    /// argument `index` of `call`, at the site or on the callee; never an
+    /// `inalloca` argument, which the call clobbers.
+    fn is_only_read_by(
+        &self,
+        call: InstId,
+        index: usize,
+    ) -> bool {
+        let Opcode::Call(info) = &self.function.instruction(call).opcode else { return false };
+        let Some(site) = info.argument_attrs.get(index) else { return false };
+        let callee = llrm_mir::memory::callee(self.context, self.function, call)
+            .and_then(|one| self.env.globals.get(one.0 as usize)?.function());
+        let parameter = callee.and_then(|one| one.parameter_attrs.get(index));
+        let attrs = || std::iter::once(site).chain(parameter);
+        let states = |fact: Fact| attrs().any(|one| fact.stated_by(one));
+        let in_alloca = attrs().flatten().any(|one| matches!(one, Attribute::Type(name, _) if name == "inalloca"));
+        let reads_only = !llrm_mir::memory::stated(&info.attrs).writes
+            || callee.is_some_and(|one| !llrm_mir::memory::stated(&one.attrs).writes);
+        !in_alloca && states(Fact::NoCapture) && (reads_only || states(Fact::ReadOnly) || states(Fact::ReadNone))
     }
 
     /// `pointsToConstantMemory` of a plain global: a constant that the linker
