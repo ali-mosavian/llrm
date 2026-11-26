@@ -1008,8 +1008,11 @@ impl Uses {
     ) {
         if let Some(old) = self.by_body.remove(&id) {
             for (named, count) in old {
-                if let Some(total) = self.total.get_mut(&named) {
-                    *total -= count;
+                if let std::collections::btree_map::Entry::Occupied(mut total) = self.total.entry(named) {
+                    *total.get_mut() -= count;
+                    if *total.get() == 0 {
+                        total.remove();
+                    }
                 }
             }
         }

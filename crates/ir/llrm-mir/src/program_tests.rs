@@ -223,6 +223,21 @@ fn an_edited_body_is_the_only_one_function_uses_walks_again() {
     assert_eq!(counts::get(counts::Event::UseBodies) - before, 1);
 }
 
+/// A name no body uses any more stayed counted at zero, so the result brought
+/// up to date was not the one worked out afresh (`LLRM_CHECK_MODULES` stopped
+/// every compile that dropped a last use).
+#[test]
+fn function_uses_brought_up_to_date_forget_a_name_no_body_uses() {
+    let with = module("define void @f() {\nentry:\n  ret void\n}\ndefine void @g() {\nentry:\n  call void @f()\n  ret void\n}\n");
+    let without = module("define void @f() {\nentry:\n  ret void\n}\ndefine void @g() {\nentry:\n  ret void\n}\n");
+    let mut analyses = ModuleAnalyses::of(&with, Rc::new(Neutral));
+    analyses.get::<FunctionUses>(&with);
+    analyses.body_edited(without.named("g").unwrap(), &PreservedAnalyses::none());
+    let updated = analyses.get::<FunctionUses>(&without);
+    let afresh = ModuleAnalyses::of(&without, Rc::new(Neutral)).get::<FunctionUses>(&without);
+    assert_eq!(*updated, *afresh);
+}
+
 /// A declaration stands for the definition another module holds; the call
 /// graph runs through it, callees first.
 #[test]
