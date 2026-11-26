@@ -65,6 +65,8 @@ pub enum Event {
     LsrSetupVisits,
     /// A node `ScalarEvolution::expr_contains` visited.
     ScevContainsVisits,
+    /// A buffer `ScalarEvolution`'s operand sort made to merge through.
+    ScevSortBuffers,
     /// A loop LSR chose a solution for (`lsr_solutions`).
     LsrSolutions,
     /// A loop whose solution changed the IR (`lsr_rewritten`).
@@ -135,7 +137,7 @@ pub enum Event {
 
 const SLOTS: usize = 64;
 
-const NAMES: [&str; 49] = [
+const NAMES: [&str; 50] = [
     "function_clones",
     "function_forks",
     "machinings",
@@ -153,6 +155,7 @@ const NAMES: [&str; 49] = [
     "fingerprints",
     "lsr_loops",
     "lsr_prepared",
+    "scev_sort_buffers",
     "scev_contains_visits",
     "lsr_setup_visits",
     "lsr_solutions",
@@ -202,7 +205,7 @@ thread_local! {
     static PASSES: RefCell<Vec<PassRow>> = const { RefCell::new(Vec::new()) };
     /// (pass, analysis, misses): the analyses a pass made the manager compute.
     static ASKS: RefCell<Vec<(&'static str, &'static str, u64)>> = const { RefCell::new(Vec::new()) };
-    static EVENTS: [Cell<u64>; 49] = const { [const { Cell::new(0) }; 49] };
+    static EVENTS: [Cell<u64>; 50] = const { [const { Cell::new(0) }; 50] };
     /// (name, hits, misses) by the address of the name, which is a literal.
     static FOUND: [Cell<usize>; SLOTS] = const { [const { Cell::new(0) }; SLOTS] };
     static ANALYSES: RefCell<Vec<(&'static str, u64, u64)>> = const { RefCell::new(Vec::new()) };
