@@ -651,13 +651,14 @@ fn compiled(
     // those before it were told: a trial that changes only a later stage takes
     // the earlier ones as they were built. The stages are only read when a
     // build writes none.
-    let mut after_mid_end = llrm_transforms::trial::Reuse::default();
-    let mut after_merge = llrm_transforms::trial::Reuse::default();
-    let mut once = |(unrotated, more, unmerged, divided, hinted): (bool, bool, bool, bool, u8)| -> Result<Built, String> {
+    let after_mid_end = llrm_transforms::trial::Reuse::default();
+    let after_merge = llrm_transforms::trial::Reuse::default();
+    let once = |(unrotated, more, unmerged, divided, hinted): (bool, bool, bool, bool, u8)| -> Result<Built, String> {
         let parsed = || -> Result<Program, String> {
             let mut program = program(text, platform)?;
             if refuse_aliases {
-                // The text carries no alias: refuse it rather than drop the symbol.
+                // The text carries no alias: refuse it rather than drop the
+                // symbol.
                 program.modules[0].refuse_aliases("arm64")?;
             }
             if debug {
@@ -668,9 +669,8 @@ fn compiled(
         let program = if level != Level::O0 {
             let optimized = || -> Result<Program, String> {
                 let mut program = parsed()?;
-                let run = |program: &mut Program| {
-                    with_aliases(!refuse_aliases, || mid_end(program, level, dumping.get()))
-                };
+                let run =
+                    |program: &mut Program| with_aliases(!refuse_aliases, || mid_end(program, level, dumping.get()));
                 let go = |program: &mut Program| match (unrotated, more) {
                     (true, _) => llrm_transforms::trial::with_unrotated(|| run(program)),
                     (_, true) => llrm_transforms::trial::with_more_rotation(|| run(program)),
@@ -699,13 +699,14 @@ fn compiled(
             };
             let before = (unrotated, more, hinted, forced.borrow().clone());
             let merged = || -> Result<Program, String> {
-                let mut program = if dumping.get() {
-                    optimized()?
-                } else {
-                    after_mid_end.get_or(before.clone(), optimized)?
-                };
+                let mut program =
+                    if dumping.get() { optimized()? } else { after_mid_end.get_or(before.clone(), optimized)? };
                 let run = |program: &mut Program| with_aliases(!refuse_aliases, || merged_globals(program, level));
-                if unmerged { crate::trial::without_merge(|| run(&mut program))? } else { run(&mut program)? }
+                if unmerged {
+                    crate::trial::without_merge(|| run(&mut program))?
+                } else {
+                    run(&mut program)?
+                }
                 Ok(program)
             };
             if dumping.get() { merged()? } else { after_merge.get_or((before.clone(), unmerged), merged)? }

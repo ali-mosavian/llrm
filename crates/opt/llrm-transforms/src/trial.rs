@@ -30,25 +30,25 @@ use std::cell::{Cell, RefCell};
 /// A build stage's results by the settings of that stage and of every stage
 /// before it. A trial declares the first stage it changes by the settings it
 /// changes: a stage whose key is as before is taken, not built again.
-pub struct Reuse<K, V>(Vec<(K, V)>);
+pub struct Reuse<K, V>(RefCell<Vec<(K, V)>>);
 
 impl<K, V> Default for Reuse<K, V> {
     fn default() -> Self {
-        Reuse(Vec::new())
+        Reuse(RefCell::new(Vec::new()))
     }
 }
 
 impl<K: PartialEq, V: Clone> Reuse<K, V> {
     pub fn get_or(
-        &mut self,
+        &self,
         key: K,
         make: impl FnOnce() -> Result<V, String>,
     ) -> Result<V, String> {
-        if let Some((_, found)) = self.0.iter().find(|(one, _)| *one == key) {
+        if let Some((_, found)) = self.0.borrow().iter().find(|(one, _)| *one == key) {
             return Ok(found.clone());
         }
         let made = make()?;
-        self.0.push((key, made.clone()));
+        self.0.borrow_mut().push((key, made.clone()));
         Ok(made)
     }
 }
