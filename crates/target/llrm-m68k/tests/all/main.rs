@@ -348,6 +348,7 @@ mod unreachable_ends_block;
 mod unroll_at_o1;
 mod unroll_bar;
 mod unroll_bar_68000;
+mod unroll_multiply_call;
 mod unroll_folds_select_fcmp;
 mod unroll_nest_trial;
 mod unroll_o1_trial;

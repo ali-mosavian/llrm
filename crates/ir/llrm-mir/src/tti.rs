@@ -2132,6 +2132,19 @@ pub trait Tti {
         self.unroll_milliclocks_per_byte()
     }
 
+    /// DEVIATE UNROLL-MUL-CALL (owner w12, exit 2026-12-20): the clocks of an
+    /// `i32` multiply by `factor` (`None`: not known) on a target that runs it
+    /// as a call (the 68000 has no `muls.l`); 0 where it is an instruction or
+    /// a short chain. A loop whose counter is multiplied by an invariant is
+    /// rolled to an add by strength reduction; its copies keep one multiply
+    /// each, so the unroll is priced on that loss, whatever the byte rate.
+    fn multiply_by_constant_clocks(
+        &self,
+        _factor: Option<i64>,
+    ) -> i64 {
+        0
+    }
+
     /// DEVIATE UNROLL-TRIAL (beyond the pin; owner 6502, exit 2026-12-05): the
     /// unrolled size, in the unroll units, up to which a loop the threshold
     /// refused is unrolled on trial: the function is simplified and priced
