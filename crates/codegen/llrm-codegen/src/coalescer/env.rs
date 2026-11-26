@@ -549,7 +549,8 @@ thread_local! {
     /// How many [`Join`]s `should_coalesce` has built on this thread, for a
     /// test that a target with no opinion costs none.
     pub static JOINS_BUILT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
-    /// Sides of a [`Join`] whose uses `should_coalesce` has read on this thread.
+    /// Sides of a [`Join`] whose uses `should_coalesce` has read on this
+    /// thread.
     pub static SIDES_SCANNED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
