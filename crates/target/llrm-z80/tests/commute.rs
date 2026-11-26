@@ -72,3 +72,26 @@ fn a_copy_of_a_live_value_does_not_take_hl_from_a_made_address() {
     let asm = text(ir, "main", 0, &Request::new(Level::O2)).expect("compiles");
     assert!(!asm.contains("sla e"), "the doubled index went to de:\n{asm}");
 }
+
+/// An argument read in a later block was still taken to be in the register it
+/// arrived in: the add took it in `hl`, so the doubled or constant operand went
+/// to `bc` (`ld c,l; ld b,h; sla c; rl b` for `add hl, hl`) at every level.
+#[test]
+fn an_argument_read_in_a_later_block_is_not_still_in_its_arrival_register() {
+    let ir = r#"target datalayout = "e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16-S8"
+define i16 @f(i16 %x) nounwind {
+  %c = icmp slt i16 %x, 5
+  br i1 %c, label %a, label %b
+a:
+  %s = add i16 %x, 100
+  ret i16 %s
+b:
+  %t = mul i16 %x, 3
+  ret i16 %t
+}
+"#;
+    for level in [Level::O1, Level::Os] {
+        let asm = text(ir, "f", 0, &Request::new(level)).expect("compiles");
+        assert!(asm.contains("add hl, hl") && !asm.contains("sla"), "x * 2 left hl:\n{asm}");
+    }
+}
