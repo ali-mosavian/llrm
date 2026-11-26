@@ -228,6 +228,7 @@ fn self_calls(
 pub fn eliminate_linear_recursion(
     module: &mut llrm_mir::module::Module,
     layout: &DataLayout,
+    target: std::rc::Rc<dyn llrm_mir::target::Machine>,
     name: GlobalId,
 ) -> bool {
     let Some(body) = module.global(name).function() else { return false };
@@ -235,7 +236,7 @@ pub fn eliminate_linear_recursion(
         return false;
     }
     let mut copy = body.clone();
-    let outer = Outer::of(module, None);
+    let outer = Outer::of(module, Some(target));
     let mut declared = Declared::of(module);
     if eliminate(&mut module.context, layout, &mut copy, &mut declared, &outer, Some(name)) != Outcome::Looped
         || !self_calls(&module.context, &copy, name).is_empty()
