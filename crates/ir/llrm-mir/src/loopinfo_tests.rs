@@ -453,3 +453,31 @@ x:
     let info = LoopInfo::analyze(function, || DomTree::of(function));
     assert!(info.get_loop_for(block(function, "h")).expect("a loop").is_safe_to_clone(function));
 }
+
+/// exec.c -O2: m blocks outside a depth-d loop nest jumped into its innermost
+/// body, and each edge walked the d finished headers again: 242 M instructions
+/// in `analyze` for one function. The chain is followed once.
+#[test]
+fn test_edges_into_a_finished_block_follow_its_header_chain_once() {
+    let steps = |m: i64| {
+        let d = 20i64;
+        let inner = d + 1;
+        // 0 -> {1, x1..xm}, the nest found first; k -> {k+1, k-1} nest the
+        // loops; xk -> inner.
+        let mut succs: Vec<(i64, Vec<i64>)> = (0..m + d + 3).map(|at| (at, Vec::new())).collect();
+        succs[0].1 = [1].into_iter().chain((1..=m).map(|k| inner + k)).collect();
+        for k in 1..=d {
+            succs[k as usize].1 = vec![k + 1, (k - 1).max(1)];
+        }
+        succs[inner as usize].1 = vec![d];
+        for k in 1..=m {
+            succs[(inner + k) as usize].1 = vec![inner];
+        }
+        let nodes: Vec<(i64, &[i64])> = succs.iter().map(|(at, to)| (*at, to.as_slice())).collect();
+        crate::loopinfo::CHAIN_STEPS.with(|one| one.set(0));
+        crate::forest::forest(&nodes, Some(0), &|_| true, &|_, _| false);
+        crate::loopinfo::CHAIN_STEPS.with(std::cell::Cell::get)
+    };
+    let (few, many) = (steps(10), steps(100));
+    assert!(many <= few + 100, "10 edges followed the chain {few} times, 100 edges {many}");
+}
