@@ -526,9 +526,13 @@ fn items_trials(
     let mut options = options;
     let (mut kept, touched) = items_once(module, name, cpu, options, prefixes)?;
     let saved = touched.global_copies;
-    if crate::dagisel::function::tuning()
-        .trial_insts_max
-        .is_some_and(|most| kept.iter().filter(|item| matches!(item, Item::Inst(_))).count() > most)
+    let tuning = crate::dagisel::function::tuning();
+    let cap = if size_build(module, name, options) {
+        tuning.trial_insts_max_at_size.or(tuning.trial_insts_max)
+    } else {
+        tuning.trial_insts_max
+    };
+    if cap.is_some_and(|most| kept.iter().filter(|item| matches!(item, Item::Inst(_))).count() > most)
     {
         prefixes.capped.set(true);
         return Ok((kept, false, options, (false, false)));
