@@ -377,10 +377,8 @@ fn alloca_sizes(
         // as stated: `constrain_allocas` has clamped what the frame does not
         // keep
         let wanted = align.unwrap_or_else(|| layout.align(&module.context.types, allocated));
-        sizes[*index as usize] = Local {
-            size: layout.alloc_size(&module.context.types, allocated) as i64 * count,
-            align: wanted as i64,
-        };
+        sizes[*index as usize] =
+            Local { size: layout.alloc_size(&module.context.types, allocated) as i64 * count, align: wanted as i64 };
     }
     Ok(sizes)
 }
@@ -396,7 +394,8 @@ fn select_built(
     info: &mut FunctionLoweringInfo,
     selected: &mut Vec<Selected>,
 ) -> Result<(), String> {
-    let units = select_block(&mut built.dag, cpu, sized, synthesize, c_symbol_prefix).map_err(|why| format!("{why:?}"))?;
+    let units =
+        select_block(&mut built.dag, cpu, sized, synthesize, c_symbol_prefix).map_err(|why| format!("{why:?}"))?;
     // DEVIATE: refused. A `switch` made of several blocks puts one copy list on
     // all its edges, and a phi read on another edge is lost. Reason: the
     // edges leave blocks the builder made. Exit: split the critical edges

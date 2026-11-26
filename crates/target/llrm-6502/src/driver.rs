@@ -896,7 +896,8 @@ fn tail(
                 _ => ranged_base.as_ref(),
             };
             if let Some((_, split)) = candidate.filter(|(names, _)| names.contains(name)) {
-                let mut other = select_function_with(split, name, request.cpu, false, &request.platform.c_symbol_prefix)?;
+                let mut other =
+                    select_function_with(split, name, request.cpu, false, &request.platform.c_symbol_prefix)?;
                 other.zero_page = request.platform.zero_page;
                 other.tuning = request.level.tuning();
                 let kept = source.unwrap_or(module);

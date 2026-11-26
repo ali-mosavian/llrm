@@ -435,8 +435,9 @@ pub fn call_when_it_pays(
         if selection.call_candidates == 0 || !from_module[at] || function.is_some_and(is_sized) {
             continue;
         }
-        let mut other =
-            with_cold_multiply_calls(loop_called.clone(), || select_function_with(module, name, request.cpu, false, &request.platform.c_symbol_prefix))?;
+        let mut other = with_cold_multiply_calls(loop_called.clone(), || {
+            select_function_with(module, name, request.cpu, false, &request.platform.c_symbol_prefix)
+        })?;
         other.zero_page = request.platform.zero_page;
         other.tuning = request.level.tuning();
         if other.mul_calls() > selection.mul_calls() {
