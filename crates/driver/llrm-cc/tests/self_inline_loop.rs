@@ -1,6 +1,7 @@
 //! A recursion with one call of itself in a loop is copied into itself at -O3
-//! (queens `place`). Needs the Open Watcom tree (tools/ow-fetch.sh) and the m16
-//! clang (`LLRM_CLANG_M16`).
+//! when asked with `-fipa-cp-clone` (a search that recurses on `row + 1`); x86-m32 -O3 makes no copy
+//! by default, as the pin (IPACP-O3 ended 2026-11-26). Needs the Open Watcom
+//! tree (tools/ow-fetch.sh) and the m16 clang (`LLRM_CLANG_M16`).
 
 use std::path::Path;
 use std::process::Command;
@@ -40,18 +41,19 @@ int main(void)
 }
 ";
 
-fn listing_lines(level: &str) -> usize {
-    assert!(
-        llrm_cc::ow_present(),
-        "the Open Watcom tree is missing: run tools/ow-fetch.sh; this test does not skip"
-    );
+fn listing_lines(
+    level: &str,
+    extra: &[&str],
+) -> usize {
+    assert!(llrm_cc::ow_present(), "the Open Watcom tree is missing: run tools/ow-fetch.sh; this test does not skip");
     assert!(
         std::env::var_os("LLRM_CLANG_M16").is_some(),
         "LLRM_CLANG_M16 is not set: this test needs it and does not skip"
     );
     let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!(
-        "selfloop-{}-{}",
+        "selfloop-{}-{}-{}",
         level.trim_start_matches('-'),
+        extra.len(),
         std::process::id()
     ));
     let _ = std::fs::remove_dir_all(&dir);
@@ -59,7 +61,9 @@ fn listing_lines(level: &str) -> usize {
     std::fs::write(dir.join("q.c"), SOURCE).unwrap();
     let run = Command::new(env!("CARGO_BIN_EXE_llrm-cc-bin"))
         .env("LLRM_CC_TARGET", "x86_32-wat")
-        .args([level, "-w", "-S", "-march=i486", "-mabi=sysv", "-o"])
+        .args([level, "-w", "-S", "-march=i486", "-mabi=sysv"])
+        .args(extra)
+        .arg("-o")
         .arg(dir.join("q.s"))
         .arg(dir.join("q.c"))
         .output()
@@ -68,13 +72,15 @@ fn listing_lines(level: &str) -> usize {
     std::fs::read_to_string(dir.join("q.s")).unwrap().lines().count()
 }
 
-/// queens -O3 ran 154117 clocks (gcc 94851) with `place` calling itself once:
-/// its one call in a loop was no tree, and the bar was read again on the loop
-/// that tail-call elimination leaves (22 -> 27 `gcc_insns`). The listing was
-/// 135 lines with either missing, 504 with both fixed (-O2: 105).
+/// A recursion calling itself once in a loop was no tree, and the bar was read again on the loop
+/// that tail-call elimination leaves (22 -> 27 `gcc_insns`). With
+/// `-fipa-cp-clone` the listing is 2,583 lines, with the copy missing about
+/// 130; by default (no clone, as the pin) -O3 makes no copy and is no longer
+/// than -O2 (243).
 #[test]
-fn a_recursion_with_one_call_in_a_loop_is_copied_into_itself_at_o3_only() {
-    let (o2, o3) = (listing_lines("-O2"), listing_lines("-O3"));
-    assert!(o3 > 300, "-O3 listing is {o3} lines");
-    assert!(o2 < 200, "-O2 listing is {o2} lines");
+fn a_recursion_with_one_call_in_a_loop_is_copied_into_itself_at_o3_only_when_asked() {
+    let (o2, o3, asked) =
+        (listing_lines("-O2", &[]), listing_lines("-O3", &[]), listing_lines("-O3", &["-fipa-cp-clone"]));
+    assert!(asked > 1000, "-O3 -fipa-cp-clone listing is {asked} lines");
+    assert!(o3 <= o2, "-O3 listing is {o3} lines by default, -O2 {o2}");
 }

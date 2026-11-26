@@ -871,8 +871,8 @@ pub struct Tuning {
     /// `pass_tail_recursion` runs early, `passes.def` before
     /// `pass_ipa_inline`), not after (D10).
     pub recursive_tre_first: (bool, bool),
-    /// DEVIATE IPACP-O3 (owner x86-m32-c, exit 2026-12-20): ipa-cp clones at
-    /// -O3, as gcc's `-fipa-cp-clone` is on there; the pin makes none
+    /// DEVIATE IPACP-O3 (m64 only, owner x86-m32-c, exit 2026-12-20): ipa-cp
+    /// clones at -O3, as gcc's `-fipa-cp-clone` is on there; the pin makes none
     /// (`Tti::ipa_cp_clones_at_speed`). At -O2 neither gcc nor the pin clones
     /// (`Tti::ipa_cp_clones_at_o2`; IPACP-O2 ended 2026-11-18).
     pub ipa_cp_clones_at_speed: bool,
