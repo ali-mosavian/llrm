@@ -1960,3 +1960,26 @@ fn test_a_carried_value_looks_at_the_definitions_of_each_register_in_its_chain()
     assert!(looks > 0, "premise: no definition was looked at");
     assert!(looks <= 4, "{looks} instructions looked at for a register with one definition and 300 reads");
 }
+
+/// One value of an immediate, copied 150 times, then defined again so that no
+/// copy can join it: each copy is made again as the immediate, and each took
+/// a read from the source. The source's interval was cut back to its uses once
+/// per copy, not once after them all as the pin defers it
+/// (`LateRematUpdateThreshold`, `lateLiveIntervalUpdate`).
+#[test]
+fn test_a_value_with_many_copies_made_again_is_cut_back_once() {
+    let copies = 150u32;
+    let mut insns = vec![def(1)];
+    insns.extend((0..copies).map(|k| copy(10 + k, 1)));
+    insns.push(def(1));
+    insns.push(read(1));
+    insns.extend((0..copies).map(|k| read(10 + k)));
+    let was = body(&[(&insns, &[])]);
+    let mut lis = LiveIntervals::new(&was);
+    crate::liveness::liveintervals::SHRUNK.with(|one| one.borrow_mut().clear());
+    super::driver::run(&mut lis, &AnyClass, &[0]);
+    let shrunk = crate::liveness::liveintervals::SHRUNK.with(|one| one.borrow().iter().filter(|&&r| r == 1).count());
+    assert!(shrunk <= 2, "the source was cut back {shrunk} times for {copies} copies");
+    let made_again = names(&lis).iter().filter(|(d, u)| d.len() == 1 && d[0] >= 10 && u.is_empty()).count();
+    assert_eq!(made_again, copies as usize, "premise: every copy is made again as the immediate");
+}

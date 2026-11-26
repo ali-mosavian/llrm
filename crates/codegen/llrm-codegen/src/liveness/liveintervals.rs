@@ -1941,7 +1941,7 @@ mod tests {
 #[cfg(test)]
 thread_local! {
     /// The registers `shrink_to_uses` was asked about, in order.
-    static SHRUNK: std::cell::RefCell<Vec<u32>> = const { std::cell::RefCell::new(Vec::new()) };
+    pub(crate) static SHRUNK: std::cell::RefCell<Vec<u32>> = const { std::cell::RefCell::new(Vec::new()) };
 }
 
 #[cfg(test)]
