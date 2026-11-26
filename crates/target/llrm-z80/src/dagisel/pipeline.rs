@@ -582,7 +582,7 @@ pub fn select_block(
         tli.set_libcall_name(ISD::UMulLoHi, MVT::I16, "__umulhisi3");
         tli.set_libcall_name(ISD::SMulLoHi, MVT::I16, "__mulhisi3");
     }
-    let mut lowering = Z80Lowering { sized: sized && !speed_routines };
+    let mut lowering = Z80Lowering { tli: &tli, sized: sized && !speed_routines };
     let mut combines = Z80Combines {
         long_multiply: (sized || all_calls) && long_multiply,
         strict: STRICT_LEVEL.with(std::cell::Cell::get),

@@ -10,8 +10,8 @@ use llrm_codegen::backend::selectiondag::mvt::EVT;
 use llrm_codegen::backend::selectiondag::{DagConfig, SDValue, SelectionDAG};
 
 fn legalize(dag: &mut SelectionDAG) -> SDValue {
-    let tli = target_lowering();
-    DagLegalizer::new(dag, &tli, &mut MosLowering { widen_products: false, sized: false, long_steps: true })
+    let tli = target_lowering("");
+    DagLegalizer::new(dag, &tli, &mut MosLowering { tli: &tli, widen_products: false, sized: false, long_steps: true })
         .run()
         .expect("legalizes");
     dag.get_root()

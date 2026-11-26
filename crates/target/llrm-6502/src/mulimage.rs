@@ -104,7 +104,7 @@ pub fn expand_when_unshared(
             left += selection.mul_calls();
             continue;
         }
-        let mut other = select_function_with(module, name, request.cpu, true)?;
+        let mut other = select_function_with(module, name, request.cpu, true, &request.platform.c_symbol_prefix)?;
         other.zero_page = request.platform.zero_page;
         other.tuning = request.level.tuning();
         left += other.mul_calls();
@@ -268,7 +268,7 @@ pub fn widen_when_it_pays(
         if selection.mul_calls() == 0 || !from_module[at] {
             continue;
         }
-        let mut other = select_function_with(module, name, request.cpu, false);
+        let mut other = select_function_with(module, name, request.cpu, false, &request.platform.c_symbol_prefix);
         if let Ok(other) = other.as_mut() {
             other.zero_page = request.platform.zero_page;
             other.tuning = request.level.tuning();
@@ -436,7 +436,7 @@ pub fn call_when_it_pays(
             continue;
         }
         let mut other =
-            with_cold_multiply_calls(loop_called.clone(), || select_function_with(module, name, request.cpu, false))?;
+            with_cold_multiply_calls(loop_called.clone(), || select_function_with(module, name, request.cpu, false, &request.platform.c_symbol_prefix))?;
         other.zero_page = request.platform.zero_page;
         other.tuning = request.level.tuning();
         if other.mul_calls() > selection.mul_calls() {

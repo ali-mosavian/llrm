@@ -157,7 +157,7 @@ pub fn select_function(
     name: &str,
     cpu: Cpu,
 ) -> Result<Selection, String> {
-    select_function_with(module, name, cpu, false)
+    select_function_with(module, name, cpu, false, "")
 }
 
 /// Where a product of two words is a widening multiply (two routines that add
@@ -261,12 +261,14 @@ pub fn is_sized(function: &Function) -> bool {
 }
 
 /// [`select_function`]; `inline_multiplies` expands every `x * c` that can be
-/// shifts and an add, as a function not tuned for size does.
+/// shifts and an add, as a function not tuned for size does;
+/// `c_symbol_prefix` is the platform's, for the C routines a libcall names.
 pub fn select_function_with(
     module: &Module,
     name: &str,
     cpu: Cpu,
     inline_multiplies: bool,
+    c_symbol_prefix: &str,
 ) -> Result<Selection, String> {
     let id = module.named(name).ok_or_else(|| format!("no function @{name}"))?;
     let function = module
@@ -299,7 +301,7 @@ pub fn select_function_with(
             Some((function, block)),
             block,
             built,
-            (cpu, sized, inline_multiplies),
+            (cpu, sized, inline_multiplies, c_symbol_prefix),
             &mut info,
             &mut selected,
         );
@@ -390,11 +392,11 @@ fn select_built(
     top: Option<(&Function, BlockId)>,
     block: BlockId,
     mut built: BlockDag,
-    (cpu, sized, synthesize): (Cpu, bool, bool),
+    (cpu, sized, synthesize, c_symbol_prefix): (Cpu, bool, bool, &str),
     info: &mut FunctionLoweringInfo,
     selected: &mut Vec<Selected>,
 ) -> Result<(), String> {
-    let units = select_block(&mut built.dag, cpu, sized, synthesize).map_err(|why| format!("{why:?}"))?;
+    let units = select_block(&mut built.dag, cpu, sized, synthesize, c_symbol_prefix).map_err(|why| format!("{why:?}"))?;
     // DEVIATE: refused. A `switch` made of several blocks puts one copy list on
     // all its edges, and a phi read on another edge is lost. Reason: the
     // edges leave blocks the builder made. Exit: split the critical edges
@@ -431,7 +433,7 @@ fn select_built(
     }
     selected.push(Selected { block, dag: built.dag, units, live_ins: built.live_ins, edges });
     for (extra, made) in built.extra {
-        select_built(None, extra, made, (cpu, sized, synthesize), info, selected)?;
+        select_built(None, extra, made, (cpu, sized, synthesize, c_symbol_prefix), info, selected)?;
     }
     Ok(())
 }

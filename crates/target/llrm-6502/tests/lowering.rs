@@ -33,7 +33,7 @@ fn load(
 /// on the high words, joined by the carry (result 1).
 #[test]
 fn an_i32_add_is_a_word_uaddo_and_a_word_uaddo_carry() {
-    let tli = target_lowering();
+    let tli = target_lowering("");
     let mut dag = SelectionDAG::new(DagConfig::default());
     let [a, b] = [1, 2].map(|slot| load(&mut dag, EVT::I32, slot));
     let add = dag.get_node(ISD::Add, EVT::I32, &[a, b]);
@@ -54,7 +54,7 @@ fn an_i32_add_is_a_word_uaddo_and_a_word_uaddo_carry() {
 /// the legalizer (which has no libcall conversion).
 #[test]
 fn multiply_divide_and_shifts_are_legal_instructions() {
-    let tli = target_lowering();
+    let tli = target_lowering("");
     for op in [ISD::Mul, ISD::SDiv, ISD::SRem, ISD::Shl, ISD::Srl, ISD::Sra] {
         for vt in [EVT::I8, EVT::I16] {
             assert_eq!(tli.operation_action(op, vt), Action::Legal, "{op:?} {vt:?}");

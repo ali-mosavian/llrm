@@ -143,7 +143,21 @@ struct Maps {
     /// The `size_libcall_names` called only in a function tuned for size: at
     /// speed the expansion stays inline.
     size_only: HashMap<(ISD, MVT), ()>,
+    /// The routine names of both libcall tables that are the C library's.
+    c_library: HashMap<&'static str, ()>,
 }
+
+/// Whose symbol a libcall's routine is: the C library's, which a target
+/// spells as its ABI spells C symbols, or the compiler runtime's, called as
+/// named.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SymbolOrigin {
+    CLibrary,
+    Runtime,
+}
+
+/// A target's spelling of a C symbol.
+type CSymbol = std::sync::Arc<dyn Fn(&str) -> String + Send + Sync>;
 
 #[derive(Clone)]
 pub struct TargetLowering {
@@ -198,6 +212,8 @@ pub struct TargetLowering {
     /// The object spelling of a routine's name where the convention decorates
     /// it (`___addsf3@3`).
     libcall_symbols: HashMap<String, (String, u32)>,
+    /// [`Self::set_c_symbol`]'s; none: a C symbol is spelled as named.
+    c_symbol: Option<CSymbol>,
     /// `isSExtCheaperThanZExt`: `i32` to `i64` where the target extends signed
     /// for free (AArch64's `sxtw` in an addressing mode); no x86 override.
     sext_cheaper_i32_i64: bool,
@@ -241,13 +257,6 @@ const LIBM: [(ISD, [&str; 3]); 10] = [
     (ISD::FLog2, ["log2f", "log2", "log2l"]),
 ];
 
-/// Whether `name` is one of the C library's routines a libcall names (libm's),
-/// a symbol the target spells as its ABI spells C symbols, unlike
-/// compiler-rt's `__addsf3`.
-pub fn is_c_library_routine(name: &str) -> bool {
-    name == "rintl" || LIBM.iter().any(|(_, names)| names.contains(&name))
-}
-
 impl TargetLowering {
     /// Every action `Legal`: a table nothing has been set in.
     pub fn empty(types: TargetLoweringInfo) -> TargetLowering {
@@ -269,6 +278,7 @@ impl TargetLowering {
             fast_divide_in_loops: false,
             size_only: false,
             libcall_symbols: HashMap::default(),
+            c_symbol: None,
             sext_cheaper_i32_i64: false,
             sdiv_pow2_cmov: Vec::new(),
             byte_equality: false,
@@ -276,6 +286,8 @@ impl TargetLowering {
             min_stack_argument_alignment: 1,
         };
         table.set_default_integer_libcalls();
+        // `RTLIB::RINT_F128` ([`Self::libcall_name`]) is libm's
+        std::sync::Arc::make_mut(&mut table.maps).c_library.insert("rintl", ());
         // `TargetLoweringBase`: `VAARG` is expanded unless the target says
         // otherwise.
         table.set_operation_action(ISD::VAArg, MVT::Other, Action::Expand);
@@ -344,27 +356,47 @@ impl TargetLowering {
 
     /// `RTLIB::RINT_F32` and the other libm routines of `RuntimeLibcalls.def`:
     /// the C library's names, `f` for `float`, none for `double`, `l` for
-    /// the 80-bit `long double`. They are C symbols: a target decorates them
-    /// as its ABI does ([`is_c_library_routine`]); compiler-rt's are not.
+    /// the 80-bit `long double`.
     pub fn set_libm_libcall_names(&mut self) {
         for (op, names) in LIBM {
             for (vt, name) in [MVT::F32, MVT::F64, MVT::F80].into_iter().zip(names) {
-                self.set_libcall_name(op, vt, name);
+                self.set_c_library_libcall_name(op, vt, name);
             }
         }
     }
 
     /// Every routine the target may call after legalization (the names of
-    /// both libcall tables, and `RINT_F128`): the symbols a whole-program
-    /// link must keep a definition of (`InputFile::Symbol::isLibcall`).
+    /// both libcall tables): the symbols a whole-program link must keep a
+    /// definition of (`InputFile::Symbol::isLibcall`).
     pub fn libcall_routines(&self) -> std::collections::BTreeSet<&'static str> {
         let tables = [&self.maps.libcall_names, &self.maps.size_libcall_names];
-        let mut names: std::collections::BTreeSet<_> =
-            tables.into_iter().flat_map(|one| one.values().copied()).collect();
-        if self.maps.libcall_names.contains_key(&(ISD::FRint, MVT::F80)) {
-            names.insert("rintl");
-        }
-        names
+        tables.into_iter().flat_map(|one| one.values().copied()).collect()
+    }
+
+    /// [`Self::set_libcall_name`] for a routine of the C library.
+    pub fn set_c_library_libcall_name(
+        &mut self,
+        op: ISD,
+        vt: MVT,
+        name: &'static str,
+    ) {
+        self.set_libcall_name(op, vt, name);
+        std::sync::Arc::make_mut(&mut self.maps).c_library.insert(name, ());
+    }
+
+    pub fn libcall_origin(
+        &self,
+        name: &str,
+    ) -> SymbolOrigin {
+        if self.maps.c_library.contains_key(name) { SymbolOrigin::CLibrary } else { SymbolOrigin::Runtime }
+    }
+
+    /// How the target spells a C symbol in the object.
+    pub fn set_c_symbol(
+        &mut self,
+        spell: impl Fn(&str) -> String + Send + Sync + 'static,
+    ) {
+        self.c_symbol = Some(std::sync::Arc::new(spell));
     }
 
     /// `setLibcallName` for the integer operation `op` of `vt`.
@@ -519,12 +551,19 @@ impl TargetLowering {
     }
 
     /// How a call to the routine `name` spells it: as the C compiler spelled
-    /// the definition, else the name.
+    /// the definition, else as the target spells a C symbol where the routine
+    /// is the C library's, else the name.
     pub fn libcall_symbol(
         &self,
         name: &str,
     ) -> String {
-        self.libcall_symbols.get(name).map_or_else(|| name.to_owned(), |(symbol, _)| symbol.clone())
+        if let Some((symbol, _)) = self.libcall_symbols.get(name) {
+            return symbol.clone();
+        }
+        match (self.libcall_origin(name), &self.c_symbol) {
+            (SymbolOrigin::CLibrary, Some(spell)) => spell(name),
+            _ => name.to_owned(),
+        }
     }
 
     /// `getLibcallName` of the routine `op` of `vt` calls, if the target has
