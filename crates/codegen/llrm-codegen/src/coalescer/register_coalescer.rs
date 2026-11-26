@@ -81,6 +81,17 @@ fn eliminate_dead_defs(
     }
 }
 
+thread_local! {
+    static DEAD_COPIES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// Copies this thread's coalescer found unread and erased: copies that reached
+/// it with nothing reading them, which `DeadMachineInstructionElim` should
+/// have removed before it.
+pub fn dead_copies_erased() -> usize {
+    DEAD_COPIES.with(std::cell::Cell::get)
+}
+
 /// `RegisterCoalescer::JoinResult`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum JoinResult {
@@ -201,6 +212,7 @@ pub fn join_copy(
     // sometimes dead copies slip through, and we can't generate invalid live
     // ranges.
     if lis.all_defs_are_dead(copy) {
+        DEAD_COPIES.with(|n| n.set(n.get() + 1));
         eliminate_dead_defs(lis, state, vec![copy]);
         lis.remove_interval(cp.dst_reg());
         return JoinResult::Joined;
