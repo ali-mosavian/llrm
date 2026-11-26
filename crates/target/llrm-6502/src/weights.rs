@@ -9,11 +9,14 @@
 //! ten (`extension_chain_fused`: +96 B, 1,014 clocks estimated, 235 measured).
 
 use llrm_analysis::scev::{Cx, ScalarEvolution};
+use llrm_mir::context::{ConstantId, ConstantKind, GlobalId};
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::domtree::DomTree;
 use llrm_mir::loopinfo::LoopInfo;
-use llrm_mir::module::{Function, Module};
+use llrm_mir::module::{Function, Module, Operand};
+use llrm_mir::opcode::Opcode;
 use llrm_mir::valuetracking::AssumptionCache;
+use std::collections::HashMap;
 
 /// The trips a loop weighs when ScalarEvolution does not count it.
 const GUESSED_TRIPS: u64 = 10;
@@ -56,6 +59,73 @@ pub fn block_weights(
     weights
 }
 
+/// The integer constants each function's direct calls pass, one entry a call
+/// shape and how many calls have it. Collected once a module.
+///
+/// DEVIATE INLINE-SITE-TRIPS (beyond the pin, whose `InlineCost` knows no trip
+/// counts; owner w11, exit 2026-12-20, row 6502-INLINE-SITE-TRIPS): an inlined
+/// copy has the constants and the call it is judged against did not, so the
+/// call's loops weighed ten trips against the copy's counted ones and the
+/// paying copy was put back.
+#[derive(Default)]
+pub struct CallSites(HashMap<GlobalId, HashMap<Vec<Option<ConstantId>>, u64>>);
+
+impl CallSites {
+    pub fn of(module: &Module) -> Self {
+        let mut found = Self::default();
+        for (_, _, caller) in module.functions() {
+            for (_, inst) in caller.walk() {
+                let call = caller.instruction(inst);
+                if !matches!(call.opcode, Opcode::Call(_)) {
+                    continue;
+                }
+                let Some(callee) = llrm_mir::memory::callee(&module.context, caller, inst) else { continue };
+                let Some(function) = module.global(callee).function() else { continue };
+                let constant = |one: &Operand| match one {
+                    Operand::Constant(id) if matches!(module.context.get(*id).kind, ConstantKind::Int(_)) => Some(*id),
+                    _ => None,
+                };
+                let arguments = call.operands.iter().take(function.parameters().len()).map(constant).collect();
+                *found.0.entry(callee).or_default().entry(arguments).or_insert(0) += 1;
+            }
+        }
+        found
+    }
+
+    /// [`block_weights`] of the function `name` with the trips its calls'
+    /// constant arguments give its loops, averaged over the calls. A call that
+    /// passes no constant counts the function as written.
+    pub fn block_weights(
+        &self,
+        module: &Module,
+        name: &str,
+        layout: &DataLayout,
+    ) -> Vec<u64> {
+        let Some(id) = module.named(name) else { return Vec::new() };
+        let Some(function) = module.global(id).function() else { return Vec::new() };
+        let constant = |shapes: &&HashMap<Vec<Option<ConstantId>>, u64>| {
+            shapes.keys().any(|shape| shape.iter().any(Option::is_some))
+        };
+        let Some(shapes) = self.0.get(&id).filter(constant) else {
+            return block_weights(module, function, layout);
+        };
+        let mut total = vec![0u64; function.block_capacity()];
+        for (shape, &calls) in shapes {
+            let mut bound = function.clone();
+            for (&parameter, constant) in function.parameters().iter().zip(shape) {
+                if let Some(constant) = constant {
+                    bound.replace_all_uses_with(parameter, Operand::Constant(*constant));
+                }
+            }
+            for (sum, one) in total.iter_mut().zip(block_weights(module, &bound, layout)) {
+                *sum += one * calls;
+            }
+        }
+        let calls: u64 = shapes.values().sum();
+        total.iter().map(|sum| (sum / calls).max(1)).collect()
+    }
+}
+
 /// `weights` with each block that one branch with `!prof` weights decides
 /// scaled by its share of the branch: the block a loop's counter wraps into
 /// runs once per page, not once per trip. A block weighs at least one.
@@ -64,8 +134,7 @@ pub fn by_branch_weights(
     function: &Function,
     weights: &mut [u64],
 ) {
-    use llrm_mir::module::{MetadataOperand, Operand};
-    use llrm_mir::opcode::Opcode;
+    use llrm_mir::module::MetadataOperand;
     for block in function.layout() {
         let [from] = function.predecessors(*block)[..] else { continue };
         let Some(jump) = function.terminator(from) else { continue };
