@@ -1578,11 +1578,10 @@ impl TargetLowering {
                 t.set_ops(&[PseudoFMin, PseudoFMax], &[vt], Legal);
                 // (no FSINCOS node here: nothing builds one)
                 t.set_ops(&[FSin, FCos], &[vt], Expand);
-                // The pin's strict `rint` of an SSE value is the routine
-                // `rint`/`rintf` (`roundsd` needs
-                // SSE4.1); `frndint` is the x87's, and this type is not in an
-                // x87 register.
-                t.set_ops(&[StrictFRint], &[vt], Expand);
+                // The pin's `rint` of an SSE value, strict or not, is the
+                // routine `rint`/`rintf` (`roundsd` needs SSE4.1); `frndint`
+                // is the x87's, and this type is not in an x87 register.
+                t.set_ops(&[FRint, StrictFRint], &[vt], Expand);
             }
             t.set_ops(&[FpExtend], &[MVT::F32, MVT::F64], Custom);
         } else {

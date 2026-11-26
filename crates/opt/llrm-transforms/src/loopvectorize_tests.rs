@@ -1400,6 +1400,7 @@ fn a_count_of_a_compare_beside_a_select_sum_is_widened_without_interleaving() {
 const EARLY_EXIT_DIFFER: &str = include_str!("../tests/lv/early_exit_differ.ll");
 const EARLY_EXIT_INDEX: &str = include_str!("../tests/lv/early_exit_index.ll");
 const EARLY_EXIT_FIND: &str = include_str!("../tests/lv/early_exit_find.ll");
+const EARLY_EXIT_OFFSET: &str = include_str!("../tests/lv/early_exit_offset.ll");
 
 /// `differ` of memory_expansion (a byte compare that leaves at the first
 /// difference) stayed a scalar loop, 1.69 M instructions against clang's 0.93
@@ -1513,4 +1514,30 @@ define i16 @g() {\n\
     );
     assert!(count(&text, "<8 x i16>") > 0, "{text}");
     assert_eq!(count(&text, "memcheck"), 0, "{text}");
+}
+
+/// `to[1 + i] != from[2 + i]` (memcpy_runtime's check) reads the stepped
+/// induction as an index, so rotation leaves the latch a one-incoming phi
+/// between the step and the induction; the planner saw no step instruction and
+/// the loop stayed scalar (m64 -O3: 299,117 instructions against the pin's
+/// 86,601). The pin's VPlan reads such a phi as its value.
+#[test]
+fn an_early_exit_loop_whose_step_comes_through_a_one_incoming_phi_is_widened() {
+    let scalar = crate::testing::parsed(EARLY_EXIT_OFFSET);
+    let mut module = crate::testing::parsed(EARLY_EXIT_OFFSET);
+    let mut manager = llrm_mir::passes::PassManager::default();
+    manager.add(LoopVectorize {
+        always: true,
+        only_when_forced: false,
+        compares: true,
+        interleaves: false,
+        very_cheap: false,
+    });
+    let machine = llrm_arm64::machine::Arm64Machine { platform: llrm_arm64::machine::Platform::Linux };
+    manager.run_module(&mut module, std::rc::Rc::new(machine)).unwrap();
+    let text = crate::testing::printed(&module);
+    assert!(text.contains("vector.early.exit:"), "the loop was not widened:\n{text}");
+    let inputs: Vec<[i128; 1]> = [0, 7, 15, 16, 17, 1183, 1184, 1199, 1200].iter().map(|&k| [k]).collect();
+    let inputs: Vec<&[i128]> = inputs.iter().map(|one| &one[..]).collect();
+    assert_eq!(crate::testing::results(&module, &inputs), crate::testing::results(&scalar, &inputs), "{text}");
 }
