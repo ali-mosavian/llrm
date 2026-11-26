@@ -186,6 +186,14 @@ impl Tti for Z80Tti {
         true
     }
 
+    /// The pin keeps a recursion whose result joins a phi before the
+    /// operation. With three register pairs, a loop that carries several wide
+    /// arguments copies them through the frame each trip, which costs more
+    /// than the call's pushes.
+    fn eliminates_accumulator_through_join(&self) -> bool {
+        false
+    }
+
     /// No jump through a register: `indirectbr` is a `switch` over block
     /// numbers (`IndirectBrExpandPass`).
     fn expands_indirect_br(&self) -> bool {
