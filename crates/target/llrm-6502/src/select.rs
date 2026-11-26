@@ -27,7 +27,7 @@ use llrm_support::hash::HashMap;
 
 use crate::REGISTER_INFO;
 use crate::alloc;
-use crate::dagisel::function::{Selected, Selection};
+use crate::dagisel::function::{Local, Selected, Selection};
 use crate::dagisel::generated::ids::{opcode as op, reg as ids};
 use crate::dagisel::generated::instrinfo;
 use crate::dagisel::hooks::Cpu;
@@ -907,16 +907,16 @@ fn sole_use_constants(items: &[Item]) -> SoleUse {
 /// spike has no dynamic allocas. Exit: with them.
 fn lay_out_frame(
     blocks: &[Selected],
-    locals: &[i64],
+    locals: &[Local],
 ) -> (Layout, usize) {
     let mut offsets = std::collections::BTreeMap::new();
     for one in blocks {
         offsets.extend(one.dag.fixed_offsets.iter().map(|(index, offset)| ((-index - 1) as usize, *offset)));
     }
     let fixed = offsets.keys().max().map_or(0, |last| last + 1);
-    let object = |size, offset| Object { size, align: 1, offset, callee_saved: false, dead: false };
-    let mut objects: Vec<Object> = (0..fixed).map(|at| object(1, offsets.get(&at).copied().unwrap_or(0))).collect();
-    objects.extend(locals.iter().map(|&size| object(size, 0)));
+    let object = |size, align, offset| Object { size, align, offset, callee_saved: false, dead: false };
+    let mut objects: Vec<Object> = (0..fixed).map(|at| object(1, 1, offsets.get(&at).copied().unwrap_or(0))).collect();
+    objects.extend(locals.iter().map(|local| object(local.size, local.align, 0)));
     let max_call_frame = blocks
         .iter()
         .flat_map(|one| one.dag.nodes().iter().map(move |node| (one, node)))
@@ -1044,6 +1044,11 @@ fn location(
         NodeData::Const { bits, .. } => Ok(Operand::Imm(bits as i64)),
         NodeData::FrameIndex(index) => {
             let at = if index < 0 { (-index - 1) as usize } else { cells.fixed + index as usize };
+            // a stack argument of a realigned frame is at the old `rs0`, not at
+            // a distance from this one
+            if index < 0 && cells.frame.realigned() {
+                return Ok(Operand::FrameIndex(at));
+            }
             Ok(Operand::Imm(cells.frame.address(at)))
         }
         NodeData::Block(block) => {
@@ -1255,7 +1260,17 @@ fn lower(
                             .iter()
                             .any(|input| one.dag.nodes()[input.node as usize].opcode == ISD::TargetFrameIndex);
                     if framed {
-                        if let (Some(Operand::Imm(base)), Some(Operand::Imm(extra))) =
+                        if let (Some(&Operand::FrameIndex(index)), Some(&Operand::Imm(extra))) =
+                            (operands.get(at), operands.get(at + 1))
+                        {
+                            let distance = cells.frame.entry_offset(index) + extra;
+                            let pointer = cells.word();
+                            let (add, offset) =
+                                if (0..=255).contains(&distance) { (0, distance) } else { (distance, 0) };
+                            all.push(old_stack_pointer(cells, &pointer, add));
+                            operands[at] = pointer;
+                            operands[at + 1] = Operand::Imm(offset);
+                        } else if let (Some(Operand::Imm(base)), Some(Operand::Imm(extra))) =
                             (operands.get(at).cloned(), operands.get(at + 1).cloned())
                         {
                             let distance = base + extra;
@@ -1270,7 +1285,16 @@ fn lower(
                             }
                         }
                     }
-                    all.push(MInst::new(code, operands));
+                    if code == op::LEASP16
+                        && let Some(&Operand::FrameIndex(index)) = operands.get(1)
+                    {
+                        let add = cells.frame.entry_offset(index);
+                        all.push(old_stack_pointer(cells, &operands[0], add));
+                    } else if operands.iter().any(|operand| matches!(operand, Operand::FrameIndex(_))) {
+                        return Err("a stack argument's address is used where a realigned frame cannot give it".into());
+                    } else {
+                        all.push(MInst::new(code, operands));
+                    }
                     all.extend(after);
                     Ok(all)
                 }
@@ -1278,6 +1302,15 @@ fn lower(
         }
         other => Err(format!("{other:?} is not a machine node")),
     }
+}
+
+/// `to := old rs0 + add` in a realigned frame.
+fn old_stack_pointer(
+    cells: &Cells<'_>,
+    to: &Operand,
+    add: i64,
+) -> MInst {
+    MInst::new(spill::LEAOLD, vec![to.clone(), Operand::Imm(add), Operand::Imm(cells.frame.old_stack_pointer())])
 }
 
 /// At size the speed multiply (`hotmultiply::fast_bytes` more, linked once) is
