@@ -102,9 +102,12 @@ def net_code(ours: dict | None, language: str, program: str, level: str) -> int 
     return bench.net_code(ours["code"], level)
 
 
-def reference_level(level: str) -> str:
-    """The references' build a cell of C or Nib is judged against: its own level, and their -O2 for -O3, which none of them has (oversight, 2026-11-26)."""
-    return "O2" if level == "O3" else level
+def judged_by(program: str, language: str, level: str, present: set[str]) -> tuple[str, tuple[str, ...], str]:
+    """(bar program, reference compilers, their level) of a cell of ours. C and Nib: the level of the cell, and the references' -O2 for -O3, which none of them has (oversight,
+    2026-11-26). BASIC: the references' -O2."""
+    if language in ("c", "nib"):
+        return bench.bar_program(program, language, present), C_REFS, "O2" if level == "O3" else level
+    return program, BAS_REFS, "O2"
 
 
 def rows(table: dict) -> tuple[list[tuple], collections.Counter]:
@@ -116,10 +119,7 @@ def rows(table: dict) -> tuple[list[tuple], collections.Counter]:
         if language in C_REFS + BAS_REFS or language not in OURS:
             continue
         ours = counts(value, program, language)
-        if language in ("c", "nib"):
-            bar, names, at = bench.bar_program(program, language, present), C_REFS, reference_level(level)
-        else:
-            bar, names, at = program, BAS_REFS, "O2"
+        bar, names, at = judged_by(program, language, level, present)
         refs = {name: counts(table.get(f"{bar}/{name}/{at}"), bar, name) for name in names}
         have = {name: r for name, r in refs.items() if r}
         plain = {name: counts(table.get(f"{program}/{name}/{at}"), program, name) for name in names} if bar != program else {}
@@ -171,10 +171,7 @@ def reference_coverage(table: dict) -> dict[str, tuple[int, int]]:
         program, language, level = key.rsplit("/", 2)
         if language in C_REFS + BAS_REFS or language not in OURS or bench.is_twin_name(program):
             continue
-        if language in ("c", "nib"):
-            bar, names, at = bench.bar_program(program, language, present), C_REFS, reference_level(level)
-        else:
-            bar, names, at = program, BAS_REFS, "O2"
+        bar, names, at = judged_by(program, language, level, present)
         for name in names:
             asked[name] += 1
             got[name] += bool(counts(table.get(f"{bar}/{name}/{at}"), bar, name))

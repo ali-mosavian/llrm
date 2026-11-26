@@ -407,7 +407,7 @@ impl Machine for Dos {
             lftr_any_stride: true,
             // D13: the units undercount a 16-bit copy (inlinecost.rs).
             inline_dying_credit_at_os: false,
-            // DEVIATE BFS-1 (owner x86-m16-b, exit 2026-11-25): see `Tuning::cold_site_ignores_sinks`.
+            // DEVIATE BFS-1 (owner x86-m16, exit 2026-12-31): see `Tuning::cold_site_ignores_sinks`.
             cold_site_ignores_sinks: true,
             read_only_in_code: true,
             ..llrm_mir::target::Tuning::PIN
