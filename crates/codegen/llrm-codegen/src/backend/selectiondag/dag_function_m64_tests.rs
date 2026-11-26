@@ -1863,3 +1863,33 @@ define void @f(ptr %p, ptr %q) optsize {
         done.body.insns().iter().filter_map(|i| i.what.as_ref()?.name.as_deref().map(str::to_owned)).collect();
     assert_eq!(names.iter().filter(|n| n.starts_with("mov")).count(), 2, "two immediate stores: {names:?}");
 }
+
+/// `llvm.rint` of an SSE value was selected as the x87's `frndint` and refused
+/// ("floating instruction has no conversion rule", `rint_libcall.c` at every
+/// level). It is the C library's `rint`/`rintf` (the pin without SSE4.1); an
+/// `x86_fp80` keeps `frndint`.
+#[test]
+fn an_m64_rint_of_an_sse_value_is_the_library_call() {
+    let names = |ty: &str, kind: &str| -> Vec<String> {
+        let text = format!(
+            "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"
+define {ty} @f({ty} %x) {{
+  %r = call {ty} @llvm.rint.{kind}({ty} %x)
+  ret {ty} %r
+}}
+declare {ty} @llvm.rint.{kind}({ty})
+"
+        );
+        let module = llrm_mir::parse::module(&text).expect("parses");
+        let cpu = crate::backend::cpu::tuned_for(&llrm_x86_m64::M64, llrm_x86_m64::CPUS[0], false).expect("a cpu");
+        let done = selected(&module, "f", &llrm_x86_m64::M64, cpu, &[]).unwrap_or_else(|why| panic!("{ty}: {}", why.0));
+        done.body.insns().iter().filter_map(|i| i.what.as_ref()?.name.as_deref().map(str::to_owned)).collect()
+    };
+    for (ty, kind) in [("double", "f64"), ("float", "f32")] {
+        let made = names(ty, kind);
+        assert!(!made.iter().any(|one| one == "frndint"), "{ty}: {made:?}");
+        assert!(made.iter().any(|one| one == "call" || one == "jmp"), "{ty}: {made:?}");
+    }
+    let wide = names("x86_fp80", "f80");
+    assert!(wide.iter().any(|one| one == "frndint"), "{wide:?}");
+}

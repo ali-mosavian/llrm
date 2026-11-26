@@ -195,6 +195,22 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
 
     /// `makeLibCall` on `chain`: the hooks' call, else (where they ask for it)
     /// the routine called by the target's native C convention.
+    /// `makeLibCall` of a node with no chain: the target's own way, else the
+    /// chained call from the entry node (the pin's `InChain` default).
+    fn lib_call(
+        &mut self,
+        name: &'static str,
+        args: &[SDValue],
+        ret: EVT,
+        signed: bool,
+    ) -> Option<SDValue> {
+        if let Some(result) = self.hooks.make_lib_call(self.dag, name, args, ret, signed) {
+            return Some(result);
+        }
+        let entry = self.dag.entry_node();
+        self.lib_call_chained(name, args, ret, signed, entry).map(|(result, _)| result)
+    }
+
     fn lib_call_chained(
         &mut self,
         name: &'static str,
@@ -701,7 +717,7 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
             let Some(name) = self.tli.libcall_name(op, vt) else { return Err(refused) };
             let int = EVT::integer(self.tli.types.int_size());
             let arg = self.dag.operand(node, 0);
-            let Some(call) = self.hooks.make_lib_call(self.dag, name, &[arg], int, false) else { return Err(refused) };
+            let Some(call) = self.lib_call(name, &[arg], int, false) else { return Err(refused) };
             let ret = self.dag.value_type(node);
             let result = self.dag.get_sext_or_trunc(call, ret);
             self.replace_node(node, result);
@@ -753,7 +769,7 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
         // `vt` is the type the action is keyed by: `LRINT` of a float returns
         // an integer.
         let ret = self.dag.value_type(node);
-        let Some(result) = self.hooks.make_lib_call(self.dag, name, &args, ret, signed) else { return Err(refused) };
+        let Some(result) = self.lib_call(name, &args, ret, signed) else { return Err(refused) };
         self.replace_node(node, result);
         Ok(())
     }
