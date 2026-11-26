@@ -3475,11 +3475,13 @@ pub trait Tti {
     }
 
     /// Beyond the pin: whether a function built for size turns a store or
-    /// copy loop into a `memset` or `memcpy` call (`LoopIdiomRecognize`). The
-    /// pin does; a target whose call setup and library routine are more bytes
-    /// than the loop (m68k: three pushes, `jsr`, `lea` against a four
-    /// instruction loop) says false.
-    fn memory_idioms_at_optsize(&self) -> bool {
+    /// copy loop into a `memset` or `memcpy` call (`LoopIdiomRecognize`),
+    /// by whether its length is a compile-time constant. The pin does either
+    /// way; a target may keep the loop whose call is more bytes than it is.
+    fn memory_idioms_at_optsize(
+        &self,
+        _constant_length: bool,
+    ) -> bool {
         true
     }
 

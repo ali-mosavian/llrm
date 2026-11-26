@@ -158,12 +158,10 @@ def assemble(w, report, crt0):
 
 def ours_cell(path, w, ctx, want):
     ll = w / "p.ll"
-    c = run.sh([ctx.clang, f"-O{ctx.level}", *run.CLANG_FLAGS, *run.program_flags(path)[0], str(path), "-o", str(ll)], run.ROOT)
+    c = run.emit_ir(ctx.clang, ctx.level, path, ll)
     if c.returncode:
         error = next((l for l in c.stderr.splitlines() if "error" in l), "")
         raise Void("CLANG " + error.split("error:")[-1].strip()[:100])
-    text = [l for l in ll.read_text().splitlines() if not l.startswith("target datalayout")]
-    ll.write_text(run.DATALAYOUT + "\n" + "\n".join(text) + "\n")
     flags = run.program_flags(path)[0] if ctx.program_flags_to_llc else []
     try:
         p = run.llc_limited([ctx.llc, "-S", f"-O{ctx.level}", *flags, "-o", str(w / "p.s"), str(ll)], w, ctx.compile_timeout)

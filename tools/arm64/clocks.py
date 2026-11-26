@@ -1,19 +1,17 @@
-"""Modelled clocks of an arm64 ELF: executed addresses from unicorn x `llvm-mca -mcpu=apple-m1` per basic block.
+"""Modelled clocks of an arm64 ELF: `llvm-mca -mcpu=apple-m1` over the trace of addresses unicorn executed.
 
-A MODEL, not a measurement: each basic block is priced alone (no cache, no branch misprediction, no overlap across blocks),
-so every figure it prints says "modelled". A block that is its own loop is priced in steady state (cycles per iteration),
-any other block once, pipeline fill included.
+A MODEL, not a measurement (no cache, no branch misprediction), so every figure it prints says "modelled". Instructions are
+priced in the order they ran, so they overlap across branches and loop trips; a long trace is cut into windows.
 
     clocks.py ELF --kernel|--whole    modelled clocks and executed instructions of the compiled kernels, or of the program
                                       with its runtime (the range is chosen, never defaulted: count.py's rule)
 """
-import argparse, os, re, subprocess, sys
+import argparse, array, hashlib, os, re, subprocess, sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-LLVM = os.environ.get('LLVM_BIN', os.path.expanduser('~/scratch/llvm-build-aarch64/bin'))
-ENDS_BLOCK = re.compile(r'^(b|bl|br|blr|ret|cbz|cbnz|tbz|tbnz|b\.\w+)\s')
+LLVM = os.environ.get('LLVM_BIN', '/usr/lib/llvm-20/bin')
 CALL = re.compile(r'^(bl|blr)\s')
-STEADY_ITERATIONS = 100
+WINDOW = 100_000  # instructions llvm-mca takes at once, at about 1.5 KB of its memory each
 # A store that updates its base register: `str w1, [x0], #2` (post) or `str w1, [x0, #2]!` (pre).
 POST_STORE = re.compile(r'^(st(?:r|rb|rh|p))\s+(.+?),\s*\[(x\d+|sp)\],\s*(#-?(?:0x)?[0-9a-f]+)$')
 PRE_STORE = re.compile(r'^(st(?:r|rb|rh|p))\s+(.+?),\s*\[(x\d+|sp),\s*(#-?(?:0x)?[0-9a-f]+)\]!$')
@@ -28,30 +26,6 @@ def disassemble(elf):
         if m:
             code[int(m.group(1), 16)] = m.group(2).split('//')[0].strip()
     return code
-
-
-def target_of(text):
-    m = re.search(r'\b0x([0-9a-f]+) <', text)
-    return int(m.group(1), 16) if m else None
-
-
-def blocks(code, executed):
-    """The basic blocks the program executed, as lists of consecutive addresses: cut after a branch and before a branch target."""
-    leaders = set()
-    for address, text in code.items():
-        if ENDS_BLOCK.match(text + ' '):
-            leaders.add(address + 4)
-            if target_of(text) is not None:
-                leaders.add(target_of(text))
-    found, current = [], []
-    for address in sorted(a for a in executed if a in code):
-        if current and (address != current[-1] + 4 or address in leaders):
-            found.append(current)
-            current = []
-        current.append(address)
-    if current:
-        found.append(current)
-    return found
 
 
 def split_writeback(line):
@@ -83,18 +57,18 @@ def mca_cycles(lines, iterations):
     return int(cycles.group(1)) / int(done.group(1)) + calls if cycles and done else None
 
 
-def modelled_clocks(code, histogram):
-    """(modelled clocks, executed instructions); a block llvm-mca cannot price is an error, not a zero."""
-    total, executed = 0.0, 0
-    for block in blocks(code, histogram):
-        count, text = histogram[block[0]], [code[a] for a in block]
-        loops = target_of(text[-1]) == block[0] and ENDS_BLOCK.match(text[-1] + ' ')
-        cycles = mca_cycles(text, STEADY_ITERATIONS if loops else 1)
-        if cycles is None:
-            raise SystemExit(f'clocks.py: llvm-mca could not price the block at {block[0]:#x}')
-        total += count * cycles
-        executed += count * len(block)
-    return total, executed
+def modelled_clocks(code, trace):
+    """(modelled clocks, executed instructions) of `trace`; a window llvm-mca cannot price is an error, not a zero."""
+    total, priced = 0.0, {}
+    for start in range(0, len(trace), WINDOW):
+        window = trace[start:start + WINDOW]
+        key = hashlib.sha256(array.array('L', window).tobytes()).digest()
+        if key not in priced:
+            priced[key] = mca_cycles([code[a] for a in window], 1)
+        if priced[key] is None:
+            raise SystemExit(f'clocks.py: llvm-mca could not price the window from {window[0]:#x}')
+        total += priced[key]
+    return total, len(trace)
 
 
 def parser():
@@ -110,12 +84,12 @@ def main():
     args = parser().parse_args()
     sys.path.insert(0, HERE)
     import count
-    histogram = {}
-    reported, instrs, err = count.run(args.elf, kernel=args.kernel, histogram=histogram)
+    trace = array.array('L')
+    reported, instrs, err = count.run(args.elf, kernel=args.kernel, trace=trace)
     if err:
         raise SystemExit(f'clocks.py: {err}')
-    clocks, executed = modelled_clocks(disassemble(args.elf), histogram)
-    print(f'{os.path.basename(args.elf)}: {clocks:.0f} modelled clocks, {executed} instructions ({"kernel" if args.kernel else "whole"}, llvm-mca apple-m1 per block)')
+    clocks, executed = modelled_clocks(disassemble(args.elf), trace)
+    print(f'{os.path.basename(args.elf)}: {clocks:.0f} modelled clocks, {executed} instructions ({"kernel" if args.kernel else "whole"}, llvm-mca apple-m1 over the trace)')
 
 
 if __name__ == '__main__':
