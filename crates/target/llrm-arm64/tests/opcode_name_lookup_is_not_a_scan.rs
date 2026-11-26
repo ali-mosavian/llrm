@@ -19,3 +19,13 @@ fn looking_up_the_last_form_name_costs_no_more_than_the_first() {
     let (a, b) = (time(first), time(last));
     assert!(b < a * 8 + std::time::Duration::from_millis(5), "first {a:?}, last {b:?} for 20,000 lookups: a scan");
 }
+
+/// A table out of order makes the bisection miss names the table holds.
+#[test]
+fn the_form_names_are_sorted_and_every_one_is_found() {
+    let all = llrm_arm64::schedmodel::opcode_names();
+    assert!(all.windows(2).all(|pair| pair[0] < pair[1]), "FORM_NAMES is not strictly sorted");
+    for name in all {
+        assert!(llrm_arm64::schedmodel::opcode_of_name(name).is_some(), "{name} is in the table and is not found");
+    }
+}
