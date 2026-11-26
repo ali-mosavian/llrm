@@ -306,7 +306,58 @@ impl Counts {
     }
 }
 
+/// Where each register is defined in a block, ascending: `MRI.getUniqueVRegDef`
+/// and the walks between two instructions answered by search, not by a scan
+/// back through the block per query (a block of N instructions took N
+/// scans of up to N operations; one fcmp-heavy file spent half its compile in
+/// them).
+#[derive(Default)]
+struct Definitions(HashMap<Reg, Vec<usize>>);
+
+impl Definitions {
+    fn of(ops: &OpList) -> Self {
+        let mut found: HashMap<Reg, Vec<usize>> = HashMap::default();
+        for (at, op) in ops.iter().enumerate() {
+            for reg in op.defs_and_uses().0 {
+                let places = found.entry(reg).or_default();
+                if places.last() != Some(&at) {
+                    places.push(at);
+                }
+            }
+        }
+        Self(found)
+    }
+
+    /// The last definition of `reg` before `at`.
+    fn before(
+        &self,
+        reg: Reg,
+        at: usize,
+    ) -> Option<usize> {
+        let places = self.0.get(&reg)?;
+        places[..places.partition_point(|place| *place < at)].last().copied()
+    }
+
+    /// Whether `reg` is defined strictly between `from` and `to`.
+    fn between(
+        &self,
+        reg: Reg,
+        from: usize,
+        to: usize,
+    ) -> bool {
+        self.0
+            .get(&reg)
+            .is_some_and(
+                |places| {
+                    let first = places.partition_point(|place| *place <= from);
+                    places.get(first).is_some_and(|place| *place < to)
+                },
+            )
+    }
+}
+
 struct Block<'a> {
+    definitions: Definitions,
     ops: &'a mut OpList,
     next_register: &'a mut u32,
     counts: &'a Counts,
@@ -385,7 +436,7 @@ impl Block<'_> {
         to: usize,
         reg: Gpr,
     ) -> bool {
-        self.ops[from + 1..to].iter().any(|op| op.defs_and_uses().0.contains(&Reg::Gpr(reg)))
+        self.definitions.between(Reg::Gpr(reg), from, to)
     }
 
     fn fresh(&mut self) -> Gpr {
@@ -409,7 +460,7 @@ impl Block<'_> {
         if op.set_flags || !rn.is_virtual() {
             return vec![];
         }
-        let Some(mul) = self.ops[..root].iter().rposition(|op| op.defs_and_uses().0.contains(&Reg::Gpr(rn))) else {
+        let Some(mul) = self.definitions.before(Reg::Gpr(rn), root) else {
             return vec![];
         };
         let Some((a, b)) = self.product_at(mul, rn, width) else { return vec![] };
@@ -447,8 +498,7 @@ impl Block<'_> {
             if !product.is_virtual() || !other.is_virtual() {
                 continue;
             }
-            let Some(mul) = self.ops[..root].iter().rposition(|op| op.defs_and_uses().0.contains(&Reg::Fpr(product)))
-            else {
+            let Some(mul) = self.definitions.before(Reg::Fpr(product), root) else {
                 continue;
             };
             let Op::I(Inst::VectorBinary { op: VectorOp::Mul, lanes: l, rd, rn: a, rm: b }) = self.ops[mul] else {
@@ -457,12 +507,8 @@ impl Block<'_> {
             if l != lanes || rd != product || !self.counts.single_vector(product) {
                 continue;
             }
-            let stable = [a, b]
-                .iter()
-                .all(
-                    |reg| reg.is_virtual()
-                        && !self.ops[mul + 1..root].iter().any(|op| op.defs_and_uses().0.contains(&Reg::Fpr(*reg))),
-                );
+            let stable =
+                [a, b].iter().all(|reg| reg.is_virtual() && !self.definitions.between(Reg::Fpr(*reg), mul, root));
             if stable {
                 found.push(Pattern::Vector { kind, mul, other, lanes });
             }
@@ -499,7 +545,7 @@ impl Block<'_> {
         at: usize,
         reg: Gpr,
     ) -> Option<usize> {
-        self.ops[..at].iter().rposition(|op| op.defs_and_uses().0.contains(&Reg::Gpr(reg)))
+        self.definitions.before(Reg::Gpr(reg), at)
     }
 
     /// `hasReassociableOperands`: both operands virtual, at least one made in
@@ -604,8 +650,7 @@ impl Block<'_> {
             if !product.is_virtual() {
                 continue;
             }
-            let Some(mul) = self.ops[..root].iter().rposition(|op| op.defs_and_uses().0.contains(&Reg::Gpr(product)))
-            else {
+            let Some(mul) = self.definitions.before(Reg::Gpr(product), root) else {
                 continue;
             };
             let Some((a, b)) = self.product_at(mul, product, width) else { continue };
@@ -708,6 +753,7 @@ impl CombinerIsa for Block<'_> {
         for (index, op) in std::mem::take(&mut self.pending).into_iter().enumerate() {
             self.ops.insert_at(root - 1 + index, op, loc);
         }
+        self.definitions = Definitions::of(self.ops);
     }
 }
 
@@ -720,7 +766,17 @@ pub fn run(
     let counts = Counts::of(function);
     let MFunc { blocks, next_register, .. } = function;
     for block in blocks.iter_mut() {
-        let mut view = Block { ops: &mut block.ops, next_register, counts: &counts, pending: vec![] };
+        let mut view = Block {
+            definitions: Definitions::of(&block.ops),
+            ops: &mut block.ops,
+            next_register,
+            counts: &counts,
+            pending: vec![],
+        };
         combine::combined(&mut view, Setting { optimize_for_size, in_loop: false });
     }
 }
+
+#[cfg(test)]
+#[path = "combine_tests.rs"]
+mod tests;

@@ -189,6 +189,9 @@ struct Trace {
     depth: Vec<u32>,
     height: Vec<u32>,
     critical: u32,
+    /// Where each register is defined, ascending: the last definition before
+    /// an instruction by search, not by a scan back through the block.
+    places: rustc_hash::FxHashMap<Reg, Vec<usize>>,
 }
 
 /// The latency from `def`'s result to the read `used` makes:
@@ -202,20 +205,30 @@ fn operand_latency(
 
 /// The index of the last definition of `reg` before `at`.
 fn definition_before(
-    nodes: &[Node],
+    places: &rustc_hash::FxHashMap<Reg, Vec<usize>>,
     at: usize,
     reg: Reg,
 ) -> Option<usize> {
-    nodes[..at].iter().rposition(|node| node.defs.contains(&reg))
+    let found = places.get(&reg)?;
+    found[..found.partition_point(|place| *place < at)].last().copied()
 }
 
 impl Trace {
     fn of(nodes: &[Node]) -> Self {
+        let mut places: rustc_hash::FxHashMap<Reg, Vec<usize>> = Default::default();
+        for (at, node) in nodes.iter().enumerate() {
+            for &reg in &node.defs {
+                let found = places.entry(reg).or_default();
+                if found.last() != Some(&at) {
+                    found.push(at);
+                }
+            }
+        }
         let mut depth = vec![0u32; nodes.len()];
         let mut users: Vec<Vec<(usize, u32)>> = vec![Vec::new(); nodes.len()];
         for at in 0..nodes.len() {
             for &used in &nodes[at].uses {
-                if let Some(def) = definition_before(nodes, at, used.reg) {
+                if let Some(def) = definition_before(&places, at, used.reg) {
                     let latency = operand_latency(&nodes[def], used);
                     depth[at] = depth[at].max(depth[def] + latency);
                     users[def].push((at, latency));
@@ -229,7 +242,7 @@ impl Trace {
             }
         }
         let critical = (0..nodes.len()).map(|at| depth[at] + height[at]).max().unwrap_or(0);
-        Self { depth, height, critical }
+        Self { depth, height, critical, places }
     }
 
     /// `getInstrSlack`: how many cycles the instruction can be late without
@@ -257,7 +270,7 @@ fn new_root_depth(
             let within = inserted[..index].iter().rposition(|earlier| earlier.defs.contains(&used.reg));
             let reach = match within {
                 Some(def) => depths[def] + operand_latency(&inserted[def], used),
-                None => match definition_before(nodes, root, used.reg) {
+                None => match definition_before(&trace.places, root, used.reg) {
                     Some(def) => trace.depth[def] + operand_latency(&nodes[def], used),
                     None => 0,
                 },
@@ -319,6 +332,9 @@ pub fn combined<I: CombinerIsa>(
     setting: Setting,
 ) -> bool {
     let mut nodes = isa.nodes();
+    // The trace of `nodes`, made when a pattern first needs it and again after
+    // a replacement changes them.
+    let mut trace: Option<Trace> = None;
     let mut changed = false;
     let mut root = 0;
     while root < nodes.len() {
@@ -334,8 +350,8 @@ pub fn combined<I: CombinerIsa>(
             } else if setting.optimize_for_size && replacement.inserted.len() < replacement.deleted.len() {
                 true
             } else {
-                let trace = Trace::of(&nodes);
-                improves_critical_path(isa, &nodes, &trace, root, pattern, &replacement)
+                let trace = trace.get_or_insert_with(|| Trace::of(&nodes));
+                improves_critical_path(isa, &nodes, trace, root, pattern, &replacement)
                     && isa.preserves_resources(&replacement.inserted, &removed)
             };
             if !accepted {
@@ -343,6 +359,7 @@ pub fn combined<I: CombinerIsa>(
             }
             isa.apply(root, pattern, &replacement);
             nodes = isa.nodes();
+            trace = None;
             changed = true;
             replaced = true;
             break;
