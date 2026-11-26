@@ -24,11 +24,11 @@
 
 use llrm_spike_mf::{Kind, Operand, Reg};
 
+use crate::dagisel::local::memory_at;
 use crate::expand::{FrameInputs, call_area};
 use crate::frame::Base;
 use crate::mfunc::{Inst, MFunction};
 use crate::regalloc::Assignment;
-use crate::scaledindex::memory_at;
 
 /// What emission says when a folded operand's displacement left eight bits: the
 /// stack pointer was further down than [`Bounds`] foresaw (call cleanups owed),
