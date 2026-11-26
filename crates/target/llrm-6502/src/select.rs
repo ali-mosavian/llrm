@@ -641,10 +641,7 @@ pub fn function_items_with_places(
                     one.dag.nodes()[node as usize].opcode,
                     ISD::Machine(code) if code as u16 == op::RET
                 ) {
-                    for inst in cells.frame.epilogue() {
-                        body.push(Item::Inst(inst));
-                    }
-                    for inst in std::mem::take(&mut cells.deferred) {
+                    for inst in cells.frame.epilogue(std::mem::take(&mut cells.deferred)) {
                         body.push(Item::Inst(inst));
                     }
                 }
