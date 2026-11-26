@@ -140,6 +140,8 @@ impl<'a> Query<'a> {
         &self,
         operand: Operand,
     ) -> Option<TypeId> {
+        #[cfg(test)]
+        TYPE_READS.with(|count| count.set(count.get() + 1));
         self.function.operand_type(self.context(), operand)
     }
 
@@ -155,6 +157,17 @@ impl<'a> Query<'a> {
         matches!(self.context().types.get(ty), Type::Vector { .. }).then(|| self.context().types.scalar_int_bits(ty))?
     }
 
+    /// `int_vector_lane_bits` and `scalar_bits` of one type read.
+    pub fn lane_and_width(
+        &self,
+        operand: Operand,
+    ) -> (Option<u32>, u32) {
+        let types = &self.context().types;
+        let Some(id) = self.type_of(operand) else { return (None, 0) };
+        let lane = matches!(types.get(id), Type::Vector { .. }).then(|| types.scalar_int_bits(id)).flatten();
+        (lane, self.bits_of(types.get(id)))
+    }
+
     /// `getBitWidth(Ty, DL)`: an integer's width or a pointer's (a vector's:
     /// its lane's), 0 for anything else.
     pub fn scalar_bits(
@@ -167,9 +180,20 @@ impl<'a> Query<'a> {
         if let Some(Type::Vector { element, .. }) = ty {
             ty = Some(types.get(*element));
         }
+        ty.map_or(0, |ty| self.bits_of(ty))
+    }
+
+    /// The width of an integer or a pointer `ty`, 0 for anything else; a vector
+    /// is answered with its lane's.
+    fn bits_of(
+        &self,
+        ty: &Type,
+    ) -> u32 {
+        let types = &self.context().types;
         match ty {
-            Some(Type::Int(bits)) => *bits,
-            Some(Type::Pointer(space)) => self.layout.pointer(*space).bits,
+            Type::Vector { element, .. } => self.bits_of(types.get(*element)),
+            Type::Int(bits) => *bits,
+            Type::Pointer(space) => self.layout.pointer(*space).bits,
             _ => 0,
         }
     }
@@ -618,4 +642,10 @@ impl FunctionAnalyses {
             ..Query::new(module, function, &self.layout).with_cxt(cxt)
         }
     }
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Operand types read through `Query::type_of`.
+    pub(super) static TYPE_READS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }

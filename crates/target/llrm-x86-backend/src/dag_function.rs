@@ -1557,6 +1557,8 @@ fn selected_in(
         llrm_mir::dense::IdMap::new()
     };
     let mut selected_blocks = llrm_support::hash::HashSet::default();
+    // One answer a function: each ask builds a cost model.
+    let status_word_tests = !m16 && !m64 && cpu.tests_status_word();
     for (block, parent, mut built) in work {
         if cpu.optimized && !fast_ids.contains(&block.0) && block == parent {
             // `SelectAllBasicBlocks`: a phi knows what its incoming values do
@@ -1633,7 +1635,7 @@ fn selected_in(
                     i16_mul_chains: !super::x86_lowering::promotes_i16(&tli),
                     sext_load: true,
                     zext_free: m64,
-                    status_word_tests: !m16 && !m64 && cpu.tests_status_word(),
+                    status_word_tests,
                     branch_constant_selects: select_branch > 0
                         && frequencies.as_ref().is_some_and(|frequencies| {
                             frequencies.relative_to_entry(parent) >= f64::from(select_branch)
