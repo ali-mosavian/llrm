@@ -122,7 +122,7 @@ def pulled(map_text):
     for line in map_text[map_text.index("Modules list"):map_text.index("Segment list")].splitlines():
         if line.endswith(":") and not line.startswith(" "):
             cur = line[:-1]
-        elif cur and re.match(r"\s+(CODE|RODATA|DATA)\s", line) and "sim6502.lib" not in cur and cur != "d.o":
+        elif cur and re.match(r"\s+(CODE|RODATA|DATA|ALIGNED|ALIGNEDRO)\s", line) and "sim6502.lib" not in cur and cur != "d.o":
             name = re.sub(r".*\((.*)\)", r"\1", cur)
             sizes[name] = sizes.get(name, 0) + int(re.search(r"Size=([0-9A-F]+)", line).group(1), 16)
     return sizes

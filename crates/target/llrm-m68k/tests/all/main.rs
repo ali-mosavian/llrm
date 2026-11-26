@@ -113,6 +113,7 @@ mod driver;
 mod dynamic_stack_alloc;
 mod early_clobber;
 mod eight_array_stores;
+mod six_array_walks;
 mod elf;
 mod emitter_shape;
 mod encode_full_ext;

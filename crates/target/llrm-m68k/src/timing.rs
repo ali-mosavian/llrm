@@ -571,6 +571,11 @@ fn priced(
     // the n = 16 bound. An immediate source is known, so its count is exact.
     let product = product_ones(cpu, base, suffix, &operands, count);
     let clocks = product.map_or(clocks, |ones| clocks - 32 + 2 * ones);
+    // The 68000's `Scc` to a data register takes 2 more when it sets the byte;
+    // `count` is then 1, and 0 when it clears it
+    let conditional =
+        cpu == Cpu::M68000 && set_on_condition(base) && matches!(operands[..], [Operand::Mode(Mode::Dn, _)]);
+    let clocks = clocks + 2 * count.filter(|_| conditional).unwrap_or(0);
     let partial = if product.is_some() {
         false
     } else if cpu == Cpu::M68060 {
@@ -583,7 +588,7 @@ fn priced(
     } else {
         matches!(base, "mulu" | "muls" | "divu" | "divs")
             || (by_register && !counted)
-            || (set_on_condition(base) && cpu == Cpu::M68000)
+            || (conditional && count.is_none())
     };
     let maximum = partial && matches!(base, "mulu" | "muls" | "divu" | "divs") && cpu != Cpu::M68060;
     Ok(Cost { clocks, partial, maximum })
@@ -683,7 +688,8 @@ pub fn from_gnu(text: &str) -> Result<String, String> {
         .map(|one| {
             if !target && !one.is_empty() && one.chars().all(|c| c.is_ascii_hexdigit()) {
                 // a short address is the 16-bit absolute form (`pea 0:w`)
-                format!("0x{one}:{}", if one.len() >= 4 { 'l' } else { 'w' })
+                let short = u32::from_str_radix(&one, 16).is_ok_and(|at| at <= 0x7fff || at >= 0xffff_8000);
+                format!("0x{one}:{}", if short { 'w' } else { 'l' })
             } else {
                 one
             }

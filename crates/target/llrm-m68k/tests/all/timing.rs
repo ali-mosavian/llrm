@@ -49,14 +49,22 @@ fn a_68000_standard_arithmetic_is_the_published_base_plus_the_address() {
     assert_eq!(clocks(Cpu::M68000, "cmp.w (%a0), %d0"), 4 + 4);
 }
 
-/// MC68000UM Table 8-5 (p. 8-5), Immediate: `ADDI.L #,Dn` 16, `ANDI.L #,Dn`
-/// 14, `CMPI.L #,Dn` 14, `MOVEQ` 4.
+/// MC68000UM Table 8-5 (p. 8-5), Immediate: `ADDI.L #,Dn` 16, `CMPI.L #,Dn`
+/// 14, `MOVEQ` 4.
 #[test]
 fn a_68000_immediate_form_is_the_published_cell() {
     assert_eq!(clocks(Cpu::M68000, "add.l #1, %d0"), 16);
-    assert_eq!(clocks(Cpu::M68000, "and.l #255, %d0"), 14);
     assert_eq!(clocks(Cpu::M68000, "cmpi.l #0, %d0"), 14);
     assert_eq!(clocks(Cpu::M68000, "moveq #1, %d0"), 4);
+}
+
+/// Table 8-5 misprints `ANDI.L #,Dn` (14) and `ADDQ.W #,An` (4); the processor
+/// takes 16 and 8. The misprints priced a mask and a word step too cheap.
+#[test]
+fn a_68000_misprinted_immediate_cell_is_what_the_processor_takes() {
+    assert_eq!(clocks(Cpu::M68000, "and.l #255, %d0"), 16);
+    assert_eq!(clocks(Cpu::M68000, "addq.w #2, %a0"), 8);
+    assert_eq!(clocks(Cpu::M68000, "subq.w #2, %a0"), 8);
 }
 
 /// MC68000UM Table 8-7 (p. 8-6), Shift: `LSL.L #n,Dn` 8+2n, `ASR.W #n,Dn` 6+2n.
@@ -359,8 +367,9 @@ fn a_68030_trap_is_the_exception_table_row() {
     assert_eq!(clocks(Cpu::M68030, "trap #0"), 18);
 }
 
-/// Table 11.6.8 `MULU.L`/`MULS.L EA,Dn` 44 plus Table 11.6.2 `#<data>.W,#<data>.L`
-/// 6, as the 68020's 43 + 6. `mulu.l #imm` was UNMEASURED (17 cells).
+/// Table 11.6.8 `MULU.L`/`MULS.L EA,Dn` 44 plus Table 11.6.2
+/// `#<data>.W,#<data>.L` 6, as the 68020's 43 + 6. `mulu.l #imm` was UNMEASURED
+/// (17 cells).
 #[test]
 fn a_68030_long_multiply_by_an_immediate_adds_the_immediate_fetch() {
     assert_eq!(clocks(Cpu::M68030, "mulu.l #1000, %d0"), 44 + 6);
@@ -389,7 +398,8 @@ fn a_68060_compare_immediate_to_a_pc_relative_operand_is_priced_as_the_address_f
 /// `%a2@(10,%d0:w)` is 16, a negative is sign-extended to 64 bits) and a
 /// suppressed base as `@(ffffffff800020a0,%d0:l)`. All-digit hex was read as
 /// decimal (256 priced as a brief index, 16 as 10) and the rest was unpriced:
-/// 84 exes at 68000 and 103 at 68020 carried `operand ... is not in the tables`.
+/// 84 exes at 68000 and 103 at 68020 carried `operand ... is not in the
+/// tables`.
 #[test]
 fn an_objdump_index_displacement_is_hex() {
     assert_eq!(gnu("moveb %a1@(7e,%d1:w),%d0"), "move.b (126,%a1,%d1), %d0");
@@ -412,4 +422,29 @@ fn an_objdump_index_displacement_is_hex() {
 fn an_unreadable_index_displacement_is_a_parser_fault() {
     let why = cost(Cpu::M68020, "lea (zz,%a0,%d1), %a1", 2, false).unwrap_err();
     assert!(why.starts_with(llrm_m68k::timing::UNPARSEABLE), "{why}");
+}
+
+/// The 68000's `Scc Dn` takes 4 clocks clearing the byte and 6 setting it
+/// (MC68000UM table 8-6); to memory it takes the same either way.
+#[test]
+fn a_set_on_condition_is_priced_by_what_it_did() {
+    use llrm_m68k::isa::Cpu as Model;
+    use llrm_m68k::timing::cost_on_counted;
+    let price = |text, count| cost_on_counted(Model::M68000, text, 2, false, count).unwrap();
+    assert_eq!((price("sne %d2", Some(1)).clocks, price("sne %d2", Some(1)).partial), (6, false));
+    assert_eq!((price("sne %d2", Some(0)).clocks, price("sne %d2", Some(0)).partial), (4, false));
+    assert!(price("sne %d2", None).partial);
+    assert!(!price("sne (%a0)", None).partial);
+}
+
+/// `pea 0x753b.w` (4 bytes, 16 clocks) was read as the long absolute form and
+/// priced 20, its form taken from the address's digit count.
+#[test]
+fn a_short_absolute_address_is_priced_as_the_short_form() {
+    use llrm_m68k::isa::Cpu as Model;
+    use llrm_m68k::timing::{cost_on, from_gnu};
+    let short = from_gnu("pea 753b").unwrap();
+    assert_eq!(short, "pea 0x753b:w");
+    assert_eq!(cost_on(Model::M68000, &short, 4, false).unwrap().clocks, 16);
+    assert_eq!(from_gnu("pea 8000").unwrap(), "pea 0x8000:l");
 }

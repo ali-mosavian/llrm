@@ -179,37 +179,45 @@ fn read_shift_counts(
     counts
 }
 
-/// A 16-bit multiply by a register or memory source: `(destination data
-/// register, instruction bytes, signed)`.
-type Multiplies = HashMap<u32, (usize, usize, bool)>;
+/// The term the 68000 prices an instruction by that only the cpu state shows.
+#[derive(Clone, Copy)]
+enum Term {
+    /// A 16-bit multiply: the ones of its source.
+    Product { source: Option<usize>, destination: usize, signed: bool },
+    /// `Scc Dn`: 1 when it set the byte.
+    Condition { destination: usize },
+}
 
-/// `n` of each execution of a 16-bit multiply (`mulu.w`/`muls.w`), in execution
-/// order: `(pc, n)`, `None` where the state could not show it. The 68000 prices
-/// the multiply by its source (38 + 2n clocks), which may sit in memory, so a
-/// second run logs the cpu state at each multiply and at the instruction after
-/// it: the destination's low word before, the product after, give the source.
-fn multiply_counts(
+/// `(instruction bytes, term)` by address.
+type Traced = HashMap<u32, (usize, Term)>;
+
+/// The term of each execution of a traced instruction, in execution order:
+/// `(pc, term)`, `None` where the state could not show it. A second run logs
+/// the cpu state at each such instruction and at the one after it. A multiply
+/// by a register reads its source's value before; by memory, the destination's
+/// low word before and the product after give the source.
+fn term_counts(
     exe: &Path,
     cpu: &str,
-    multiplies: &Multiplies,
+    traced: &Traced,
 ) -> Vec<(u32, Option<u32>)> {
-    if multiplies.is_empty() {
+    if traced.is_empty() {
         return Vec::new();
     }
-    let ranges: Vec<String> = multiplies
+    let ranges: Vec<String> = traced
         .iter()
-        .flat_map(|(pc, (_, len, _))| [format!("0x{pc:x}+2"), format!("0x{:x}+2", pc + *len as u32)])
+        .flat_map(|(pc, (len, _))| [format!("0x{pc:x}+2"), format!("0x{:x}+2", pc + *len as u32)])
         .collect();
     let mut command = Command::new("qemu-m68k");
     command
         .args(["-cpu", cpu, "-one-insn-per-tb", "-d", "exec,cpu", "-dfilter", &ranges.join(","), "-D", "/dev/stderr"])
         .arg(exe);
-    read_multiply_counts(command, multiplies, time_limit())
+    read_term_counts(command, traced, time_limit())
 }
 
-fn read_multiply_counts(
+fn read_term_counts(
     command: Command,
-    multiplies: &Multiplies,
+    traced: &Traced,
     limit: std::time::Duration,
 ) -> Vec<(u32, Option<u32>)> {
     let mut entries: Vec<(u32, [Option<u32>; 8])> = Vec::new();
@@ -226,14 +234,16 @@ fn read_multiply_counts(
     });
     let mut counts = Vec::new();
     for (index, (pc, state)) in entries.iter().enumerate() {
-        let Some(&(register, len, signed)) = multiplies.get(pc) else { continue };
-        let ones = entries
-            .get(index + 1)
-            .filter(|next| next.0 == pc + len as u32)
-            .and_then(
-                |next| {
-                    let before = state[register]? & 0xffff;
-                    let product = next.1[register]?;
+        let Some(&(len, term)) = traced.get(pc) else { continue };
+        let after = entries.get(index + 1).filter(|next| next.0 == pc + len as u32).map(|next| next.1);
+        let count = match term {
+            Term::Product { source: Some(source), signed, .. } => {
+                state[source].map(|value| llrm_m68k::timing::word_ones(signed, value & 0xffff))
+            }
+            Term::Product { source: None, destination, signed } => {
+                (|| {
+                    let before = state[destination]? & 0xffff;
+                    let product = after?[destination]?;
                     if before == 0 {
                         return None; // the product is 0 whatever the source was
                     }
@@ -243,9 +253,13 @@ fn read_multiply_counts(
                         product / before
                     };
                     Some(llrm_m68k::timing::word_ones(signed, source))
-                },
-            );
-        counts.push((*pc, ones));
+                })()
+            }
+            Term::Condition { destination } => {
+                after.and_then(|state| state[destination]).map(|value| u32::from(value & 0xff == 0xff))
+            }
+        };
+        counts.push((*pc, count));
     }
     counts
 }
@@ -322,8 +336,8 @@ pub(crate) struct Total {
     /// A partial term that is not a published maximum (a shift count at its
     /// lower bound...): the total is no upper bound.
     pub(crate) open_above: bool,
-    /// The instructions that made `open_above` (an unnamed lower bound is an instrument gap), by text, with the times
-    /// each ran.
+    /// The instructions that made `open_above` (an unnamed lower bound is an
+    /// instrument gap), by text, with the times each ran.
     pub(crate) open_terms: std::collections::BTreeMap<String, u64>,
     /// Executed instructions with no disassembly: unpriced on every model.
     pub(crate) unknown: usize,
@@ -416,8 +430,9 @@ impl Total {
         format!("{before}{}{after}{unknown}", self.clocks[slot])
     }
 
-    /// The instructions behind a `*`, most often run first: `muls.l %d1, %d0 x4; bfextu (%a0){0:8}, %d1 x2`. Empty for a
-    /// total with no open lower bound.
+    /// The instructions behind a `*`, most often run first: `muls.l %d1, %d0
+    /// x4; bfextu (%a0){0:8}, %d1 x2`. Empty for a total with no open lower
+    /// bound.
     pub(crate) fn open_terms_line(&self) -> String {
         let mut terms: Vec<(&String, &u64)> = self.open_terms.iter().collect();
         terms.sort_by(|a, b| b.1.cmp(a.1).then(a.0.cmp(b.0)));
@@ -523,8 +538,9 @@ mod tests {
         );
     }
 
-    /// A `*` named no instruction, so a `>=` cell could not be told from a cut run (register_upper_half 68020 -Os: ours
-    /// `>=4524`, gcc `>=4137`, undecidable). The open terms are listed by text with their counts.
+    /// A `*` named no instruction, so a `>=` cell could not be told from a cut
+    /// run (register_upper_half 68020 -Os: ours `>=4524`, gcc `>=4137`,
+    /// undecidable). The open terms are listed by text with their counts.
     #[test]
     fn an_open_lower_bound_names_its_instructions() {
         let models = [Model::M68020];
@@ -616,11 +632,48 @@ mod tests {
             echo 'Trace 0: 0x7f00 [00000000/00001002/00000000/0]' >&2; echo 'D3 = 00000000   A3 = 0' >&2";
         let mut command = std::process::Command::new("sh");
         command.args(["-c", log]);
-        let multiplies = std::collections::HashMap::from([(0x1000, (3, 2, true))]);
-        let counts = super::read_multiply_counts(command, &multiplies, std::time::Duration::from_secs(30));
+        let traced = std::collections::HashMap::from([(
+            0x1000,
+            (2, super::Term::Product { source: None, destination: 3, signed: true }),
+        )]);
+        let counts = super::read_term_counts(command, &traced, std::time::Duration::from_secs(30));
         // -5 = 0xfffb, a 0 appended: 01/10 transitions at the bottom and at
         // both ends of the 0 bit: 3
         assert_eq!(counts, [(0x1000, Some(3)), (0x1000, None)], "a zero destination fixes no source");
+    }
+
+    /// `mulu.w %d2, %d3` with `%d3` zero was priced at the 70-clock maximum,
+    /// the source taken from product / destination: nbody_single read 66.1
+    /// clocks a multiply where it runs 41.6.
+    #[test]
+    fn a_multiply_by_a_register_takes_its_ones_from_that_register() {
+        let log = "echo 'Trace 0: 0x7f00 [00000000/00001000/00000000/0]' >&2; echo 'D2 = 00000007   A2 = 0' >&2; \
+            echo 'D3 = 00000000   A3 = 0' >&2";
+        let mut command = std::process::Command::new("sh");
+        command.args(["-c", log]);
+        let term = llrm_m68k::timing::DataRegisters::multiply_operands("mulu.w %d2, %d3").unwrap();
+        assert_eq!(term, (Some(2), 3, false));
+        let traced = std::collections::HashMap::from([(
+            0x1000,
+            (2, super::Term::Product { source: term.0, destination: term.1, signed: term.2 }),
+        )]);
+        let counts = super::read_term_counts(command, &traced, std::time::Duration::from_secs(30));
+        assert_eq!(counts, [(0x1000, Some(3))]);
+    }
+
+    /// 41 of 140 68000 program totals were lower bounds for an `Scc`, priced
+    /// as if it always cleared the byte: the state after shows which.
+    #[test]
+    fn the_state_after_a_set_on_condition_shows_whether_it_set() {
+        let log = "for v in 000000ff 00000000; do echo 'Trace 0: 0x7f00 [00000000/00001000/00000000/0]' >&2; \
+            echo 'D1 = 12345678   A1 = 0' >&2; echo 'Trace 0: 0x7f00 [00000000/00001002/00000000/0]' >&2; \
+            echo \"D1 = $v   A1 = 0\" >&2; done";
+        let mut command = std::process::Command::new("sh");
+        command.args(["-c", log]);
+        let destination = llrm_m68k::timing::DataRegisters::set_destination("sne %d1").unwrap();
+        let traced = std::collections::HashMap::from([(0x1000, (2, super::Term::Condition { destination }))]);
+        let counts = super::read_term_counts(command, &traced, std::time::Duration::from_secs(30));
+        assert_eq!(counts, [(0x1000, Some(1)), (0x1000, Some(0))]);
     }
 
     /// jpeg_single's trace (516 M instructions, 200 s) was killed at the 120 s
@@ -678,17 +731,20 @@ pub(crate) fn price(
         HashMap::new()
     };
     let mut counted = shift_counts(exe, &cpu, &shifts).into_iter();
-    let multiplies: Multiplies = if models.iter().any(|m| matches!(m, Model::M68000 | Model::M68010)) {
+    let traced: Traced = if models.iter().any(|m| matches!(m, Model::M68000 | Model::M68010)) {
         at.iter()
             .filter_map(|(pc, (len, text))| {
-                let (register, signed) = DataRegisters::multiply_destination(text)?;
-                Some((*pc, (register, *len, signed)))
+                let term = match DataRegisters::multiply_operands(text) {
+                    Some((source, destination, signed)) => Term::Product { source, destination, signed },
+                    None => Term::Condition { destination: DataRegisters::set_destination(text)? },
+                };
+                Some((*pc, (*len, term)))
             })
             .collect()
     } else {
         HashMap::new()
     };
-    let mut multiplied = multiply_counts(exe, &cpu, &multiplies).into_iter();
+    let mut shown = term_counts(exe, &cpu, &traced).into_iter();
     let mut total = Total::new(models);
     total.truncated = !complete;
     let mut seen = std::collections::HashSet::new();
@@ -709,11 +765,11 @@ pub(crate) fn price(
                 }
                 None => None,
             }
-        } else if multiplies.contains_key(pc) {
-            match multiplied.next() {
-                Some((at, ones)) if at == *pc => ones,
+        } else if traced.contains_key(pc) {
+            match shown.next() {
+                Some((at, term)) if at == *pc => term,
                 Some(_) => {
-                    multiplied = Vec::new().into_iter();
+                    shown = Vec::new().into_iter();
                     None
                 }
                 None => None,

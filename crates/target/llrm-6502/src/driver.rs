@@ -380,8 +380,13 @@ fn assembly_trials(
     text: &str,
     request: &Request,
 ) -> Result<Assembled, String> {
+    let at_speed = matches!(request.level, Level::O2 | Level::O3)
+        && built.target.tti().is_some_and(|tti| tti.speed_inline_finished_trial());
+    if at_speed {
+        return judged_inlines(built, text, request);
+    }
     let (built, inlined, assembled, joint) = trial_inlined(built, text, request)?;
-    llrm_transforms::trial::with_inlined(&inlined, || trial_unrolled(built, assembled, joint, text, request))
+    llrm_transforms::trial::with_inlined(&inlined, || trial_unrolled(built, assembled, joint, false, text, request))
 }
 
 /// DEVIATE UNROLL-SPEED-TRIAL (owner 6502, exit 2026-11-24; the z80's
@@ -455,7 +460,8 @@ fn image_bytes_of(
     Ok(code + data_bytes(assembly) + crate::mulimage::image_bytes(&routines))
 }
 
-/// DEVIATE OS-INLINE-TRIAL (owner 6502-c, exit 2026-12-05): the copies the -Os
+/// DEVIATE OS-INLINE-TRIAL (owner 6502-c, exit 2026-12-05), at -O1 and -Os,
+/// strict on bytes (-O2 and -O3: `judged_inlines`): the copies the -Os
 /// byte model refused within its error, inlined in a second compile and kept
 /// per chain (caller and callees) if the backend writes those functions in
 /// fewer bytes. The model is within 25% of the written bytes for two functions
@@ -472,14 +478,8 @@ fn trial_inlined(
 ) -> Result<(Program, Vec<llrm_transforms::trial::Site>, Option<Assembled>, bool), String> {
     use llrm_transforms::trial;
     let sites = trial::take_refused();
-    let limit = built
-        .target
-        .tti()
-        .and_then(|tti| tti.opt_size_inline_trial_limits())
-        .map_or(0, |(_, instructions)| instructions);
-    let at_speed = matches!(request.level, Level::O2 | Level::O3)
-        && built.target.tti().is_some_and(|tti| tti.speed_inline_finished_trial());
-    if !(matches!(request.level, Level::O1 | Level::Os) || at_speed) || sites.is_empty() {
+    let limit = inline_trial_limit(&built);
+    if !matches!(request.level, Level::O1 | Level::Os) || sites.is_empty() {
         return Ok((built, Vec::new(), None, false));
     }
     if instructions(&built) > limit {
@@ -509,7 +509,7 @@ fn trial_inlined(
     let other_unroll = trial::take();
     // The loops the inlined copies hold that the threshold refused: the unroll
     // trial may take them with the pin's inlines made (`trial_unrolled`).
-    let joint = (at_speed || request.level == Level::Os) && !other_unroll.0.is_empty();
+    let joint = request.level == Level::Os && !other_unroll.0.is_empty();
     let cut = trial::differing(&built.modules[0], &other.modules[0]);
     // The kept side is priced from its own assembly, which the result carries
     // to the unroll trial and the output; only the second compile's chain
@@ -561,6 +561,100 @@ fn trial_inlined(
         trial::restore(kept_unroll);
         Ok((built, Vec::new(), Some(kept_all), joint))
     }
+}
+
+/// DEVIATE OS-INLINE-TRIAL at speed (6502-INLINE-RATE; owner w11, exit
+/// 2026-12-20): at -O2 and -O3 the copies the byte rate refused are priced on
+/// finished programs (unrolled, outlined, runtime linked), clocks against
+/// bytes (`inline_pays`). Sites that share a function are one group, tried on
+/// top of the groups already kept. Neither earlier price will do: bytes before
+/// the outliner refuse copied loops it then shares, and clocks before the
+/// unroll trial refuse a copy whose loop that trial then takes.
+///
+/// Compile time: a program with no refused site compiles once; one with some
+/// runs the mid-end, the unroll trial and the backend once more a group.
+fn judged_inlines(
+    built: Program,
+    text: &str,
+    request: &Request,
+) -> Result<Assembled, String> {
+    use llrm_transforms::trial;
+    let sites = trial::take_refused();
+    let limit = inline_trial_limit(&built);
+    let debug = std::env::var_os("LLRM_DEBUG_TRIAL").is_some();
+    if sites.is_empty() || instructions(&built) > limit {
+        if debug && !sites.is_empty() {
+            eprintln!("trial inline: skipped, {} sites past {limit} instructions", sites.len());
+        }
+        return trial_unrolled(built, None, false, false, text, request);
+    }
+    let kept_unroll = trial::take();
+    let Ok(all) = trial::with_inlined(&sites, || program(text, request)) else {
+        trial::restore(kept_unroll);
+        return trial_unrolled(built, None, false, false, text, request);
+    };
+    let all_unroll = trial::take();
+    // The loops the copies hold that the threshold refused: the unroll trial
+    // may take them with the pin's inlines made.
+    let joint = !all_unroll.0.is_empty();
+    // The inline+unroll pair makes every inline of the pin's, so it is the
+    // kept side's alone: a candidate would build the same program again.
+    let finished = |built: Program, noted, inlined: &[trial::Site], joint: bool| {
+        trial::restore(noted);
+        trial::with_inlined(inlined, || trial_unrolled(built, None, joint, true, text, request))
+    };
+    let mut best = finished(built, kept_unroll, &[], joint)?;
+    let mut chosen: Vec<trial::Site> = Vec::new();
+    let groups = trial::groups(&sites, &[]);
+    let mut all = Some((all, all_unroll));
+    for group in &groups {
+        let mut tried = chosen.clone();
+        tried.extend(group.refused.iter().map(|&one| sites[one].clone()));
+        let candidate = match all.take().filter(|_| groups.len() == 1) {
+            Some(done) => Ok(done),
+            None => trial::with_inlined(&tried, || program(text, request)).map(|other| (other, trial::take())),
+        };
+        let Ok((other, noted)) = candidate else {
+            trial::take();
+            continue;
+        };
+        let Ok(priced) = finished(other, noted, &tried, false) else {
+            continue;
+        };
+        let callers: std::collections::BTreeSet<&str> =
+            group.refused.iter().map(|&one| sites[one].caller.as_str()).collect();
+        let (saved, added) = (best.clocks - priced.clocks, priced.bytes - best.bytes);
+        let pays = inline_pays(saved, added, callers.len());
+        if debug {
+            eprintln!(
+                "trial inline: {} sites, {added:+} bytes, {saved:+} clocks saved: {}",
+                group.refused.len(),
+                if pays { "kept" } else { "put back" }
+            );
+        }
+        if pays {
+            (best, chosen) = (priced, tried);
+        }
+    }
+    Ok(best)
+}
+
+/// Whether an inline that saves `saved` clocks for `added` bytes, in `callers`
+/// functions, is kept at -O2 and -O3: the judge of those levels, 3 clocks a
+/// byte (user ruling 2026-11-25), so a smaller copy may cost the clocks its
+/// bytes repay. A growth stays under the bounds of `trial_pays`.
+pub fn inline_pays(
+    saved: i64,
+    added: i64,
+    callers: usize,
+) -> bool {
+    added <= speed_growth_bound(callers)
+        && i128::from(saved) * 1000 >= i128::from(added) * i128::from(TRIAL_MILLICLOCKS_PER_BYTE)
+}
+
+/// The largest program, in instructions, whose refused copies are tried.
+fn inline_trial_limit(program: &Program) -> usize {
+    program.target.tti().and_then(|tti| tti.opt_size_inline_trial_limits()).map_or(0, |(_, instructions)| instructions)
 }
 
 pub use llrm_transforms::walk::SizeRow;
@@ -836,7 +930,7 @@ fn tail(
     };
     let (mut clocks, mut bytes) = (0i64, 0i64);
     if price {
-        let weights = estimate_weights(module, &names, &sources, &program.layout);
+        let weights = estimate_weights(module, &names, &sources, &program.layout, request.level);
         let (run, size) = crate::weights::run_cost(request.cpu, &names, &pieces, &weights)?;
         (clocks, bytes) = (run as i64, size as i64);
     }
@@ -952,6 +1046,7 @@ fn trial_unrolled(
     built: Program,
     assembled: Option<Assembled>,
     joint: bool,
+    price_kept: bool,
     text: &str,
     request: &Request,
 ) -> Result<Assembled, String> {
@@ -960,7 +1055,7 @@ fn trial_unrolled(
     // of `tail`)
     let kept_text = |built: Program, assembled: Option<Assembled>| match assembled {
         Some(done) => Ok(done),
-        None => tail(built, request, false, false),
+        None => tail(built, request, price_kept, false),
     };
     let tti = built.target.tti();
     let Some(limit) = tti.as_ref().and_then(|tti| tti.unroll_trial_threshold()) else {
@@ -1104,10 +1199,9 @@ fn instructions(program: &Program) -> usize {
 const TRIAL_GROWTH_LIMIT: i64 = 16 * 1024;
 
 /// Thousandths of a clock a byte at -O2 and -O3: the judge of those levels
-/// (clocks + 3 * bytes). DEVIATE 6502-UNROLL-RATE (owner x87, exit 2026-12-15;
-/// oversight ruling 2026-11-24, not yet confirmed by the user): the rate was
-/// infinite there, bytes first (ruling 2026-11-14), which kept `dirty`'s
-/// 96-trip store loop (long_double_constant_store -O3 2,490 clk against 979).
+/// (clocks + 3 * bytes, user ruling 2026-11-25). DEVIATE 6502-UNROLL-RATE
+/// (owner x87, exit 2026-12-15): an infinite rate there refused every unroll
+/// that repays its bytes.
 const TRIAL_MILLICLOCKS_PER_BYTE: i64 = 3000;
 
 /// The most a priced trial may add for each function it unrolls in: the pin's
@@ -1116,6 +1210,11 @@ const TRIAL_MILLICLOCKS_PER_BYTE: i64 = 3000;
 /// +13,418 B for -2.8% clocks and div_constants_short +5,912 B for -1.6%;
 /// the pin's own bound is on size too.
 const TRIAL_BYTES_PER_FUNCTION: i64 = 300 * 2;
+
+/// The most a trial that grows `functions` functions may add at -O2 and -O3.
+fn speed_growth_bound(functions: usize) -> i64 {
+    TRIAL_GROWTH_LIMIT.min(TRIAL_BYTES_PER_FUNCTION * functions.max(1) as i64)
+}
 
 /// Whether a trial that saved `saved` clocks for `added` bytes in `functions`
 /// functions is kept. -Os and -O1: bytes first (user ruling 2026-11-14), so one
@@ -1136,7 +1235,7 @@ pub fn trial_pays(
         // strict: no more bytes and no more clocks (6502-UNROLL-O1)
         Level::O1 => llrm_transforms::loopunrollpass::trial::keeps_at_o1(saved, added, 0),
         Level::O2 | Level::O3 => {
-            added <= TRIAL_BYTES_PER_FUNCTION * functions.max(1) as i64
+            added <= speed_growth_bound(functions)
                 && llrm_transforms::loopunrollpass::trial::keeps_at_o1(saved, added, TRIAL_MILLICLOCKS_PER_BYTE)
         }
         _ => added < 0 || (added == 0 && saved >= 0),
@@ -1327,6 +1426,10 @@ impl llrm_mir::target::Machine for Mos6502Machine {
 /// initializer is refused. Reason: the corpus has none. Exit: floats, with the
 /// softfloat path. A word holding the address of a global (plus a constant
 /// offset) is a `.word` for ca65 to relocate.
+/// The largest alignment of a global: the one the linker cfgs give their
+/// aligned segments.
+const MAX_DATA_ALIGN: u64 = 256;
+
 fn data_text(
     module: &llrm_mir::module::Module,
     layout: &llrm_mir::datalayout::DataLayout,
@@ -1348,13 +1451,35 @@ fn data_text(
         if crate::select::exported(global.linkage) && label == name {
             out.push_str(&format!(".export {label}\n"));
         }
+        // up to the widest scalar the front end states a type's own alignment,
+        // asked for or not, and nothing is placed for it (row 6502-DATA-ALIGN).
+        // `.align` counts from the segment's start, which the linker's cfg
+        // must align as far: `machines/*.cfg` align to `MAX_DATA_ALIGN`
+        let (align, aligned) = match variable.align {
+            Some(align) if align > MAX_DATA_ALIGN => {
+                return Err(format!("{name} is aligned to {align}: past {MAX_DATA_ALIGN}"));
+            }
+            Some(align) if align > crate::frame::REALIGN_ABOVE => (format!(".align {align}\n"), true),
+            _ => (String::new(), false),
+        };
         // a variable of zeros is BSS, which the platform's startup clears: it
         // costs no bytes in the image
         if !variable.constant && words.is_empty() && bytes.iter().all(|&b| b == 0) {
-            out.push_str(&format!(".segment \"BSS\"\n{label}: .res {}\n.segment \"CODE\"\n", bytes.len().max(1)));
+            out.push_str(&format!(
+                ".segment \"BSS\"\n{align}{label}: .res {}\n.segment \"CODE\"\n",
+                bytes.len().max(1)
+            ));
             continue;
         }
-        out.push_str(&format!(".segment \"{}\"\n{label}:\n", if variable.constant { "RODATA" } else { "DATA" }));
+        // aligned data has segments of its own: a program without it is not
+        // padded, and a cfg without them is refused by ld65
+        let segment = match (variable.constant, aligned) {
+            (true, false) => "RODATA",
+            (false, false) => "DATA",
+            (true, true) => "ALIGNEDRO",
+            (false, true) => "ALIGNED",
+        };
+        out.push_str(&format!(".segment \"{segment}\"\n{align}{label}:\n"));
         let mut at = 0;
         for (word_at, symbol, addend) in words {
             for chunk in bytes[at..word_at].chunks(16) {
@@ -1475,17 +1600,28 @@ fn write_constant(
 
 /// The trips each block of each function runs, from the module a function was
 /// selected from.
-fn estimate_weights(
-    module: &llrm_mir::module::Module,
+fn estimate_weights<'a>(
+    module: &'a llrm_mir::module::Module,
     names: &[String],
-    sources: &[Option<&llrm_mir::module::Module>],
+    sources: &[Option<&'a llrm_mir::module::Module>],
     layout: &llrm_mir::datalayout::DataLayout,
+    level: Level,
 ) -> Vec<Vec<u64>> {
+    // the call sites of each module selected from, collected once
+    let mut sites: Vec<(&llrm_mir::module::Module, crate::weights::CallSites)> = Vec::new();
     names
         .iter()
         .zip(sources)
         .map(|(name, source)| {
             let from = source.unwrap_or(module);
+            // -O2 and -O3 judge clocks; -O1 and -Os break ties by them
+            if matches!(level, Level::O2 | Level::O3) {
+                let at = sites.iter().position(|(one, _)| std::ptr::eq(*one, from)).unwrap_or_else(|| {
+                    sites.push((from, crate::weights::CallSites::of(from)));
+                    sites.len() - 1
+                });
+                return sites[at].1.block_weights(from, name, layout);
+            }
             let function = from.named(name).and_then(|id| from.global(id).function());
             function.map_or_else(Vec::new, |function| crate::weights::block_weights(from, function, layout))
         })

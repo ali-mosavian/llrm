@@ -1,11 +1,11 @@
-#title,Table 8-5. Immediate Instruction Execution Times,page,8-5,notes,
+#title,Table 8-5. Immediate Instruction Execution Times,page,8-5,notes,"Corrected from the manual (cycle-exact 68000 Moira bf98107, MoiraExec_cpp.h): ANDI.L #,Dn is 16(3/0), printed 14(3/0) (execAndiRg); ADDQ.W #,An is 8(1/0), printed 4(1/0) (execAddqAn)."
 Instruction,Size,"op #, Dn","op #, An","op #, M"
 ADDI,"Byte, Word",8(2/0),—,12(2/1)+
 ,Long,16(3/0),—,20(3/2)+
-ADDQ,"Byte, Word",4(1/0),4(1/0)*,8(1/1)+
+ADDQ,"Byte, Word",4(1/0),8(1/0)*,8(1/1)+
 ,Long,8(1/0),8(1/0),12(1/2)+
 ANDI,"Byte, Word",8(2/0),—,12(2/1)+
-,Long,14(3/0),—,20(3/2)+
+,Long,16(3/0),—,20(3/2)+
 CMPI,"Byte, Word",8(2/0),—,8(2/0)+
 ,Long,14(3/0),—,12(3/0)+
 EORI,"Byte, Word",8(2/0),—,12(2/1)+
