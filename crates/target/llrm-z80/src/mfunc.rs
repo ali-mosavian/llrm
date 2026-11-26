@@ -665,6 +665,9 @@ pub fn emit(
     for one in &selection.blocks {
         emitter.dag = &one.dag;
         emitter.values.clear();
+        // `SrcRegMap` is cleared per block: a value is in its arrival register
+        // only where this block copies it out of it
+        emitter.arrives_in.clear();
         emitter.in_acc.clear();
         emitter.flag_groups.clear();
         emitter.flags_now = None;
