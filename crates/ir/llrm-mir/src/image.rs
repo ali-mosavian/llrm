@@ -88,8 +88,8 @@ impl Writer<'_> {
                 let Some(symbol_of) = self.block_symbol else {
                     return Err("a blockaddress in a constant: this target has no symbol for a block".into());
                 };
-                // The block the address follows to, or LLVM's `inttoptr 1` where
-                // it is gone.
+                // The block the address follows to, or LLVM's `inttoptr 1`
+                // where it is gone.
                 let target = match &self.module.global(*function).kind {
                     GlobalKind::Function(target) => target.resolve_block_address(*block),
                     _ => None,
@@ -112,6 +112,17 @@ impl Writer<'_> {
                 let bytes = self.layout.pointer(0).bits as usize / 8;
                 self.put(out, at, &number.to_le_bytes()[..bytes]);
                 Ok(())
+            }
+            // `ptrtoint` into a slot of the pointer's own size is the address
+            // (`AsmPrinter::lowerConstant`). The pin also takes a narrower
+            // slot and a narrower relocation; none is made here.
+            (ConstantKind::Expr(ConstantExpr::Cast { op: CastOp::PtrToInt, value }), Type::Int(bits))
+                if matches!(
+                    types.get(context.get(*value).ty),
+                    Type::Pointer(space) if self.layout.pointer(*space).bits == *bits
+                ) =>
+            {
+                self.write(*value, context.get(*value).ty, out, at, relocs)
             }
             (ConstantKind::Global(global), Type::Pointer(_)) => {
                 let name = self.module.global(*global).name.owned().ok_or("an unnamed global")?;
@@ -267,7 +278,13 @@ pub fn variables_with_blocks(
         let size = layout.alloc_size(types, variable.ty) as usize;
         let mut bytes = vec![0u8; size];
         let mut relocs = Vec::new();
-        Writer { module, layout, symbol_of, block_symbol }.write(initializer, variable.ty, &mut bytes, 0, &mut relocs)?;
+        Writer { module, layout, symbol_of, block_symbol }.write(
+            initializer,
+            variable.ty,
+            &mut bytes,
+            0,
+            &mut relocs,
+        )?;
         let align = layout.global_align(types, variable.ty, variable.align, false, true, true) as usize;
         let zero = relocs.is_empty() && bytes.iter().all(|byte| *byte == 0);
         out.push(Variable {
@@ -313,6 +330,24 @@ mod tests {
         assert_eq!(bytes_of(&big, "l"), [1, 2, 3, 4]);
         assert_eq!(bytes_of(&little, "w"), [2, 1]);
         assert_eq!(bytes_of(&little, "l"), [4, 3, 2, 1]);
+    }
+
+    /// A struct initializer holding `(uint32_t)(uintptr_t)array` was refused
+    /// by m68k and arm64: QuickrBasic `plat/dos32/pmem.c` and `psys.c` did not
+    /// compile.
+    #[test]
+    fn a_pointer_sized_ptrtoint_is_the_address_it_converts() {
+        let module = crate::parse::module(
+            "target datalayout = \"E-m:e-p:32:16:32-i8:8:8-i16:16:16-i32:16:32-n8:16:32-a:0:16-S16\"\n\
+             @g = global [4 x i8] zeroinitializer\n\
+             @r = global i32 ptrtoint (ptr getelementptr (i8, ptr @g, i32 2) to i32)\n",
+        )
+        .expect("parses");
+        let layout = DataLayout::parse(module.datalayout.as_deref().expect("a datalayout")).expect("a layout");
+        let all = variables(&module, &layout, &|name| name.to_owned()).expect("laid out");
+        let relocs = &all.iter().find(|one| one.name == "r").expect("the variable").relocs;
+        assert_eq!(relocs.len(), 1);
+        assert_eq!((relocs[0].at, relocs[0].symbol.as_str(), relocs[0].addend), (0, "g", 2));
     }
 
     /// `ConstantKind::Bytes` is the image of an `[N x i8]`; given a wider
