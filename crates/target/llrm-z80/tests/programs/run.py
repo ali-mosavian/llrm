@@ -161,6 +161,15 @@ def program_flags(src):
     return keep, x86
 
 
+def emit_ir(clang, level, src, out):
+    """The program's IR as llrm-z80-llc takes it, written to `out`; clang's finished process."""
+    done = sh([clang, f"-O{level}" if level != "z" else "-Oz", *CLANG_FLAGS, *program_flags(Path(src))[0], str(src), "-o", str(out)], ROOT)
+    if not done.returncode:
+        text = [l for l in Path(out).read_text().splitlines() if not l.startswith("target datalayout")]
+        Path(out).write_text(DATALAYOUT + "\n" + "\n".join(text) + "\n")
+    return done
+
+
 def one(job):
     src, args, work = job
     name = src.stem
@@ -169,11 +178,9 @@ def one(job):
     if want is None:
         return name, "SKIP", "output is not integers"
     ll = w / "p.ll"
-    c = sh([args.clang, f"-O{args.level}" if args.level != "z" else "-Oz", *CLANG_FLAGS, *program_flags(src)[0], str(src), "-o", str(ll)], ROOT)
+    c = emit_ir(args.clang, args.level, src, ll)
     if c.returncode:
         return name, "CLANG", (c.stderr.strip().splitlines() or [""])[-1][:100]
-    text = [l for l in ll.read_text().splitlines() if not l.startswith("target datalayout")]
-    ll.write_text(DATALAYOUT + "\n" + "\n".join(text) + "\n")
     try:
         # a compile that runs away is stopped at 16 GB of address space and at the CPU time limit, not the machine's memory
         p = llc_limited([args.llc, "-S", f"-O{args.llc_level or args.level}", "-o", str(w / "p.s"), str(ll)], w, args.compile_timeout)
@@ -234,7 +241,13 @@ def main():
     ap.add_argument("--src", default=str(ROOT / "tests/run/c"))
     ap.add_argument("--runtime", default=str(RUNTIME), help="the z80_rt.s to link (the compiler's own build of it)")
     ap.add_argument("--allow-runtime-mismatch", action="store_true")
+    ap.add_argument("--emit-ir", metavar="OUT", help="only write the IR of the one source named, and stop")
     args = ap.parse_args()
+    if args.emit_ir:
+        [source] = args.names
+        done = emit_ir(args.clang, args.level, source, Path(args.emit_ir).resolve())
+        sys.stderr.write(done.stderr)
+        sys.exit(done.returncode)
     RUNTIME = Path(args.runtime)
     if not args.allow_runtime_mismatch and (why := runtime_mismatch(args.llc, RUNTIME)):
         sys.exit(f"run.py: {why}")
