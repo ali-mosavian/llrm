@@ -50,6 +50,7 @@ use llrm_support::hash::HashSet;
 use crate::REGISTER_INFO;
 use crate::dagisel::hooks::Cpu;
 use crate::dagisel::{cmpa, indexed, local};
+use crate::expand::is_address;
 use crate::mc;
 use crate::mfunc::{Class, MFunction, op_inst, operand_class};
 use crate::reg;
@@ -72,6 +73,21 @@ enum Use {
     /// an address register fills it with no copy.
     Either,
     Other,
+}
+
+/// What operand `index` of `name` asks of the register it reads.
+fn operand_use(
+    name: &str,
+    operands: &[Operand],
+    index: usize,
+    wide: bool,
+) -> Use {
+    match operand_class(name, index) {
+        Some(Class::Ar32) => Use::Address,
+        _ if indexed::is_base_operand(name, index, operands.len()) => Use::Address,
+        Some(Class::Xr32) if wide => Use::Either,
+        _ => Use::Other,
+    }
 }
 
 /// Every use of every virtual register, in one pass over the function. A
@@ -123,27 +139,27 @@ fn uses_by_register(
                         (Kind::Copy, [Operand::Def(Reg::Virt(dst)), _]) => Use::Copy(*dst),
                         // a pointer returned or passed in an address register
                         (Kind::Copy, [Operand::Def(Reg::Phys(to)), _]) if wide && is_address(*to) => Use::Address,
-                        (Kind::Op(name), _) if operand_class(name, index) == Some(Class::Ar32) => Use::Address,
-                        (Kind::Op(name), operands) if indexed::is_base_operand(name, index, operands.len()) => {
-                            Use::Address
-                        }
-                        (Kind::Op(name), _) if wide && operand_class(name, index) == Some(Class::Xr32) => Use::Either,
-                        // a compare's destination: `cmpa.l` follows allocation
-                        // (`addrcmp::compare_in_address_register`); it counts
-                        // as an address use when the compare's other register
-                        // is a pointer, settled below once every use is known
-                        (Kind::Op(name), operands) if compare_in_address && cmpa::dest_of(name) == Some(index) => {
-                            let others: Vec<u32> = operands
-                                .iter()
-                                .enumerate()
-                                .filter_map(|(at, o)| match o {
-                                    Operand::Use(Reg::Virt(w)) if at != index => Some(*w),
-                                    _ => None,
-                                })
-                                .collect();
-                            deferred.push((*v as usize, slot, others));
-                            Use::Other
-                        }
+                        (Kind::Op(name), operands) => match operand_use(name, operands, index, wide) {
+                            // a compare's destination: `cmpa.l` follows
+                            // allocation
+                            // (`addrcmp::compare_in_address_register`); it
+                            // counts as an address use when the compare's other
+                            // register is a pointer, settled below once every
+                            // use is known
+                            Use::Other if compare_in_address && cmpa::dest_of(name) == Some(index) => {
+                                let others: Vec<u32> = operands
+                                    .iter()
+                                    .enumerate()
+                                    .filter_map(|(at, o)| match o {
+                                        Operand::Use(Reg::Virt(w)) if at != index => Some(*w),
+                                        _ => None,
+                                    })
+                                    .collect();
+                                deferred.push((*v as usize, slot, others));
+                                Use::Other
+                            }
+                            asked => asked,
+                        },
                         _ => Use::Other,
                     });
                 }
@@ -367,6 +383,7 @@ fn address_copy(
     at: usize,
     x: u32,
     wide: bool,
+    size: bool,
 ) -> Option<(usize, Reg)> {
     let insts = &function.blocks[b].insts;
     let copy = insts[..at]
@@ -383,6 +400,24 @@ fn address_copy(
     // folded the add's `+ 1` as a displacement): those read `y` instead
     let own = &uses[x as usize];
     let others = own.iter().filter(|one| matches!(one, Use::Other)).count();
+    // the one data read must be the add's, which the rewrite replaces. An add
+    // that reads `x` as either class has none, and the one counted was a
+    // store, which then took `y` and its address register
+    let adds_own = match insts[at].kind {
+        Kind::Op(name) => insts[at]
+            .operands
+            .iter()
+            .enumerate()
+            .filter(|(index, operand)| {
+                matches!(operand, Operand::Use(Reg::Virt(v)) if *v == x)
+                    && matches!(
+                        operand_use(name, &insts[at].operands, *index, wide),
+                        Use::Other
+                    )
+            })
+            .count(),
+        _ => 0,
+    };
     let addresses_only = own
         .iter()
         .all(
@@ -395,7 +430,7 @@ fn address_copy(
     // only in the wide run of a size build, which the trial keeps where it is
     // smaller: one more address register live can cost a spill (-O1's bench
     // cells grew 4 to 16 bytes with it)
-    if others != 1 || !addresses_only || (own.len() > 1 && !wide) {
+    if others != 1 || adds_own != 1 || !addresses_only || (own.len() > 1 && !(wide && size)) {
         return None;
     }
     match function.classes[y as usize] {
@@ -476,7 +511,7 @@ fn rewrite_one(
     let [Operand::Def(Reg::Virt(d)), Operand::Use(Reg::Virt(x)), Operand::Imm(value)] = insts[at].operands[..] else {
         return None;
     };
-    let (copy, base) = address_copy(function, uses, b, at, x, wide && size)?;
+    let (copy, base) = address_copy(function, uses, b, at, x, wide, size)?;
     if !codes_unread(&function.blocks[b].insts, at) || !reaches_addresses(function, uses, d, Some(x)) {
         return None;
     }
@@ -623,9 +658,11 @@ fn rewrite_indexed(
     else {
         return None;
     };
-    let (copy, base, x, index) = [(first, second), (second, first)].into_iter().find_map(|(x, index)| {
-        address_copy(function, uses, b, at, x, wide && size).map(|(copy, base)| (copy, base, x, index))
-    })?;
+    let (copy, base, x, index) = [(first, second), (second, first)]
+        .into_iter()
+        .find_map(
+            |(x, index)| address_copy(function, uses, b, at, x, wide, size).map(|(copy, base)| (copy, base, x, index)),
+        )?;
     if !codes_unread(insts, at) || !reaches_addresses(function, uses, d, Some(x)) {
         return None;
     }
@@ -643,10 +680,6 @@ fn rewrite_indexed(
     insts.remove(copy);
     read_base_instead(function, b, at - 1, x, base, d, None);
     Some(at)
-}
-
-fn is_address(register: llrm_lir::registers::RegId) -> bool {
-    [reg::A0, reg::A1, reg::A2, reg::A3, reg::A4, reg::A5].contains(&register)
 }
 
 pub(crate) fn is_data(register: llrm_lir::registers::RegId) -> bool {
