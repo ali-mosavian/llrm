@@ -1,6 +1,8 @@
-//! The 6502 states what its frames keep (`Machine::kept_stack_align` 1, `max_alloca_align` 2). Unset, the mid-end took an
-//! `alloca ... align 2` at its word: it folded `ptr & 1` to 0 for a local on an odd frame (a one-byte frame above it),
-//! where the address is odd (2026-11-09: on sim65 `use` saw bit 0 = 1 while `probe` returned 0).
+//! The 6502 states what its frames keep (`Machine::kept_stack_align` 1,
+//! `realigned_above` 2). Unset, the mid-end took an `alloca ... align 2` at its
+//! word: it folded `ptr & 1` to 0 for a local on an odd frame (a one-byte frame
+//! above it), where the address is odd (2026-11-09: on sim65 `use` saw bit 0 =
+//! 1 while `probe` returned 0).
 
 mod common;
 
@@ -30,9 +32,9 @@ fn an_align_2_local_is_not_assumed_aligned_by_the_mid_end() {
     assert!(!text.contains("ret i8 0"), "ptr & 1 folded to 0 from the alloca's align:\n{text}");
 }
 
-/// A local aligned up to the widest scalar (4 or 8: fixed-point types are naturally aligned) on a frame that cannot be
-/// realigned is clamped to what the frame keeps, as the pin clamps it. It was refused "aligned to 4 needs stack
-/// realignment" at every level.
+/// A local aligned up to the widest scalar (4 or 8: fixed-point types are
+/// naturally aligned) is clamped to what the frame keeps, not realigned. It was
+/// refused "aligned to 4 needs stack realignment" at every level.
 #[test]
 fn a_local_up_to_the_widest_scalar_alignment_is_clamped_not_refused() {
     for align in [4, 8] {
@@ -44,10 +46,10 @@ fn a_local_up_to_the_widest_scalar_alignment_is_clamped_not_refused() {
 }
 
 #[test]
-fn a_local_aligned_past_the_accepted_alignment_is_refused_by_name() {
+fn a_local_aligned_past_what_the_frame_keeps_realigns_the_stack() {
     for level in [Level::O0, Level::O2, Level::Os] {
-        let error = assembly(&probe().replace("align 2", "align 16"), &Request::new(level)).unwrap_err();
-        assert!(error.contains("aligned to 16"), "{level:?}: {error}");
+        let text = assembly(&probe().replace("align 2", "align 16"), &Request::new(level)).unwrap();
+        assert!(text.contains("and #240"), "{level:?}: no rounding of rs0 to 16:\n{text}");
     }
 }
 
@@ -88,8 +90,10 @@ seen: .res 1
     assert_eq!(common::run_with("alloca-align-two", main, &extra), 0);
 }
 
-/// The clamp left `load/store ... align 2` on an `align 1` object: the access claimed an alignment nothing has, a load of it could not be
-/// speculated, and `c >= '0' && c <= '9'` kept two branches (isdigit 28 -> 50 bytes, `tti::a_range_test_of_a_word_...`).
+/// The clamp left `load/store ... align 2` on an `align 1` object: the access
+/// claimed an alignment nothing has, a load of it could not be speculated, and
+/// `c >= '0' && c <= '9'` kept two branches (isdigit 28 -> 50 bytes,
+/// `tti::a_range_test_of_a_word_...`).
 #[test]
 fn an_access_to_a_clamped_local_states_what_the_local_keeps() {
     let ir = format!(

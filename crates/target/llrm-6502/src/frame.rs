@@ -13,9 +13,16 @@
 //! expand to nothing; a frame with variable-sized objects adjusts `rs0` around
 //! each call instead.
 //!
-//! DEVIATE: not translated are a frame pointer, dynamic allocas, an object past
-//! offset 255 (it needs the address in a pair), tail calls and shrink wrapping.
-//! Exit: when a program needs them.
+//! An object aligned past [`REALIGN_ABOVE`] realigns the soft stack
+//! (`needsStackRealignment`): the prologue is one `ALIGNSP`, `rs0 = (rs0 -
+//! size) & -align`, which also stores the old `rs0` in a frame slot; the
+//! epilogue reloads `rs0` from it (`RESTORESP`), and a stack argument is read
+//! from the old `rs0` (`LEAOLD`) where the frame has no pointer register to
+//! keep it in.
+//!
+//! DEVIATE: not translated are a frame pointer, a dynamic alloca in a
+//! realigned frame, an object past offset 255 (it needs the address in a
+//! pair), tail calls and shrink wrapping. Exit: when a program needs them.
 //!
 //! # See also
 //! `crates/target/llrm-m68k/src/frame.rs`, the same shape for m68k.
@@ -23,7 +30,7 @@
 use llrm_codegen::backend::frameobjects::{Frame, Object, calculate_frame_object_offsets};
 
 use crate::dagisel::generated::ids::opcode as op;
-use crate::emit::{MInst, Operand};
+use crate::emit::{MInst, Operand, spill};
 
 /// What the frame depends on.
 #[derive(Clone, Debug, Default)]
@@ -50,7 +57,17 @@ pub struct Layout {
     pub objects: Vec<Object>,
     saved: Vec<String>,
     first_save: usize,
+    fixed: usize,
     reserved_call_frame: bool,
+    realign: Option<Realign>,
+}
+
+/// A frame that realigns the stack pointer: to `align`, the old pointer kept
+/// in the object `slot`.
+#[derive(Clone, Copy, Debug)]
+struct Realign {
+    align: i64,
+    slot: usize,
 }
 
 /// The alignment the soft stack keeps, in bytes: frames are any size. The
@@ -59,6 +76,11 @@ pub const STACK_ALIGN: i64 = 1;
 
 pub fn layout(function: &Function) -> Layout {
     let mut objects = function.objects.clone();
+    let max_align = objects.iter().map(|object| object.align).max().unwrap_or(1);
+    let realign = (max_align > STACK_ALIGN).then(|| {
+        objects.push(Object { size: 2, align: 1, offset: 0, callee_saved: false, dead: false });
+        Realign { align: max_align, slot: objects.len() - 1 }
+    });
     let first_save = objects.len();
     for _ in &function.saved {
         objects.push(Object { size: 2, align: 1, offset: 0, callee_saved: true, dead: false });
@@ -71,19 +93,27 @@ pub fn layout(function: &Function) -> Layout {
         transient_align: 1,
         adjusts_stack: function.adjusts_stack,
         has_var_sized: function.has_var_sized,
-        realigned: false,
+        realigned: realign.is_some(),
         reserved_call_frame,
         max_call_frame_size: function.max_call_frame,
     };
     let stack_size = calculate_frame_object_offsets(&mut objects, function.fixed, frame);
-    Layout { stack_size, objects, saved: function.saved.clone(), first_save, reserved_call_frame }
+    Layout {
+        stack_size,
+        objects,
+        saved: function.saved.clone(),
+        first_save,
+        fixed: function.fixed,
+        reserved_call_frame,
+        realign,
+    }
 }
 
-/// The largest `alloca` alignment accepted: the widest scalar (clang gives a fixed-point `long _Accum` `align 8`). Such
-/// an object is clamped to what the frame keeps ([`STACK_ALIGN`]), as the pin clamps on a frame that cannot be
-/// realigned (`MachineFrameInfo::CreateStackObject`, `clampStackAlignment`); a larger one is refused by name
-/// (`Machine::max_alloca_align`).
-pub const MAX_ALLOCA_ALIGN: u64 = 8;
+/// The widest scalar (clang gives a fixed-point `long _Accum` `align 8`). An
+/// `alloca` aligned to no more is clamped to what the frame keeps
+/// ([`STACK_ALIGN`]); a larger one realigns the stack
+/// (`Machine::realigned_above`).
+pub const REALIGN_ABOVE: u64 = 8;
 
 fn adjust(bytes: i64) -> MInst {
     MInst::new(op::ADJSP, vec![Operand::Imm(bytes)])
@@ -98,6 +128,25 @@ impl Layout {
         self.objects[index].offset + self.stack_size
     }
 
+    /// Whether the frame realigns `rs0`.
+    pub fn realigned(&self) -> bool {
+        self.realign.is_some()
+    }
+
+    /// The byte offset of fixed object `index` from `rs0` at entry, which a
+    /// realigned frame no longer is the frame's `rs0` plus a distance.
+    pub fn entry_offset(
+        &self,
+        index: usize,
+    ) -> i64 {
+        self.objects[index].offset
+    }
+
+    /// Where a realigned frame keeps the `rs0` it had at entry.
+    pub fn old_stack_pointer(&self) -> i64 {
+        self.realign.map_or(0, |realign| self.address(realign.slot))
+    }
+
     fn save_slots(&self) -> impl Iterator<Item = (&String, i64)> {
         self.saved.iter().enumerate().map(|(n, name)| (name, self.address(self.first_save + n)))
     }
@@ -106,7 +155,16 @@ impl Layout {
     /// stored.
     pub fn prologue(&self) -> Vec<MInst> {
         let mut insts = Vec::new();
-        if self.stack_size != 0 {
+        if let Some(realign) = self.realign {
+            insts.push(MInst::new(
+                spill::ALIGNSP,
+                vec![
+                    Operand::Imm(self.stack_size),
+                    Operand::Imm(realign.align),
+                    Operand::Imm(self.old_stack_pointer()),
+                ],
+            ));
+        } else if self.stack_size != 0 {
             insts.push(adjust(-self.stack_size));
         }
         for (name, offset) in self.save_slots() {
@@ -121,7 +179,9 @@ impl Layout {
         for (name, offset) in self.save_slots() {
             insts.push(MInst::new(op::LDP16, vec![Operand::reg(name), Operand::reg("rs0"), Operand::Imm(offset)]));
         }
-        if self.stack_size != 0 {
+        if self.realign.is_some() {
+            insts.push(MInst::new(spill::RESTORESP, vec![Operand::Imm(self.old_stack_pointer())]));
+        } else if self.stack_size != 0 {
             insts.push(adjust(self.stack_size));
         }
         insts
@@ -156,6 +216,9 @@ impl Layout {
             _ => return Ok(inst.clone()),
         };
         let Operand::FrameIndex(index) = inst.operands[at] else { return Ok(inst.clone()) };
+        if self.realigned() && index < self.fixed {
+            return Err(format!("stack argument {index} of a realigned frame is read from the old rs0"));
+        }
         let base = self.address(index);
         let mut operands = inst.operands.clone();
         if inst.opcode == op::LEASP16 {
@@ -175,7 +238,8 @@ impl Layout {
 
 #[cfg(test)]
 mod stack_facts {
-    /// The datalayout named no stack alignment, so a pass raising a local to its type's preferred alignment had no bound.
+    /// The datalayout named no stack alignment, so a pass raising a local to
+    /// its type's preferred alignment had no bound.
     #[test]
     fn the_datalayout_states_the_stack_alignment_the_frames_keep() {
         let layout = crate::LAYOUT
