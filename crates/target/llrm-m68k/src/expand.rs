@@ -478,6 +478,16 @@ impl FrameInputs {
     }
 }
 
+/// Whether the `move.l` a copy of `src` to `dst` expands to sets N and Z by
+/// the value: into a data register it does; into an address register it is
+/// `movea`, which keeps the codes, and a copy onto itself expands to nothing.
+pub(crate) fn copy_sets_codes(
+    dst: RegId,
+    src: RegId,
+) -> bool {
+    REGISTER_INFO.root(dst) != REGISTER_INFO.root(src) && crate::addrarith::is_data(dst)
+}
+
 /// `MachineFrameInfo::hasVarSizedObjects`: the pin sets it where a dynamic
 /// `alloca` is built (`visitAlloca`); here a copy into the stack pointer
 /// shows it. `physical` names the register an operand is in.

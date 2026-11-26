@@ -27,6 +27,10 @@ thread_local! {
     static TEXTS: std::cell::RefCell<llrm_support::hash::HashMap<Box<str>, Option<&'static Text>>> = Default::default();
     static BITS: std::cell::RefCell<llrm_support::hash::HashMap<Box<str>, Option<(u16, &'static [Piece])>>> =
         Default::default();
+}
+
+#[cfg(test)]
+thread_local! {
     static SEARCHES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
@@ -38,6 +42,7 @@ pub(crate) fn cached<T: Copy>(
     if let Some(found) = kept.with_borrow(|map| map.get(name).copied()) {
         return found;
     }
+    #[cfg(test)]
     SEARCHES.set(SEARCHES.get() + 1);
     let found = search(name);
     kept.with_borrow_mut(|map| map.insert(name.into(), found));
@@ -45,7 +50,8 @@ pub(crate) fn cached<T: Copy>(
 }
 
 /// How many names this thread has looked up in the tables.
-pub fn table_searches() -> usize {
+#[cfg(test)]
+pub(crate) fn table_searches() -> usize {
     SEARCHES.get()
 }
 
@@ -191,9 +197,11 @@ mod tests {
     }
 }
 
-/// `MorphNodeTo` of `node`, and `ReplaceUses` when an equal node existed: a node whose machine form is already in the
-/// DAG is replaced by it (what the pin's matcher does after `MorphNodeTo`). A selector that leaves `node` where it is
-/// leaves its users reading an unselected node ("operand AnyExtend before its definition").
+/// `MorphNodeTo` of `node`, and `ReplaceUses` when an equal node existed: a
+/// node whose machine form is already in the DAG is replaced by it (what the
+/// pin's matcher does after `MorphNodeTo`). A selector that leaves `node` where
+/// it is leaves its users reading an unselected node ("operand AnyExtend before
+/// its definition").
 pub fn morph(
     adapter: &mut DagisAdapter<'_>,
     node: u32,
