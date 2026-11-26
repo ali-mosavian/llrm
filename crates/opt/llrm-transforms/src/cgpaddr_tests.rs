@@ -610,3 +610,41 @@ b2:
     );
     assert_eq!(after.matches("getelementptr").count(), 1, "the address is made once: {after}");
 }
+
+/// QB `double.c` `dubl_fn`: the address two cold error paths passed on was
+/// made before the call both follow, so it held a saved register on the hot
+/// path (`lea r14`, a `push` and a `pop`: 64 instructions a call against the
+/// pin's 59). The pin makes it in each cold path (`optimizeCallInst`).
+#[test]
+fn test_the_address_of_a_cold_calls_argument_is_made_in_its_block() {
+    let text = |cold: &str, size: &str| {
+        format!(
+            "declare void @fail(ptr)
+define void @f(ptr %s, i16 %k) {size} {{
+b0:
+  %p = getelementptr i8, ptr %s, i16 100
+  %c = icmp eq i16 %k, 1
+  br i1 %c, label %one, label %two
+
+one:
+  call void @fail(ptr %p) {cold}
+  ret void
+
+two:
+  call void @fail(ptr %p) {cold}
+  ret void
+}}
+"
+        )
+    };
+    let after = sunk(&text("cold", ""));
+    let (entry, rest) = after.split_once("one:").expect("the cold blocks");
+    assert!(!entry.contains("getelementptr"), "the address is still made before the branch: {after}");
+    assert_eq!(rest.matches("getelementptr").count(), 2, "{after}");
+    // Not for calls that run as often as not, nor where bytes are what counts.
+    for (cold, size) in [("", ""), ("cold", "optsize")] {
+        let after = sunk(&text(cold, size));
+        let (entry, _) = after.split_once("one:").expect("the blocks");
+        assert!(entry.contains("getelementptr"), "{cold} {size}: {after}");
+    }
+}
