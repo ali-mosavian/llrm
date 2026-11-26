@@ -638,6 +638,16 @@ pub fn address_only(
     value: ValueId,
     depth: u32,
 ) -> bool {
+    address_only_or(function, value, depth, &|_| false)
+}
+
+/// [`address_only`], where a use `also` admits counts as one.
+pub fn address_only_or(
+    function: &Function,
+    value: ValueId,
+    depth: u32,
+    also: &dyn Fn(InstId) -> bool,
+) -> bool {
     let users = function.users(value);
     !users.is_empty()
         && users.iter().all(|one| {
@@ -649,9 +659,9 @@ pub fn address_only(
                         && user.operands.first() != Some(&Operand::Value(value))
                 }
                 Opcode::GetElementPtr { .. } => {
-                    depth > 0 && user.result.is_some_and(|result| address_only(function, result, depth - 1))
+                    depth > 0 && user.result.is_some_and(|result| address_only_or(function, result, depth - 1, also))
                 }
-                _ => false,
+                _ => also(one.user),
             }
         })
 }
