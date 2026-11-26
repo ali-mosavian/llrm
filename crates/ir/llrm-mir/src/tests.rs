@@ -874,7 +874,8 @@ fn a_callees_parameter_attributes_say_an_argument_is_only_read_without_site_list
         let call = function.iter_block(function.layout()[0]).next().expect("the call");
         let crate::opcode::Opcode::Call(info) = function.instruction(call).opcode.clone() else { panic!("a call") };
         function.set_call_attributes(call, info.attrs, info.return_attrs, Vec::new());
-        let (_, _, function) = module.functions().find(|(_, global, _)| global.name.as_deref() == Some("f")).expect("@f");
+        let (_, _, function) =
+            module.functions().find(|(_, global, _)| global.name.as_deref() == Some("f")).expect("@f");
         crate::memory::only_reads_argument(&module.context, &module.globals, function, call, 0)
     };
     assert!(only_read("ptr readonly nocapture"));
