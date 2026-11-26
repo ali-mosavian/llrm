@@ -95,7 +95,6 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use llrm_lir::registers::RegId;
-use llrm_lir::registers::Regs;
 
 use crate::backend::classes::RegisterClasses;
 use crate::backend::cpu::Profile;
@@ -1429,21 +1428,8 @@ fn depth_first(body: &LirBody) -> Vec<i64> {
     order
 }
 
-/// The whole function in stack form.
-///
-/// DEVIATE 11 (owner x87, exit 2026-11-27): the order of the independent float
-/// chains of a loop block is the instruction selector's, and the stack pays
-/// for it: `acc += x; x = x * 0.5 + 1` is `fadd st(1), st(0); fmul; fld1;
-/// faddp`, while the chains the other way round copy `x` and exchange twice
-/// (recfloat -O2 m32: 9 instructions a trip against 8, 2 `fxch` against 1;
-/// gcc orders them the first way). Each loop block of two or three chains is
-/// converted in every order of its chains and kept in the order that emits
-/// fewest instructions, weighted by loop depth. Chains are the instructions
-/// that share a value one of them writes; a block that writes memory, calls,
-/// or has a float instruction with an address or integer operand is left as
-/// it is. The values a loop carries into its header are likewise tried in
-/// each order (two or three of them), kept by the same count; not where bytes
-/// are strict (-O1, -Os).
+/// The whole function in stack form, converted once (the pin's `FPStackifier`).
+#[cfg(test)]
 pub(super) fn converted(
     body: &LirBody,
     classes: &RegisterClasses,
@@ -1511,227 +1497,7 @@ pub(super) fn converted_with(
     let body = valued.as_ref().unwrap_or(body);
     let spilled_first = spills_before_stack_inputs(body);
     let body = spilled_first.as_ref().unwrap_or(body);
-    let no_orders = HashMap::default();
-    let mut best = converted_valued(body, classes, cpu, constants, &no_orders)?;
-    let floating = floatassign::_floating_values(body);
-    if floating.is_empty() {
-        return Ok(best);
-    }
-    let weight = loop_weights(body);
-    let mut current = body.clone();
-    let mut score = weighted_len(&best, &weight);
-    let mut tried = 0;
-    for (index, block) in body.blocks.iter().enumerate() {
-        if weight.get(&block.at).is_none_or(|&w| w < 8) {
-            continue;
-        }
-        for insns in chain_orders(block, &floating, body.regs()) {
-            tried += 1;
-            if tried > MAX_CHAIN_TRIALS {
-                return Ok(best);
-            }
-            let mut blocks: Vec<Block> = current.blocks.iter().cloned().collect();
-            blocks[index] = block.with_insns(insns);
-            let candidate = current.with_blocks(blocks);
-            let Ok(done) = converted_valued(&candidate, classes, cpu, constants, &no_orders) else { continue };
-            let length = weighted_len(&done, &weight);
-            if length < score {
-                score = length;
-                best = done;
-                current = candidate;
-            }
-        }
-    }
-    // The order each loop header's carried values take: a loop that finds them
-    // the wrong way round exchanges them on every trip.
-    // Not where bytes are strict (-O1, -Os): the shuffle can move a constant's
-    // load onto an edge and the block placement after it grows the loop's
-    // guard.
-    if cpu.is_some_and(|cpu| cpu.bytes_strict()) {
-        return Ok(best);
-    }
-    let mut orders: HashMap<i64, Vec<u32>> = HashMap::default();
-    let found = crate::analysis::loops::loops(&current.blocks, Some(current.entry));
-    // Liveness only where there is a loop: a body without one asked it twice
-    // for nothing.
-    if found.is_empty() {
-        return Ok(best);
-    }
-    let (live_in, _) = live_among(&current, |value| floating.contains(&value));
-    for one in found {
-        let values: Vec<u32> = live_in[&one.header].iter().filter(|value| floating.contains(value)).collect();
-        if !(2..=3).contains(&values.len()) {
-            continue;
-        }
-        for order in permutations(&values) {
-            tried += 1;
-            if tried > MAX_CHAIN_TRIALS {
-                return Ok(best);
-            }
-            let mut trial = orders.clone();
-            trial.insert(one.header, order);
-            let Ok(done) = converted_valued(&current, classes, cpu, constants, &trial) else { continue };
-            let length = weighted_len(&done, &weight);
-            if length < score {
-                score = length;
-                best = done;
-                orders = trial;
-            }
-        }
-    }
-    Ok(best)
-}
-
-/// Every order of `values`.
-fn permutations(values: &[u32]) -> Vec<Vec<u32>> {
-    if values.len() <= 1 {
-        return vec![values.to_vec()];
-    }
-    let mut all = Vec::new();
-    for at in 0..values.len() {
-        let mut rest = values.to_vec();
-        let first = rest.remove(at);
-        for mut tail in permutations(&rest) {
-            tail.insert(0, first);
-            all.push(tail);
-        }
-    }
-    all
-}
-
-/// Most orders `converted` converts a function in.
-const MAX_CHAIN_TRIALS: usize = 12;
-
-/// How many times each block runs relative to the function: 8 for every loop
-/// around it.
-fn loop_weights(body: &LirBody) -> HashMap<i64, i64> {
-    let mut weight = HashMap::<i64, i64>::default();
-    for one in crate::analysis::loops::loops(&body.blocks, Some(body.entry)) {
-        for at in &one.body {
-            *weight.entry(*at).or_insert(1) *= 8;
-        }
-    }
-    weight
-}
-
-fn weighted_len(
-    body: &LirBody,
-    weight: &HashMap<i64, i64>,
-) -> i64 {
-    body.blocks.iter().map(|block| block.insns.len() as i64 * weight.get(&block.at).copied().unwrap_or(1)).sum()
-}
-
-/// The instructions of `block` with its float chains in each other order (the
-/// order they have not included). Empty where the block is not one this may
-/// reorder.
-fn chain_orders(
-    block: &Block,
-    floating: &HashSet<u32>,
-    regs: Regs,
-) -> Vec<Vec<Arc<Insn>>> {
-    let cut = floatalloc::_terminators(block);
-    // The copies at the end are the phi moves; they read the chains' results.
-    let mut tail = cut;
-    while tail > 0 && floatalloc::_float_copy(&block.insns[tail - 1]).is_some() {
-        tail -= 1;
-    }
-    let mut positions: Vec<usize> = Vec::new();
-    for at in 0..tail {
-        let one = &block.insns[at];
-        let Some(what) = &one.what else { return Vec::new() };
-        if one.volatile
-            || one.call.is_some()
-            || one.group.is_some()
-            || clears_stack(regs, one)
-            || what.dests.iter().any(|arg| matches!(arg, Loc::Mem(_)))
-        {
-            return Vec::new();
-        }
-        let float =
-            what.sources.iter().chain(&what.dests).any(|arg| matches!(arg, Loc::Held(held) if held.width == 10));
-        if !float {
-            continue;
-        }
-        let operands_ok =
-            what.sources.iter().chain(&what.dests).all(|arg| {
-                matches!(arg, Loc::Held(held) if held.width == 10) || matches!(arg, Loc::Mem(_) | Loc::Imm(_))
-            });
-        if !operands_ok || one.uses.iter().chain(&one.defines).any(|value| !floating.contains(value)) {
-            return Vec::new();
-        }
-        positions.push(at);
-    }
-    // Instructions that share a value one of them writes are one chain.
-    let mut parent: Vec<usize> = (0..positions.len()).collect();
-    fn root(
-        parent: &mut [usize],
-        mut at: usize,
-    ) -> usize {
-        while parent[at] != at {
-            parent[at] = parent[parent[at]];
-            at = parent[at];
-        }
-        at
-    }
-    let written: HashSet<u32> = positions.iter().flat_map(|&at| block.insns[at].defines.iter().copied()).collect();
-    let mut first_touch: HashMap<u32, usize> = HashMap::default();
-    for (index, &at) in positions.iter().enumerate() {
-        let one = &block.insns[at];
-        for value in one.uses.iter().chain(&one.defines).filter(|value| written.contains(*value)) {
-            match first_touch.get(value) {
-                Some(&other) => {
-                    let (a, b) = (root(&mut parent, index), root(&mut parent, other));
-                    parent[a.max(b)] = a.min(b);
-                }
-                None => {
-                    first_touch.insert(*value, index);
-                }
-            }
-        }
-    }
-    let mut chains: Vec<Vec<usize>> = Vec::new();
-    let mut of_root: HashMap<usize, usize> = HashMap::default();
-    for index in 0..positions.len() {
-        let at = root(&mut parent, index);
-        let chain = *of_root
-            .entry(at)
-            .or_insert_with(
-                || {
-                    chains.push(Vec::new());
-                    chains.len() - 1
-                },
-            );
-        chains[chain].push(positions[index]);
-    }
-    if !(2..=3).contains(&chains.len()) {
-        return Vec::new();
-    }
-    let mut orders: Vec<Vec<usize>> = vec![Vec::new()];
-    for _ in 0..chains.len() {
-        let mut longer = Vec::new();
-        for order in &orders {
-            for chain in 0..chains.len() {
-                if !order.contains(&chain) {
-                    let mut next = order.clone();
-                    next.push(chain);
-                    longer.push(next);
-                }
-            }
-        }
-        orders = longer;
-    }
-    orders
-        .into_iter()
-        .filter(|order| order.iter().enumerate().any(|(slot, &chain)| slot != chain))
-        .map(|order| {
-            let mut insns: Vec<Arc<Insn>> = block.insns.to_vec();
-            let moved = order.iter().flat_map(|&chain| chains[chain].iter().copied());
-            for (slot, from) in positions.iter().zip(moved) {
-                insns[*slot] = Arc::clone(&block.insns[from]);
-            }
-            insns
-        })
-        .collect()
+    converted_valued(body, classes, cpu, constants)
 }
 
 fn converted_valued(
@@ -1739,7 +1505,6 @@ fn converted_valued(
     classes: &RegisterClasses,
     cpu: Option<&Profile>,
     constants: &HashMap<i64, &'static str>,
-    orders: &HashMap<i64, Vec<u32>>,
 ) -> Result<LirBody, Raised> {
     let regs = body.regs();
     let floating = floatassign::_floating_values(body);
@@ -1782,18 +1547,6 @@ fn converted_valued(
         let (entry, exit) = bundles.of[&block.at];
         live_bundles.entry(entry).or_default().mask.extend(floats(&live_in[&block.at]));
         live_bundles.entry(exit).or_default().mask.extend(floats(&live_out[&block.at]));
-    }
-    // DEVIATE 11: the order a loop header's values take, where `converted_with`
-    // tried one other than the first exit to reach it would give.
-    for (header, order) in orders {
-        let Some(&(entry, _)) = bundles.of.get(header) else { continue };
-        let Some(bundle) = live_bundles.get_mut(&entry) else { continue };
-        if bundle.fixed.is_none()
-            && bundle.mask.len() == order.len()
-            && order.iter().all(|value| bundle.mask.contains(value))
-        {
-            bundle.fixed = Some(order.clone());
-        }
     }
     let at_of: IndexMap<i64, &Block> = body.blocks.iter().map(|block| (block.at, block)).collect();
     let status_word = classes.status_word().ok_or_else(|| unlowered("the target has no x87 status word register"))?;
