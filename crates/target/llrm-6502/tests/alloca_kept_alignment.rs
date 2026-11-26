@@ -30,8 +30,9 @@ fn an_align_2_local_is_not_assumed_aligned_by_the_mid_end() {
     assert!(!text.contains("ret i8 0"), "ptr & 1 folded to 0 from the alloca's align:\n{text}");
 }
 
-/// Fixed-point types are naturally aligned (`_Accum` 4, `long _Accum` 8), above the 2 an `int` has: a local of one was
-/// refused "aligned to 4 needs stack realignment" (`fixed_point` in `tests/run/c`, every level).
+/// A local aligned up to the widest scalar (4 or 8: fixed-point types are naturally aligned) on a frame that cannot be
+/// realigned is clamped to what the frame keeps, as the pin clamps it. It was refused "aligned to 4 needs stack
+/// realignment" at every level.
 #[test]
 fn a_local_up_to_the_widest_scalar_alignment_is_clamped_not_refused() {
     for align in [4, 8] {
