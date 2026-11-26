@@ -61,6 +61,8 @@ pub enum Event {
     /// An exit test or integer-to-float conversion LSR prepared before
     /// planning (`lsr_prepared`).
     LsrPrepared,
+    /// A node `setup_cost` visited while working out a register's setup cost.
+    LsrSetupVisits,
     /// A loop LSR chose a solution for (`lsr_solutions`).
     LsrSolutions,
     /// A loop whose solution changed the IR (`lsr_rewritten`).
@@ -131,7 +133,7 @@ pub enum Event {
 
 const SLOTS: usize = 64;
 
-const NAMES: [&str; 47] = [
+const NAMES: [&str; 48] = [
     "function_clones",
     "function_forks",
     "machinings",
@@ -149,6 +151,7 @@ const NAMES: [&str; 47] = [
     "fingerprints",
     "lsr_loops",
     "lsr_prepared",
+    "lsr_setup_visits",
     "lsr_solutions",
     "lsr_rewritten",
     "lir_rename_asks",
@@ -196,7 +199,7 @@ thread_local! {
     static PASSES: RefCell<Vec<PassRow>> = const { RefCell::new(Vec::new()) };
     /// (pass, analysis, misses): the analyses a pass made the manager compute.
     static ASKS: RefCell<Vec<(&'static str, &'static str, u64)>> = const { RefCell::new(Vec::new()) };
-    static EVENTS: [Cell<u64>; 47] = const { [const { Cell::new(0) }; 47] };
+    static EVENTS: [Cell<u64>; 48] = const { [const { Cell::new(0) }; 48] };
     /// (name, hits, misses) by the address of the name, which is a literal.
     static FOUND: [Cell<usize>; SLOTS] = const { [const { Cell::new(0) }; SLOTS] };
     static ANALYSES: RefCell<Vec<(&'static str, u64, u64)>> = const { RefCell::new(Vec::new()) };
