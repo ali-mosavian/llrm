@@ -2128,11 +2128,11 @@ fn settle(
     // `BranchFolder::OptimizeFunction` with `TailMergeBlocks`, its
     // `MBBFreqInfo` kept as blocks split and merge.
     let bytes_first = matches!(level, Level::Os | Level::Oz);
-    if bytes_first {
-        llrm_spike_mf::branch_fold_hoisting_across_loops::<Z80Registers>(&mut function, &assignment);
+    let mut moved = expand::frequencies();
+    let changed = if bytes_first {
+        llrm_spike_mf::branch_fold_hoisting_across_loops::<Z80Registers>(&mut function, &assignment, &mut moved)
     } else {
         let hot = if HOT_LOOP_FOLD.with(|one| one.get()) { repeating_loops(&function) } else { Default::default() };
-        let mut moved = expand::frequencies();
         let changed = llrm_spike_mf::branch_fold_hoisting_across_hot_loops::<Z80Registers>(
             &mut function,
             &assignment,
@@ -2141,8 +2141,11 @@ fn settle(
         );
         if changed && !hot.is_empty() {
             LOOPS_FOLDED.with(|one| one.set(true));
-            frequencies = Some(moved);
         }
+        changed
+    };
+    if changed {
+        frequencies = Some(moved);
     }
     // `MachineBlockPlacement` after the last branch fold, as the pin orders
     // them. DEVIATE Z80-PLACE-OS (owner w8, exit 2026-11-28): not at -Os/-Oz,
@@ -4449,21 +4452,53 @@ fn lines_made(
         one == name && [source, scheduled].into_iter().any(|form| form.as_ref().is_ok_and(|s| s.generic.is_some()))
     });
     if !has_generic {
-        return carry;
+        return carry.map(Form::lines_in_force);
     }
     crate::dagisel::pipeline::GENERIC_FORM.with(|one| one.set(true));
     let generic = lines_of_form(selected, name, number, request);
     crate::dagisel::pipeline::GENERIC_FORM.with(|one| one.set(false));
+    let speed = !matches!(request.level, Level::Os | Level::Oz);
     match (carry, generic) {
         (Ok(carry), Ok(generic)) => {
-            let price = |lines: &[Line]| expand::price_emitted(lines, !matches!(request.level, Level::Os | Level::Oz));
-            let (with, without) = (price(&carry), price(&generic));
+            let (with, without) = (carry.price(speed), generic.price(speed));
             // the generic add only where it is no worse on either axis
             let take = without != with && without.0 <= with.0 && without.1 <= with.1;
-            Ok(if take { generic } else { carry })
+            Ok(if take { generic } else { carry }.lines_in_force())
         }
-        (Ok(one), Err(_)) | (Err(_), Ok(one)) => Ok(one),
+        (Ok(one), Err(_)) | (Err(_), Ok(one)) => Ok(one.lines_in_force()),
         (Err(why), Err(_)) => Err(why),
+    }
+}
+
+/// A function's lines with the block frequencies of the allocation that made
+/// them. Tail merging numbers the blocks it splits per allocation, so a map
+/// weighs only its own lines.
+#[derive(Clone)]
+struct Form {
+    lines: Vec<Line>,
+    frequencies: llrm_support::hash::HashMap<u32, f64>,
+}
+
+impl Form {
+    /// The lines of the allocation just made, whose frequencies are in force.
+    fn made(lines: Vec<Line>) -> Self {
+        Form { lines, frequencies: expand::frequencies() }
+    }
+
+    fn price(
+        &self,
+        speed: bool,
+    ) -> (u32, u64) {
+        let held = expand::replace_frequencies(self.frequencies.clone());
+        let price = expand::price_emitted(&self.lines, speed);
+        expand::replace_frequencies(held);
+        price
+    }
+
+    /// The lines, kept: their frequencies are what the later prices weigh by.
+    fn lines_in_force(self) -> Vec<Line> {
+        expand::replace_frequencies(self.frequencies);
+        self.lines
     }
 }
 
@@ -4472,11 +4507,11 @@ fn lines_of_form(
     name: &str,
     number: usize,
     request: &Request,
-) -> Result<Vec<Line>, String> {
-    let compile = |duplicate: bool| -> Result<Vec<Line>, String> {
+) -> Result<Form, String> {
+    let compile = |duplicate: bool| -> Result<Form, String> {
         FORMS_BUILT.with(|one| one.set(one.get() + 1));
         let (function, assignment, slots, reads, _) = allocated_with(selected, name, request, duplicate)?;
-        finish(&function, &assignment, number, &slots, reads)
+        finish(&function, &assignment, number, &slots, reads).map(Form::made)
     };
     // Copying a return block into its predecessors saves a `jp` and often a
     // move, or costs a copy of the block: the smaller result, then the faster,
@@ -4495,7 +4530,7 @@ fn lines_of_form(
         };
         let kept = if copied.is_ok() && alike() { copied.clone() } else { compile(false) };
         match (copied, kept) {
-            (Ok(one), Ok(two)) => Ok(if expand::price(&one) <= expand::price(&two) { one } else { two }),
+            (Ok(one), Ok(two)) => Ok(if expand::price(&one.lines) <= expand::price(&two.lines) { one } else { two }),
             (Ok(one), Err(_)) | (Err(_), Ok(one)) => Ok(one),
             (Err(why), Err(_)) => Err(why),
         }
@@ -4508,16 +4543,16 @@ fn lines_of_form(
     crate::dagisel::pipeline::ILP.with(|one| one.set(false));
     match (source, ilp) {
         (Ok(source), Ok(ilp)) => {
-            let price = |lines: &[Line]| expand::price_emitted(lines, !matches!(request.level, Level::Os | Level::Oz));
-            Ok(if cheaper(request.level, price(&ilp), price(&source)) { ilp } else { source })
+            let speed = !matches!(request.level, Level::Os | Level::Oz);
+            Ok(if cheaper(request.level, ilp.price(speed), source.price(speed)) { ilp } else { source })
         }
         (Ok(one), Err(_)) | (Err(_), Ok(one)) => Ok(one),
         (Err(why), Err(_)) => Err(why),
     }
-    .map(|lines| {
+    .map(|form| {
         let speed = !matches!(request.level, Level::Os | Level::Oz);
-        let lines = if request.sp_frame { crate::sp_frame::without_ix(lines, speed) } else { lines };
-        expand::relax(lines, speed)
+        let lines = if request.sp_frame { crate::sp_frame::without_ix(form.lines, speed) } else { form.lines };
+        Form { lines: expand::relax(lines, speed), ..form }
     })
 }
 
