@@ -999,6 +999,11 @@ impl Liveness {
         self.index.get(&register).is_some_and(|&at| self.row(block)[at as usize / 64] >> (at % 64) & 1 == 1)
     }
 
+    /// How many registers the rows run over.
+    pub fn tracked(&self) -> usize {
+        self.registers.len()
+    }
+
     /// The registers live into `block`.
     pub fn iter(
         &self,
@@ -1051,6 +1056,35 @@ pub fn live_in(
             ends.push((at, touches.len()));
         }
     }
+    // A register is live into a block only if some block reads it before it
+    // writes it (`LiveVariables` marks only those alive across blocks): the
+    // rows run over those registers, not over every one the function names.
+    let mut exposed = vec![false; registers.len()];
+    let mut killed_in = vec![usize::MAX; registers.len()];
+    let mut from = 0;
+    for &(block, end) in &ends {
+        for &(number, reads, _) in &touches[from..end] {
+            if reads && killed_in[number as usize] != block {
+                exposed[number as usize] = true;
+            }
+        }
+        for &(number, _, writes) in &touches[from..end] {
+            if writes {
+                killed_in[number as usize] = block;
+            }
+        }
+        from = end;
+    }
+    let mut row_of = vec![u32::MAX; registers.len()];
+    let mut kept: Vec<Reg> = Vec::new();
+    for (number, register) in registers.iter().enumerate() {
+        if exposed[number] {
+            row_of[number] = kept.len() as u32;
+            kept.push(*register);
+        }
+    }
+    index = kept.iter().enumerate().map(|(row, register)| (*register, row as u32)).collect();
+    registers = kept;
     let words = registers.len().div_ceil(64);
     let mut gen_rows = vec![0u64; count * words];
     let mut kill_rows = vec![0u64; count * words];
@@ -1060,13 +1094,18 @@ pub fn live_in(
         let (gen_row, kill_row) = (&mut gen_rows[row.clone()], &mut kill_rows[row]);
         // Reads happen before the writes of the same operation.
         for &(number, reads, _) in &touches[from..end] {
+            let number = row_of[number as usize];
+            if number == u32::MAX {
+                continue;
+            }
             let (word, bit) = (number as usize / 64, number % 64);
             if reads && kill_row[word] >> bit & 1 == 0 {
                 gen_row[word] |= 1 << bit;
             }
         }
         for &(number, _, writes) in &touches[from..end] {
-            if writes {
+            let number = row_of[number as usize];
+            if writes && number != u32::MAX {
                 kill_row[number as usize / 64] |= 1 << (number % 64);
             }
         }
@@ -1405,6 +1444,50 @@ mod tests {
         assert!(live.contains(1, b) && !live.contains(0, b), "b is made in the entry and read in the loop");
         assert!(!live.contains(1, c) && !live.contains(0, c), "c is made and read in the loop");
         assert_eq!(live.iter(1).collect::<Vec<_>>(), vec![b]);
+    }
+
+    /// 3,000 blocks each make and read four registers of their own and one
+    /// value crosses them: the rows ran over all 12,001 registers, one bit row
+    /// of 188 words per block (a function of thousands of blocks and vregs
+    /// spent a sixth of its compile in the walk of them). Only a register some
+    /// block reads before it writes can be live into a block: the rows run over
+    /// that one.
+    #[test]
+    fn liveness_tracks_only_the_registers_that_cross_blocks() {
+        let mut function = MFunc::new("f");
+        let shared = function.gpr();
+        let mut entry = vec![Op::I(Inst::MoveWide { op: Wide::Zero, width: Width::X, rd: shared, imm16: 1, lsl: 0 })];
+        entry.push(branch_to("b0"));
+        function.blocks.push(MBlock { label: "entry".into(), ops: entry.into() });
+        for at in 0..3_000 {
+            let own: Vec<Gpr> = (0..4).map(|_| function.gpr()).collect();
+            let mut ops = vec![Op::I(Inst::MoveWide { op: Wide::Zero, width: Width::X, rd: own[0], imm16: 7, lsl: 0 })];
+            for pair in own.windows(2) {
+                ops.push(Op::I(Inst::AddSubShifted {
+                    op: AddSub { subtract: false, set_flags: false },
+                    width: Width::X,
+                    rd: pair[1],
+                    rn: pair[0],
+                    rm: pair[0],
+                    shift: Shift::Lsl,
+                    amount: 0,
+                }));
+            }
+            ops.push(branch_to(&format!("b{}", at + 1)));
+            function.blocks.push(MBlock { label: format!("b{at}"), ops: ops.into() });
+        }
+        function
+            .blocks
+            .push(
+                MBlock {
+                    label: "b3000".into(),
+                    ops: vec![add(0, shared.0, shared.0), Op::Return { uses: vec![], tail: None }].into(),
+                },
+            );
+        let live = live_in(&function, &cfg(&function));
+        assert_eq!(live.tracked(), 1, "every register the function names was tracked");
+        assert!(live.contains(1_500, Reg::Gpr(shared)) && !live.contains(0, Reg::Gpr(shared)));
+        assert_eq!(live.iter(3_000).collect::<Vec<_>>(), vec![Reg::Gpr(shared)]);
     }
 
     /// The loop made 5000 again on each trip although the entry had it in a
