@@ -78,12 +78,13 @@ fn a_function_over_the_trial_cap_is_built_once() {
     assert_eq!(chain_builds(cap + 100), 1, "a function over the cap ran its trials");
 }
 
-/// The cap was 5,000 instructions at every level: QB's `exec_loop` (66 builds,
-/// the whole of exec.c's backend compile) and the other functions between
-/// 3,000 and 5,000 ran every -Os trial for no byte (3,000 loses none over 113
-/// modules). At -O1 the same trials shrink exec.c by a third and stay.
+/// The cap was 5,000 instructions at every level, then 3,000 at -Os: QB's
+/// `exec_loop` and the functions between 2,000 and 3,000 ran every -Os trial
+/// for +150 B (exec.c) and +94 B (suggest.c) over 113 modules (user ruling
+/// 2026-11-26; m32 and arm64 cap at 2,000). At -O1 the same trials shrink
+/// exec.c by a third and stay.
 #[test]
-fn a_function_of_3100_instructions_is_built_once_at_size_and_tried_at_speed() {
+fn a_function_of_2100_instructions_is_built_once_at_size_and_tried_at_speed() {
     let builds = |links: usize, size: bool| {
         let module = module_with_chain(links);
         let before = runs().builds;
@@ -91,9 +92,9 @@ fn a_function_of_3100_instructions_is_built_once_at_size_and_tried_at_speed() {
         items_with(&module, "f", Cpu::M68000, options).expect("compiles");
         runs().builds - before
     };
-    assert!(builds(2900, true) > 1, "premise: the small function's -Os trials fire");
-    assert_eq!(builds(3100, true), 1, "a function over 3,000 instructions ran its -Os trials");
-    assert!(builds(3100, false) > 1, "the -O1 trials of a function under 5,000 instructions did not run");
+    assert!(builds(1900, true) > 1, "premise: the small function's -Os trials fire");
+    assert_eq!(builds(2100, true), 1, "a function over 2,000 instructions ran its -Os trials");
+    assert!(builds(2100, false) > 1, "the -O1 trials of a function under 5,000 instructions did not run");
 }
 
 /// The class relaxation and the held data constants each built the function
