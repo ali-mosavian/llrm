@@ -1,5 +1,5 @@
 //! A recursion with one call of itself in a loop is copied into itself at -O3
-//! when asked with `-fipa-cp-clone` (queens `place`); x86-m32 -O3 makes no copy
+//! when asked with `-fipa-cp-clone` (a search that recurses on `row + 1`); x86-m32 -O3 makes no copy
 //! by default, as the pin (IPACP-O3 ended 2026-11-26). Needs the Open Watcom
 //! tree (tools/ow-fetch.sh) and the m16 clang (`LLRM_CLANG_M16`).
 
@@ -72,8 +72,7 @@ fn listing_lines(
     std::fs::read_to_string(dir.join("q.s")).unwrap().lines().count()
 }
 
-/// queens -O3 ran 154117 clocks (gcc 94851) with `place` calling itself once:
-/// its one call in a loop was no tree, and the bar was read again on the loop
+/// A recursion calling itself once in a loop was no tree, and the bar was read again on the loop
 /// that tail-call elimination leaves (22 -> 27 `gcc_insns`). With
 /// `-fipa-cp-clone` the listing is 2,583 lines, with the copy missing about
 /// 130; by default (no clone, as the pin) -O3 makes no copy and is no longer

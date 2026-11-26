@@ -1,8 +1,7 @@
-//! x86-32 -O3 with `-fipa-cp-clone`: ipa-cp clones a recursive function to
-//! gcc's depth, 8, so every row of `place(q, row + 1, n)` is a clone of its own
-//! and the 7-row search has its row constants folded: queens ran 140,156 clk
-//! with 4 clones against gcc's 94,851 and 73,196 with 8. Needs the Open Watcom
-//! tree (tools/ow-fetch.sh) and `LLRM_LLC`.
+//! x86-32 -O3 with `-fipa-cp-clone`: ipa-cp clones a recursive function to gcc's
+//! depth, 8, so every row of a search that recurses on `row + 1` is a clone of
+//! its own and the row constants fold. By default -O3 makes no clone, as the
+//! pin. Needs the Open Watcom tree (tools/ow-fetch.sh) and `LLRM_LLC`.
 
 use std::path::Path;
 use std::process::Command;
