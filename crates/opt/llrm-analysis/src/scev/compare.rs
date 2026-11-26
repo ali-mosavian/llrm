@@ -338,6 +338,10 @@ const INSERTION_CHUNK: usize = 7;
 /// A stable sort by `less`, which need not be a strict weak order: runs of up
 /// to `INSERTION_CHUNK` by insertion, longer ones by merging through one
 /// buffer made for the whole sort (a short list, the usual one, makes none).
+// Kept out of line, as the recursive merge sort was: inlined, it changes how
+// its callers (`get_add_expr` and `get_mul_expr`) are inlined, +0.05% of a
+// compile on typical files.
+#[inline(never)]
 fn merge_sort(
     items: &mut [Use],
     less: &dyn Fn(Use, Use) -> bool,

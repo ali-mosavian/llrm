@@ -180,15 +180,20 @@ fn a_registers_setup_cost_is_walked_once_however_often_it_is_rated() {
 #[test]
 fn a_registers_tree_is_walked_once_however_often_it_is_asked() {
     use llrm_mir::counts::{Event, get};
-    with_loop(|_, se, a, _, header, ar| {
+    with_loop(|cx, se, a, b, header, ar| {
+        // Invariants only, as large as is kept: a tree without a recurrence.
+        let mut sum = se.get_add_expr(cx, vec![Operand32::of(a), Operand32::of(b)], Flags::default(), 0).scev;
+        while se.expression_size(sum) < llrm_analysis::scev::disposition::MEMOIZED_TREE_SIZE {
+            let scaled = se.get_mul_expr(cx, vec![Operand32::of(sum), Operand32::of(a)], Flags::default(), 0);
+            sum = se.get_add_expr(cx, vec![scaled, Operand32::of(b)], Flags::default(), 0).scev;
+        }
         let before = get(Event::ScevContainsVisits);
-        assert!(se.contains_add_rec_dependent_on_loop(ar, header));
-        assert!(!se.contains_add_rec_dependent_on_loop(a, header));
+        assert!(se.contains_add_rec_dependent_on_loop(ar, header), "a recurrence of the loop");
+        assert!(!se.contains_add_rec_dependent_on_loop(sum, header));
         let one_ask = get(Event::ScevContainsVisits) - before;
-        assert!(one_ask > 0, "the trees are walked");
+        assert!(one_ask > 0, "the sum's tree is walked");
         for _ in 0..4 {
-            assert!(se.contains_add_rec_dependent_on_loop(ar, header));
-            assert!(!se.contains_add_rec_dependent_on_loop(a, header));
+            assert!(!se.contains_add_rec_dependent_on_loop(sum, header));
         }
         assert_eq!(get(Event::ScevContainsVisits) - before, one_ask, "five asks walk what one does");
     });

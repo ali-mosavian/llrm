@@ -63,7 +63,7 @@ pub enum Event {
     LsrPrepared,
     /// A node `setup_cost` visited while working out a register's setup cost.
     LsrSetupVisits,
-    /// A node `ScalarEvolution::expr_contains` visited.
+    /// A node the walk of `contains_add_rec_dependent_on_loop` visited.
     ScevContainsVisits,
     /// A buffer `ScalarEvolution`'s operand sort made to merge through.
     ScevSortBuffers,
@@ -289,6 +289,14 @@ fn asked(analysis: &'static str) {
             Some(row) => row.2 += 1,
             None => rows.push((pass, analysis, 1)),
         }
+    });
+}
+
+/// `n` events at once: a loop counts locally and adds when it ends.
+pub fn add(event: Event, n: u64) {
+    EVENTS.with(|events| {
+        let one = &events[event as usize];
+        one.set(one.get() + n);
     });
 }
 
