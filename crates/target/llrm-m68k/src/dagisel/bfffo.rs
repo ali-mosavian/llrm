@@ -35,6 +35,9 @@ use super::asm::AsmOperand;
 use super::enc::{Enc, Piece};
 use super::generated::instrinfo;
 
+pub(crate) const TABLE: super::local::Table =
+    super::local::Table { code_of, name_of, desc, text: bfffo_asm, bits: bfffo_encoding };
+
 /// Code of the first row, above the `adda` forms.
 pub const FIRST: u16 = 0xF700;
 
@@ -73,7 +76,8 @@ static DESCS: LazyLock<Vec<&'static InstrDesc>> = LazyLock::new(|| {
             let base = instrinfo::desc(code).expect("a described row");
             // the pin's [dst, src (tied to dst), opd...]: the result and the
             // operands searched
-            let operands: Vec<_> = std::iter::once(base.operands[0]).chain(base.operands[2..].iter().copied()).collect();
+            let operands: Vec<_> =
+                std::iter::once(base.operands[0]).chain(base.operands[2..].iter().copied()).collect();
             &*Box::leak(Box::new(InstrDesc {
                 num_operands: operands.len() as u8,
                 num_defs: 1,
@@ -96,8 +100,10 @@ static ASM: LazyLock<Vec<(&'static str, &'static str, &'static [AsmOperand])>> =
                 at: SOURCE as u8,
                 method: if name == NAME { "printOperand" } else { "printARID32Mem" },
             };
-            let operands: &'static [AsmOperand] =
-                Box::leak(Box::new([source, AsmOperand { name: "dst", at: DESTINATION as u8, method: "printOperand" }]));
+            let operands: &'static [AsmOperand] = Box::leak(Box::new([
+                source,
+                AsmOperand { name: "dst", at: DESTINATION as u8, method: "printOperand" },
+            ]));
             (name, "bfffo\t$src{#0:#0}, $dst", operands)
         })
         .collect()

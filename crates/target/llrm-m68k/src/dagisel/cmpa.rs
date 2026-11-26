@@ -24,6 +24,9 @@ use super::enc::{Enc, Piece, encoding};
 use super::generated::ids::reg as pin;
 use super::generated::instrinfo;
 
+pub(crate) const TABLE: super::local::Table =
+    super::local::Table { code_of, name_of, desc, text: cmpa_asm, bits: cmpa_encoding };
+
 /// Codes of the rows, above the scaled rows'.
 pub const FIRST: u16 = 0xF500;
 

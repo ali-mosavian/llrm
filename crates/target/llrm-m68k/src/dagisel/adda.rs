@@ -23,11 +23,15 @@ use super::enc::{Enc, Piece};
 use super::generated::ids::reg as pin;
 use super::generated::instrinfo::{self, flag};
 
+pub(crate) const TABLE: super::local::Table =
+    super::local::Table { code_of, name_of, desc, text: adda_asm, bits: adda_encoding };
+
 /// Codes of the rows, above the compares'.
 pub const FIRST: u16 = 0xF600;
 
 /// The rows: name, mnemonic and the opcode's top nibble.
-const ROWS: [(&str, &str, u64); 2] = [("ADDA16r", "adda.w\t$src, $dst", 0b1101), ("SUBA16r", "suba.w\t$src, $dst", 0b1001)];
+const ROWS: [(&str, &str, u64); 2] =
+    [("ADDA16r", "adda.w\t$src, $dst", 0b1101), ("SUBA16r", "suba.w\t$src, $dst", 0b1001)];
 
 pub fn code_of(name: &str) -> Option<u16> {
     ROWS.iter().position(|row| row.0 == name).map(|at| FIRST + at as u16)
