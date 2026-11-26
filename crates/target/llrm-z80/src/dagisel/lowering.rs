@@ -228,6 +228,7 @@ pub fn target_lowering(speed_routines: bool) -> TargetLowering {
     tl.set_soft_float_libcall_names();
     // RuntimeLibcalls.def: the C library's `rint`, `sqrt`, ... for every target
     tl.set_libm_libcall_names();
+    tl.set_c_symbol(crate::data::symbol);
     tl.set_operation_action(BrCond, MVT::Other, Action::Custom);
     // equality of a long is the bytes' xors or-ed in the accumulator
     tl.set_byte_equality(true);
@@ -241,13 +242,15 @@ pub fn target_lowering(speed_routines: bool) -> TargetLowering {
 }
 
 /// The custom lowerings.
-pub struct Z80Lowering {
+pub struct Z80Lowering<'a> {
+    /// The table the legalizer runs on: how a routine is spelled.
+    pub tli: &'a TargetLowering,
     /// The function is tuned for size: the small routines
     /// (`set_size_libcall_name`).
     pub sized: bool,
 }
 
-impl Z80Lowering {
+impl Z80Lowering<'_> {
     /// A variable 64-bit shift as one loop over eight bytes in a frame cell, a
     /// bit a trip (`WSHIFT`): the value stored, shifted in place and loaded
     /// back. The module price decides against the routine's call
@@ -371,7 +374,7 @@ fn lower_divrem_word(
     Some(dag.get_node_multi(ISD::MergeValues, &[EVT::I16, EVT::I16], &[quotient, remainder]))
 }
 
-impl Z80Lowering {
+impl Z80Lowering<'_> {
     /// `ExpandDivRemLibCall`: one call to the routine that returns the
     /// quotient and stores the remainder through the address it is given, the
     /// last argument; the remainder is loaded back after the call.
@@ -533,7 +536,7 @@ impl Z80Lowering {
     }
 }
 
-impl Hooks for Z80Lowering {
+impl Hooks for Z80Lowering<'_> {
     fn lower_operation(
         &mut self,
         dag: &mut SelectionDAG,
@@ -652,11 +655,7 @@ impl Hooks for Z80Lowering {
         };
         let symbol = match divide_dividend_range(dag, name) {
             Some((low, high)) => crate::runtime_size::call_with_dividend_range(name, low, high),
-            // the C library's routines are C symbols, SDCC's underscore
-            None if llrm_codegen::backend::selectiondag::actions::is_c_library_routine(name) => {
-                crate::data::symbol(name)
-            }
-            None => name.to_owned(),
+            None => self.tli.libcall_symbol(name),
         };
         let callee = dag.get_target_external_symbol(EVT::I16, &symbol);
         let root = dag.entry_node();

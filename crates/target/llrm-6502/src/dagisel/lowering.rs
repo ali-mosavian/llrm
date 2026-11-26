@@ -67,7 +67,7 @@ pub mod cond {
     pub const PL: u128 = 5;
 }
 
-pub fn target_lowering() -> TargetLowering {
+pub fn target_lowering(c_symbol_prefix: &str) -> TargetLowering {
     use ISD::*;
     let mut tl = TargetLowering::empty(
         TargetLoweringInfo::new(&[MVT::I1, MVT::I8, MVT::I16], false)
@@ -196,11 +196,15 @@ pub fn target_lowering() -> TargetLowering {
     tl.set_soft_float_libcall_names();
     // RuntimeLibcalls.def: the C library's `rint`, `sqrt`, ... for every target
     tl.set_libm_libcall_names();
+    let prefix = c_symbol_prefix.to_owned();
+    tl.set_c_symbol(move |name| crate::abi::c_symbol(&prefix, name));
     tl
 }
 
 /// The custom lowerings.
-pub struct MosLowering {
+pub struct MosLowering<'a> {
+    /// The table the legalizer runs on: how a routine is spelled.
+    pub tli: &'a TargetLowering,
     /// A product of two words is a widening multiply (not in a function tuned
     /// for size: the two routines add bytes).
     pub widen_products: bool,
@@ -212,7 +216,7 @@ pub struct MosLowering {
     pub long_steps: bool,
 }
 
-impl Hooks for MosLowering {
+impl Hooks for MosLowering<'_> {
     fn lower_operation(
         &mut self,
         dag: &mut SelectionDAG,
@@ -317,13 +321,7 @@ impl Hooks for MosLowering {
             };
             count as usize
         ];
-        // the C library's routines are C symbols; the runtime's are as named
-        let symbol = if llrm_codegen::backend::selectiondag::actions::is_c_library_routine(name) {
-            crate::abi::c_symbol(name)
-        } else {
-            name.to_owned()
-        };
-        let callee = dag.get_target_external_symbol(EVT::I16, &symbol);
+        let callee = dag.get_target_external_symbol(EVT::I16, &self.tli.libcall_symbol(name));
         let root = dag.entry_node();
         let (_chain, values) = lower_call(dag, root, callee, &outs, &ins).ok()?;
         join_words(dag, &values, ret)

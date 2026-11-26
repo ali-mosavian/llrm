@@ -3482,13 +3482,6 @@ pub fn build_with_places(
             }
             op::RET => {
                 let results = results(&b.function.blocks[b.current].insts);
-                // a realigned frame is released after the result copies, which
-                // may reload spills
-                let insts = &mut b.function.blocks[b.current].insts;
-                if let Some(at) = insts.iter().rposition(|inst| inst.kind == Kind::Op("RESTORESP")) {
-                    let restore = insts.remove(at);
-                    b.push(restore);
-                }
                 let mut ret =
                     Inst::new(Kind::Op("RTS"), results.into_iter().map(|r| Operand::Use(Reg::Phys(r))).collect());
                 ret.terminator = true;
@@ -3534,6 +3527,32 @@ impl<const STACK: bool> Jump for Mos<STACK> {
     }
 }
 
+/// The bytes `inst` opens the frame by: a downward move of `rs0`, or the
+/// realigning one.
+fn opened_bytes(inst: &Inst) -> Option<i64> {
+    match (inst.kind, &inst.operands[..]) {
+        (Kind::Op("ADJSP"), [_, Operand::Imm(n)]) if (*n as u16 as i16) < 0 => Some(-i64::from(*n as u16 as i16)),
+        (Kind::Op("ALIGNSP"), [_, _, Operand::Imm(size), ..]) => Some(*size),
+        _ => None,
+    }
+}
+
+/// An `ADJSP` either way, or the realigning prologue: at the entry, what opens
+/// the frame.
+fn adjusts_frame(inst: &Inst) -> bool {
+    matches!(inst.kind, Kind::Op("ADJSP" | "ALIGNSP"))
+}
+
+/// Gives back a realigned frame: `rs0` is reloaded from its slot.
+fn releases_realigned_frame(inst: &Inst) -> bool {
+    inst.kind == Kind::Op("RESTORESP")
+}
+
+/// Writes `rs0`.
+pub(crate) fn moves_stack_pointer(inst: &Inst) -> bool {
+    adjusts_frame(inst) || releases_realigned_frame(inst)
+}
+
 /// The physical registers the run of copies just before the return sets: the
 /// result. The frame is released between the copies of a result that does not
 /// need `a`, and those of the rest; the split of a word into the bytes of two
@@ -3544,7 +3563,8 @@ fn results(insts: &[Inst]) -> Vec<RegId> {
     for inst in insts.iter().rev() {
         match (inst.kind, inst.operands.first()) {
             (Kind::Copy, Some(Operand::Def(Reg::Phys(p)))) => out.push(*p),
-            (Kind::Op("ADJSP" | "UNPACK" | "RESTORESP"), _) => {}
+            (Kind::Op("UNPACK"), _) => {}
+            _ if moves_stack_pointer(inst) => {}
             _ => break,
         }
     }
@@ -4496,7 +4516,7 @@ fn save_preserved<const STACK: bool>(
                 // soft-stack slots are reloaded from `rs0`, so before a
                 // realigned frame gives it back. The hardware-stack
                 // restore may end in a jump that returns, so it stays after.
-                let release = out.pop_if(|inst: &mut Inst| STACK && inst.kind == Kind::Op("RESTORESP"));
+                let release = out.pop_if(|inst: &mut Inst| STACK && releases_realigned_frame(inst));
                 out.extend(restores.iter().cloned());
                 out.extend(release);
             }
@@ -4507,7 +4527,7 @@ fn save_preserved<const STACK: bool>(
     // after the frame is allocated: its slots are addressed from the adjusted
     // stack pointer
     let entry = &mut function.blocks[0].insts;
-    let mut at = usize::from(entry.first().is_some_and(|inst| matches!(inst.kind, Kind::Op("ADJSP" | "ALIGNSP"))));
+    let mut at = usize::from(entry.first().is_some_and(adjusts_frame));
     // an argument that arrives in `a` or `x` is copied out first: a push goes
     // through `a`. Not into a cell the push is about to save: the push would
     // keep the argument, and the caller's value of the cell would be lost.
@@ -4542,7 +4562,7 @@ fn save_preserved<const STACK: bool>(
 /// in `a` on the stack around itself.
 fn open_frame_before_slots(function: &mut MFunction<Class>) {
     let entry = &mut function.blocks[0].insts;
-    let Some(open) = entry.iter().position(|inst| matches!(inst.kind, Kind::Op("ADJSP" | "ALIGNSP"))) else { return };
+    let Some(open) = entry.iter().position(adjusts_frame) else { return };
     let addresses_slot = |inst: &Inst| {
         matches!(inst.kind, Kind::Op("SPILL" | "RELOAD"))
             || inst.operands.iter().any(|o| matches!(o, Operand::Frame(_)))
@@ -4638,15 +4658,8 @@ fn emit_with<const STACK: bool>(
     // the old frame (`old`: an incoming argument) moves up by them.
     let spilled: i64 = if STACK { slots.iter().map(|(_, class)| size_of(class)).sum::<usize>() as i64 } else { 0 };
     let all = function.blocks.iter().flat_map(|b| &b.insts);
-    let old: i64 = all
-        .clone()
-        .find_map(|i| match (i.kind, &i.operands[..]) {
-            (Kind::Op("ADJSP"), [_, Operand::Imm(n)]) if (*n as u16 as i16) < 0 => Some(-i64::from(*n as u16 as i16)),
-            (Kind::Op("ALIGNSP"), [_, _, Operand::Imm(size), ..]) => Some(*size),
-            _ => None,
-        })
-        .unwrap_or(0);
-    let has_frame = all.clone().any(|i| matches!(i.kind, Kind::Op("ADJSP" | "ALIGNSP")));
+    let old: i64 = all.clone().find_map(opened_bytes).unwrap_or(0);
+    let has_frame = all.clone().any(adjusts_frame);
     let slot_offset = |slot: i32| -> i64 {
         old + slots.iter().take_while(|(s, _)| *s != slot).map(|(_, class)| size_of(class) as i64).sum::<i64>()
     };

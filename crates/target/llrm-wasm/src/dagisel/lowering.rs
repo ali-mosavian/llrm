@@ -135,9 +135,9 @@ pub fn target_lowering(
         }
         tl.set_operation_action(FRem, vt, Action::LibCall);
         tl.set_operation_action(LRint, vt, Action::LibCall);
-        tl.set_libcall_name(LRint, vt, if vt == MVT::F32 { "lrintf" } else { "lrint" });
+        tl.set_c_library_libcall_name(LRint, vt, if vt == MVT::F32 { "lrintf" } else { "lrint" });
         tl.set_operation_action(LLRint, vt, Action::LibCall);
-        tl.set_libcall_name(LLRint, vt, if vt == MVT::F32 { "llrintf" } else { "llrint" });
+        tl.set_c_library_libcall_name(LLRint, vt, if vt == MVT::F32 { "llrintf" } else { "llrint" });
         // `TargetLoweringBase`: the transcendentals default to `Expand`, a call
         // to the C routine of that type.
         for (op, name) in [
@@ -152,7 +152,7 @@ pub fn target_lowering(
         ] {
             tl.set_operation_action(op, vt, if op == FRem { Action::LibCall } else { Action::Expand });
             let name = if vt == MVT::F32 { f32_name(name) } else { name };
-            tl.set_libcall_name(op, vt, name);
+            tl.set_c_library_libcall_name(op, vt, name);
         }
     }
     // `RuntimeLibcalls`: the `i128` shifts are the compiler-rt routines.

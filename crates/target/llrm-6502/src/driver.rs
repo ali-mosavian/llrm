@@ -11,7 +11,7 @@ use llrm_target::Target;
 use llrm_transforms::pipeline::{Applied, Options};
 
 use crate::alloc::Tuning;
-use crate::dagisel::function::select_function;
+use crate::dagisel::function::select_function_with;
 use crate::dagisel::hooks::Cpu;
 use crate::emit::equates;
 use crate::platform::{Platform, SIM65};
@@ -196,9 +196,11 @@ fn whole_program(request: &Request) -> bool {
 fn whole_program_internalized(
     program: &mut Program,
     main: &str,
+    prefix: &str,
 ) -> Result<(), String> {
     let libcalls = program.target.lowering().map(|lowering| lowering.libcall_routines()).unwrap_or_default();
-    let preserved = std::iter::once(main.to_owned()).chain(libcalls.into_iter().map(crate::abi::c_symbol));
+    let preserved =
+        std::iter::once(main.to_owned()).chain(libcalls.into_iter().map(|name| crate::abi::c_symbol(prefix, name)));
     let mut manager = llrm_mir::passes::PassManager::default();
     manager.add_program(llrm_transforms::internalize::Internalize::new(preserved));
     manager.run(program).map(|_| ())
@@ -220,7 +222,6 @@ fn program(
     // a private function takes arguments in rc16..rc25 (`calling.toml`
     // `[mos_private]`), where the platform has them
     crate::abi::allow_private_row(request.platform.zero_page >= crate::alloc::MOST_CELLS);
-    crate::abi::set_c_symbol_prefix(&request.platform.c_symbol_prefix);
     MID_ENDS.with(|count| count.set(count.get() + 1));
     let mut module =
         llrm_mir::parse::module(&without_reserved_symbols(&without_triple(text), &request.platform.c_symbol_prefix))
@@ -236,7 +237,7 @@ fn program(
     let mut program = Program::new(vec![module], machine())?;
     let main = format!("{}main", request.platform.c_symbol_prefix);
     if whole_program(request) {
-        whole_program_internalized(&mut program, &main)?;
+        whole_program_internalized(&mut program, &main, &request.platform.c_symbol_prefix)?;
     }
     if request.level != Level::O0 {
         let dump = std::env::var_os("LLRM_MIR_STAGES").filter(|one| !one.is_empty()).map(Into::into);
@@ -250,6 +251,11 @@ fn program(
         // the 6502 has no scaled or indexed 16-bit address: a stepping pointer,
         // not `base + i * size` every trip
         program.modules.iter_mut().try_for_each(llrm_transforms::memsetpattern::expanded_stepping)?;
+    }
+    // the frame takes each `alloca`'s stated alignment: clamped here at every
+    // level, `-O0` included, and for any a pass added
+    llrm_transforms::pipeline::constrain_allocas(&mut program)?;
+    if request.level != Level::O0 {
         let static_locals = !request.passes.iter().any(|flag| flag == "-fno-static-locals")
             && std::env::var_os("LLRM_6502_NO_STATIC_LOCALS").is_none();
         if static_locals {
@@ -844,7 +850,7 @@ fn tail(
     let mut sources: Vec<Option<&llrm_mir::module::Module>> = Vec::new();
     for name in &names {
         SELECTED.with(|count| count.set(count.get() + 1));
-        let mut selection = select_function(module, name, request.cpu)?;
+        let mut selection = select_function_with(module, name, request.cpu, false, &request.platform.c_symbol_prefix)?;
         let mut as_called = true;
         let mut paged_chosen = false;
         let mut counted_chosen = false;
@@ -852,7 +858,7 @@ fn tail(
         selection.zero_page = request.platform.zero_page;
         selection.tuning = request.level.tuning();
         if let Some(looped) = looped.as_ref().filter(|_| copies.contains(name)) {
-            let mut other = select_function(looped, name, request.cpu)?;
+            let mut other = select_function_with(looped, name, request.cpu, false, &request.platform.c_symbol_prefix)?;
             other.zero_page = request.platform.zero_page;
             other.tuning = request.level.tuning();
             if cheaper(module, name, &other, looped, &selection, request, false)? {
@@ -862,7 +868,7 @@ fn tail(
             }
         }
         if let Some((_, paged)) = paged.as_ref().filter(|(names, _)| as_called && names.contains(name)) {
-            let mut other = select_function(paged, name, request.cpu)?;
+            let mut other = select_function_with(paged, name, request.cpu, false, &request.platform.c_symbol_prefix)?;
             other.zero_page = request.platform.zero_page;
             other.tuning = request.level.tuning();
             if cheaper(module, name, &other, paged, &selection, request, true)? {
@@ -872,7 +878,7 @@ fn tail(
             }
         }
         if let Some((_, counted)) = counted.as_ref().filter(|(names, _)| names.contains(name)) {
-            let mut other = select_function(counted, name, request.cpu)?;
+            let mut other = select_function_with(counted, name, request.cpu, false, &request.platform.c_symbol_prefix)?;
             other.zero_page = request.platform.zero_page;
             other.tuning = request.level.tuning();
             let kept = source.unwrap_or(module);
@@ -890,7 +896,8 @@ fn tail(
                 _ => ranged_base.as_ref(),
             };
             if let Some((_, split)) = candidate.filter(|(names, _)| names.contains(name)) {
-                let mut other = select_function(split, name, request.cpu)?;
+                let mut other =
+                    select_function_with(split, name, request.cpu, false, &request.platform.c_symbol_prefix)?;
                 other.zero_page = request.platform.zero_page;
                 other.tuning = request.level.tuning();
                 let kept = source.unwrap_or(module);
@@ -1616,10 +1623,15 @@ fn estimate_weights<'a>(
             let from = source.unwrap_or(module);
             // -O2 and -O3 judge clocks; -O1 and -Os break ties by them
             if matches!(level, Level::O2 | Level::O3) {
-                let at = sites.iter().position(|(one, _)| std::ptr::eq(*one, from)).unwrap_or_else(|| {
-                    sites.push((from, crate::weights::CallSites::of(from)));
-                    sites.len() - 1
-                });
+                let at = sites
+                    .iter()
+                    .position(|(one, _)| std::ptr::eq(*one, from))
+                    .unwrap_or_else(
+                        || {
+                            sites.push((from, crate::weights::CallSites::of(from)));
+                            sites.len() - 1
+                        },
+                    );
                 return sites[at].1.block_weights(from, name, layout);
             }
             let function = from.named(name).and_then(|id| from.global(id).function());

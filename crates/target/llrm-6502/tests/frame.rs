@@ -31,7 +31,7 @@ fn a_local_sits_above_the_outgoing_area() {
     assert_eq!(frame.stack_size, 14);
     assert_eq!(frame.address(0), 4);
     assert_eq!(frame.prologue(), [adjust(-14)]);
-    assert_eq!(frame.epilogue(), [adjust(14)]);
+    assert_eq!(frame.epilogue(Vec::new()), [adjust(14)]);
 }
 
 /// A word argument at entry offset 0 and two saved pairs (4 bytes): the frame
@@ -61,7 +61,7 @@ fn saved_pairs_are_stored_below_the_arguments() {
         .collect();
     slots.sort();
     assert_eq!(slots, [0, 2]);
-    let epilogue = frame.epilogue();
+    let epilogue = frame.epilogue(Vec::new());
     assert_eq!((epilogue.len(), epilogue.last()), (3, Some(&adjust(4))));
     assert!(epilogue[..2].iter().all(|inst| inst.opcode == op::LDP16));
 }

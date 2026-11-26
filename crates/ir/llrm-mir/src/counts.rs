@@ -141,11 +141,14 @@ pub enum Event {
     /// An instruction x86's immediate push fold looked at
     /// (`fold_immediate_pushes`).
     PushFoldVisits,
+    /// A copy nothing reads that reached the coalescer and was erased there:
+    /// `DeadMachineInstructionElim` should have removed it.
+    DeadCopiesErased,
 }
 
 const SLOTS: usize = 64;
 
-const NAMES: [&str; 52] = [
+const NAMES: [&str; 53] = [
     "function_clones",
     "function_forks",
     "machinings",
@@ -198,6 +201,7 @@ const NAMES: [&str; 52] = [
     "known_bits_computed",
     "use_bodies",
     "push_fold_visits",
+    "dead_copies_erased",
 ];
 
 /// A pass's runs and the instructions of the functions it ran over.

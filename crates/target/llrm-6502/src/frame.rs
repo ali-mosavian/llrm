@@ -13,7 +13,8 @@
 //! expand to nothing; a frame with variable-sized objects adjusts `rs0` around
 //! each call instead.
 //!
-//! An object aligned past [`REALIGN_ABOVE`] realigns the soft stack
+//! An object stating an alignment above [`STACK_ALIGN`] (the pipeline leaves
+//! one only past [`REALIGN_ABOVE`]) realigns the soft stack
 //! (`needsStackRealignment`): the prologue is one `ALIGNSP`, `rs0 = (rs0 -
 //! size) & -align`, which also stores the old `rs0` in a frame slot; the
 //! epilogue reloads `rs0` from it (`RESTORESP`), and a stack argument is read
@@ -173,16 +174,26 @@ impl Layout {
         insts
     }
 
-    /// `emitEpilogue`: the pairs reloaded, then the frame closed.
-    pub fn epilogue(&self) -> Vec<MInst> {
+    /// `emitEpilogue`: the pairs reloaded and the frame closed, around
+    /// `results`, the copies into the result registers. A kept frame closes
+    /// before them (its adjust goes through `a`); a realigned one after (they
+    /// may reload spills through `rs0`).
+    pub fn epilogue(
+        &self,
+        results: Vec<MInst>,
+    ) -> Vec<MInst> {
         let mut insts = Vec::new();
         for (name, offset) in self.save_slots() {
             insts.push(MInst::new(op::LDP16, vec![Operand::reg(name), Operand::reg("rs0"), Operand::Imm(offset)]));
         }
         if self.realign.is_some() {
+            insts.extend(results);
             insts.push(MInst::new(spill::RESTORESP, vec![Operand::Imm(self.old_stack_pointer())]));
-        } else if self.stack_size != 0 {
-            insts.push(adjust(self.stack_size));
+        } else {
+            if self.stack_size != 0 {
+                insts.push(adjust(self.stack_size));
+            }
+            insts.extend(results);
         }
         insts
     }

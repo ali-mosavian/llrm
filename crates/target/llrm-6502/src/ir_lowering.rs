@@ -23,7 +23,7 @@ pub const STEPS: &[CgpStep] = &[];
 /// The action table, built once.
 fn table() -> &'static TargetLowering {
     static TABLE: OnceLock<TargetLowering> = OnceLock::new();
-    TABLE.get_or_init(target_lowering)
+    TABLE.get_or_init(|| target_lowering(""))
 }
 
 /// The answers of the 6502's `TargetLowering`.

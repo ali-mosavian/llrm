@@ -313,7 +313,7 @@ fn framed_call() -> (Body, String) {
     f.push(local(op::LDP8, "rc3"));
     f.push(i(op::LDI16, vec![reg("rs2"), imm(0x1234)]));
     f.push(i(op::COPY16, vec![reg("rs4"), reg("rs2")]));
-    f.extend(frame.epilogue().into_iter().map(Ok));
+    f.extend(frame.epilogue(Vec::new()).into_iter().map(Ok));
     f.push(i(op::COPY8, vec![reg("a"), reg("rc3")]));
     f.push(i(op::RET, vec![]));
     let callee = function("framed", &f).expect("expands");

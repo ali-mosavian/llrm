@@ -1180,9 +1180,10 @@ fn a_callee_saved_cell_goes_to_the_loop_values_only() {
     let text = compile(ir, "mix");
     // inline, or `ldy #n` before the helper that saves rc8.. up to n of them
     let inline = (8..16).filter(|n| text.contains(&format!("  lda rc{n}\n  pha"))).count();
-    let shared = text.split_once("  ldy #").filter(|(_, rest)| rest.contains("jsr __csave")).and_then(|(_, rest)| {
-        rest.split_once('\n').and_then(|(n, _)| n.parse::<usize>().ok())
-    });
+    let shared = text
+        .split_once("  ldy #")
+        .filter(|(_, rest)| rest.contains("jsr __csave"))
+        .and_then(|(_, rest)| rest.split_once('\n').and_then(|(n, _)| n.parse::<usize>().ok()));
     assert_eq!(shared.unwrap_or(inline), 3, "{text}");
     // cold arrives in a
     assert!(text.contains("  sta s_mix"), "cold is in a slot: {text}");
@@ -1949,7 +1950,10 @@ done:
     // the result's high byte is the count of the loop times 256: the word
     // leaves in `a` and `x`, whatever the helper did with them
     for (v, hi) in [(5u16, 0i32), (10, 1), (99, 1), (100, 2), (65535, 4)] {
-        let setup = set("rc8", 0xA1) + &set("rc9", 0xB2) + &set("rc10", 0xC3) + &format!("  ldx #{}\n  lda #{}\n", v >> 8, v & 0xFF);
+        let setup = set("rc8", 0xA1)
+            + &set("rc9", 0xB2)
+            + &set("rc10", 0xC3)
+            + &format!("  ldx #{}\n  lda #{}\n", v >> 8, v & 0xFF);
         let after = format!(
             "  stx rc2\n  lda rc8\n  cmp #$A1\n  bne bad\n  lda rc9\n  cmp #$B2\n  bne bad\n  lda rc10\n  cmp #$C3\n  bne bad\n  lda rc2\n  rts\nbad:\n  lda #99\n  rts\n"
         );
@@ -2245,7 +2249,7 @@ fn a_constant_is_not_loaded_again_between_a_compare_and_its_select() {
 @buf = external global [16 x i8]
 define i16 @remat() {
 entry:
-  %a = alloca [8 x i32], align 2
+  %a = alloca [8 x i32]
   br label %fill
 fill:
   %i = phi i8 [ 0, %entry ], [ %i1, %fill ]
@@ -2395,7 +2399,7 @@ define i16 @lowbit() {
 fn a_byte_load_used_at_32_bits_and_truncated_compiles_and_runs() {
     let ir = "@buf = external global [16 x i8]
 define i16 @wide() {
-  %slot = alloca i32, align 2
+  %slot = alloca i32
   %a = load i8, ptr @buf, align 1
   %z = zext i8 %a to i32
   %m = and i32 %z, 1
@@ -2421,7 +2425,7 @@ define i16 @wide() {
 #[test]
 fn an_undefined_value_is_stored_as_zero() {
     let ir = "define i16 @undef() {
-  %slot = alloca i32, align 2
+  %slot = alloca i32
   store i32 poison, ptr %slot, align 2
   %v = load i32, ptr %slot, align 2
   %t = trunc i32 %v to i16
@@ -2964,7 +2968,7 @@ define i16 @callee3(i32 %a, i32 %b, i32 %c) {
   ret i16 %t
 }
 define i16 @caller() {
-  %l = alloca [4 x i16], align 2
+  %l = alloca [4 x i16]
   store i16 4660, ptr %l, align 2
   %r = call i16 @callee(i32 1, i32 1450704896)
   %v = load i16, ptr %l, align 2
@@ -2972,7 +2976,7 @@ define i16 @caller() {
   ret i16 %x
 }
 define i16 @caller3() {
-  %l = alloca [4 x i16], align 2
+  %l = alloca [4 x i16]
   store i16 4660, ptr %l, align 2
   %r = call i16 @callee3(i32 1, i32 1450704896, i32 305397760)
   %v = load i16, ptr %l, align 2

@@ -57,22 +57,12 @@ pub fn allow_private_row(yes: bool) {
     PRIVATE_ROW.set(yes);
 }
 
-thread_local! {
-    static C_SYMBOL_PREFIX: std::cell::RefCell<String> = const { std::cell::RefCell::new(String::new()) };
-}
-
-/// The platform's `c_symbol_prefix`, which the driver sets for each compile:
-/// the spelling of a C library routine a libcall names.
-pub fn set_c_symbol_prefix(prefix: &str) {
-    C_SYMBOL_PREFIX.with_borrow_mut(|held| {
-        held.clear();
-        held.push_str(prefix);
-    });
-}
-
-/// `name`, a C symbol, as the platform spells it.
-pub fn c_symbol(name: &str) -> String {
-    C_SYMBOL_PREFIX.with_borrow(|prefix| format!("{prefix}{name}"))
+/// `name`, a C symbol, as a platform with `c_symbol_prefix` spells it.
+pub fn c_symbol(
+    prefix: &str,
+    name: &str,
+) -> String {
+    format!("{prefix}{name}")
 }
 
 /// A register `calling.toml` names.

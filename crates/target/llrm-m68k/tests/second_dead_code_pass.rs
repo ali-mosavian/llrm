@@ -4,9 +4,9 @@
 //! `shrinkToUses` of its source's whole interval, a few percent of a large
 //! function's compile.
 
-use llrm_codegen::coalescer::register_coalescer::dead_copies_erased;
 use llrm_m68k::compile::{Options, text_with};
 use llrm_m68k::dagisel::hooks::Cpu;
+use llrm_mir::counts::{Event, get};
 
 /// A loop that carries two values nothing outside it reads, through a switch.
 const DEAD_CARRIED: &str = "
@@ -69,10 +69,10 @@ define i32 @f(ptr %0, i32 %1) {
 
 #[test]
 fn no_copy_that_nothing_reads_reaches_the_coalescer() {
-    let before = dead_copies_erased();
+    let before = get(Event::DeadCopiesErased);
     let module = llrm_mir::parse::module(DEAD_CARRIED).expect("parses");
     let options = Options { mid_end: true, short: true, size: true, ..Options::default() };
     text_with(&module, "f", Cpu::M68020, options).expect("compiles");
-    let dead = dead_copies_erased() - before;
+    let dead = get(Event::DeadCopiesErased) - before;
     assert_eq!(dead, 0, "{dead} unread copies reached the coalescer");
 }

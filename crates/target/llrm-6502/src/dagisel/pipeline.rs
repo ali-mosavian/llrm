@@ -125,9 +125,11 @@ pub fn select_block(
     cpu: Cpu,
     sized: bool,
     synthesize: bool,
+    c_symbol_prefix: &str,
 ) -> Result<Vec<Unit>, Refusal> {
-    let tli = target_lowering();
+    let tli = target_lowering(c_symbol_prefix);
     let mut lowering = MosLowering {
+        tli: &tli,
         sized,
         long_steps: super::function::long_steps(),
         widen_products: match super::function::widen_products() {
