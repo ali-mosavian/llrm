@@ -2245,7 +2245,7 @@ fn a_constant_is_not_loaded_again_between_a_compare_and_its_select() {
 @buf = external global [16 x i8]
 define i16 @remat() {
 entry:
-  %a = alloca [8 x i32], align 2
+  %a = alloca [8 x i32]
   br label %fill
 fill:
   %i = phi i8 [ 0, %entry ], [ %i1, %fill ]
@@ -2395,7 +2395,7 @@ define i16 @lowbit() {
 fn a_byte_load_used_at_32_bits_and_truncated_compiles_and_runs() {
     let ir = "@buf = external global [16 x i8]
 define i16 @wide() {
-  %slot = alloca i32, align 2
+  %slot = alloca i32
   %a = load i8, ptr @buf, align 1
   %z = zext i8 %a to i32
   %m = and i32 %z, 1
@@ -2421,7 +2421,7 @@ define i16 @wide() {
 #[test]
 fn an_undefined_value_is_stored_as_zero() {
     let ir = "define i16 @undef() {
-  %slot = alloca i32, align 2
+  %slot = alloca i32
   store i32 poison, ptr %slot, align 2
   %v = load i32, ptr %slot, align 2
   %t = trunc i32 %v to i16
@@ -2964,7 +2964,7 @@ define i16 @callee3(i32 %a, i32 %b, i32 %c) {
   ret i16 %t
 }
 define i16 @caller() {
-  %l = alloca [4 x i16], align 2
+  %l = alloca [4 x i16]
   store i16 4660, ptr %l, align 2
   %r = call i16 @callee(i32 1, i32 1450704896)
   %v = load i16, ptr %l, align 2
@@ -2972,7 +2972,7 @@ define i16 @caller() {
   ret i16 %x
 }
 define i16 @caller3() {
-  %l = alloca [4 x i16], align 2
+  %l = alloca [4 x i16]
   store i16 4660, ptr %l, align 2
   %r = call i16 @callee3(i32 1, i32 1450704896, i32 305397760)
   %v = load i16, ptr %l, align 2
