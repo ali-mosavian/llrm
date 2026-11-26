@@ -63,6 +63,10 @@ pub enum Event {
     LsrPrepared,
     /// A node `setup_cost` visited while working out a register's setup cost.
     LsrSetupVisits,
+    /// A node the walk of `contains_add_rec_dependent_on_loop` visited.
+    ScevContainsVisits,
+    /// A buffer `ScalarEvolution`'s operand sort made to merge through.
+    ScevSortBuffers,
     /// A loop LSR chose a solution for (`lsr_solutions`).
     LsrSolutions,
     /// A loop whose solution changed the IR (`lsr_rewritten`).
@@ -133,7 +137,7 @@ pub enum Event {
 
 const SLOTS: usize = 64;
 
-const NAMES: [&str; 48] = [
+const NAMES: [&str; 50] = [
     "function_clones",
     "function_forks",
     "machinings",
@@ -152,6 +156,8 @@ const NAMES: [&str; 48] = [
     "lsr_loops",
     "lsr_prepared",
     "lsr_setup_visits",
+    "scev_contains_visits",
+    "scev_sort_buffers",
     "lsr_solutions",
     "lsr_rewritten",
     "lir_rename_asks",
@@ -199,7 +205,7 @@ thread_local! {
     static PASSES: RefCell<Vec<PassRow>> = const { RefCell::new(Vec::new()) };
     /// (pass, analysis, misses): the analyses a pass made the manager compute.
     static ASKS: RefCell<Vec<(&'static str, &'static str, u64)>> = const { RefCell::new(Vec::new()) };
-    static EVENTS: [Cell<u64>; 48] = const { [const { Cell::new(0) }; 48] };
+    static EVENTS: [Cell<u64>; 50] = const { [const { Cell::new(0) }; 50] };
     /// (name, hits, misses) by the address of the name, which is a literal.
     static FOUND: [Cell<usize>; SLOTS] = const { [const { Cell::new(0) }; SLOTS] };
     static ANALYSES: RefCell<Vec<(&'static str, u64, u64)>> = const { RefCell::new(Vec::new()) };
@@ -283,6 +289,14 @@ fn asked(analysis: &'static str) {
             Some(row) => row.2 += 1,
             None => rows.push((pass, analysis, 1)),
         }
+    });
+}
+
+/// `n` events at once: a loop counts locally and adds when it ends.
+pub fn add(event: Event, n: u64) {
+    EVENTS.with(|events| {
+        let one = &events[event as usize];
+        one.set(one.get() + n);
     });
 }
 

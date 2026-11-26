@@ -1943,3 +1943,20 @@ fn test_for_size_an_lea_of_a_register_that_stays_read_stays_a_copy() {
     let price = Some(super::pass::remat_priced(flat_bytes()));
     assert!(!size_copy_of_def_is_remade_after(vec![def(9)], vec![read(9)], lea, 4, price));
 }
+
+/// `is_carried` asked every instruction that names a register whether it is
+/// a copy into it, reads included: a value read 300 times looked at 300
+/// instructions for each step of its chain of copies (exec.c's `exec_loop`:
+/// 2.5 % of its compile). Only the definitions are looked at.
+#[test]
+fn test_a_carried_value_looks_at_the_definitions_of_each_register_in_its_chain() {
+    let reads: Vec<Arc<Insn>> = (0..300).map(|_| read(2)).collect();
+    let was = body(&[(&[def(1)], &[1]), (&[copy(2, 1)], &[2]), (&reads, &[])]);
+    let mut lis = LiveIntervals::new(&was);
+    let start = lis.indexes.get_mbb_start_idx(0);
+    super::driver::take_carried_looks();
+    assert!(!super::driver::is_carried(&mut lis, 2, &start, super::pair::move_copy));
+    let looks = super::driver::take_carried_looks();
+    assert!(looks > 0, "premise: no definition was looked at");
+    assert!(looks <= 4, "{looks} instructions looked at for a register with one definition and 300 reads");
+}

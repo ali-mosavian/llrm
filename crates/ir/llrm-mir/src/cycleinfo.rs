@@ -240,6 +240,9 @@ struct Compute<'a> {
     preorder: Vec<u32>,
     num_headers: u32,
     reentries: Vec<(u32, u32)>,
+    /// The pairs in `reentries`: the pin pushes one per edge and sorts them,
+    /// a dispatch block every handler jumps to made 857,465 of 16,122.
+    reentry_seen: crate::hash::HashSet<(u32, u32)>,
 }
 
 impl<'a> Compute<'a> {
@@ -253,6 +256,7 @@ impl<'a> Compute<'a> {
             preorder: Vec::new(),
             num_headers: 0,
             reentries: Vec::new(),
+            reentry_seen: Default::default(),
         }
     }
 
@@ -383,6 +387,8 @@ impl<'a> Compute<'a> {
         for one in &mut self.reentries {
             one.1 = rank[one.1 as usize];
         }
+        #[cfg(test)]
+        RECORDED.set(self.reentries.len());
         self.reentries.sort_unstable();
         let mut prev_h = NO_BLOCK;
         for i in 0..self.reentries.len() {
@@ -448,7 +454,9 @@ impl<'a> Compute<'a> {
                             self.tag_loop_header(b0, h);
                             break;
                         }
-                        self.reentries.push((h, b1));
+                        if self.reentry_seen.insert((h, b1)) {
+                            self.reentries.push((h, b1));
+                        }
                         h = self.block_infos[h as usize].loop_header;
                     }
                 }
@@ -466,3 +474,11 @@ impl<'a> Compute<'a> {
         }
     }
 }
+
+/// How many re-entry pairs the last `compute` on this thread kept to sort.
+#[cfg(test)]
+thread_local!(pub(crate) static RECORDED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) });
+
+#[cfg(test)]
+#[path = "cycleinfo_tests.rs"]
+mod tests;
