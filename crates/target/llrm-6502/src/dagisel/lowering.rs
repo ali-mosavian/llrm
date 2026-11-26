@@ -194,6 +194,8 @@ pub fn target_lowering() -> TargetLowering {
     tl.set_operation_action(SetCCCarry, MVT::I32, Action::Custom);
     // softened floats: compiler-rt's routines
     tl.set_soft_float_libcall_names();
+    // RuntimeLibcalls.def: the C library's `rint`, `sqrt`, ... for every target
+    tl.set_libm_libcall_names();
     tl
 }
 
