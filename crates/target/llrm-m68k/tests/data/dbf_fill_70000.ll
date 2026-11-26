@@ -7,7 +7,7 @@ entry:
 loop:
   %i = phi i32 [ 0, %entry ], [ %n, %loop ]
   %p = getelementptr inbounds [70000 x i8], ptr @buf, i32 0, i32 %i
-  store i8 %v, ptr %p
+  store volatile i8 %v, ptr %p
   %n = add nuw i32 %i, 1
   %c = icmp eq i32 %n, 70000
   br i1 %c, label %done, label %loop

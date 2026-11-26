@@ -96,11 +96,12 @@ impl LoopIdiomRecognize {
         // (or unless this is overridden by command line option).
         self.has_memset_pattern = self.libcall(self.library.memset_pattern16);
         self.has_memcpy = self.libcall(self.library.memcpy);
-        // DEVIATE 17 (exit 2026-11-12, `Tti::memory_idioms_at_optsize`): a
-        // function built for size keeps its store and copy loops where the
-        // call costs more bytes than the loop.
+        // `Tti::memory_idioms_at_optsize`: a function built for size may keep
+        // its store and copy loops.
+        let header = run.cur_loop.get_header();
+        let constant_length = run.se.get_small_constant_trip_count(&cx!(run), header) != 0;
         if (self.for_size || self.apply_code_size_heuristics_attr(run))
-            && run.tti.is_some_and(|tti| !tti.memory_idioms_at_optsize())
+            && run.tti.is_some_and(|tti| !tti.memory_idioms_at_optsize(constant_length))
         {
             self.has_memset = false;
             self.has_memset_pattern = false;
@@ -124,12 +125,21 @@ impl LoopIdiomRecognize {
         Some(self.run_on_noncountable_loop(run))
     }
 
-    /// Whether the function carries `optsize`, whatever `use_lir_code_size_heurs`.
+    /// Whether the function carries `optsize`, whatever
+    /// `use_lir_code_size_heurs`.
     fn apply_code_size_heuristics_attr(
         &self,
         run: &Run,
     ) -> bool {
-        run.function.attrs.iter().any(|attr| matches!(attr, Attribute::Flag(name) if name == "optsize" || name == "minsize"))
+        run.function
+            .attrs
+            .iter()
+            .any(
+                |attr| matches!(
+                    attr,
+                    Attribute::Flag(name) if name == "optsize" || name == "minsize"
+                ),
+            )
     }
 
     // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/LoopIdiomRecognize.cpp#L383
