@@ -378,6 +378,22 @@ impl ScalarEvolution {
         self.expr_contains(s, &|expr| expr == op)
     }
 
+    /// `containsAddRecDependentOnLoop`: whether the tree of `s` holds a
+    /// recurrence of the loop headed by `l`. A node never changes, so the walk
+    /// is made once for an expression and loop.
+    pub fn contains_add_rec_dependent_on_loop(
+        &self,
+        s: Scev,
+        l: BlockId,
+    ) -> bool {
+        if let Some(&held) = self.add_rec_dependence.borrow().get(&(s, l)) {
+            return held;
+        }
+        let found = self.expr_contains(s, &|expr| self.addrec_header(expr) == Some(l));
+        self.add_rec_dependence.borrow_mut().insert((s, l), found);
+        found
+    }
+
     /// `SCEVExprContains`: whether any node of the tree of `root` satisfies
     /// `pred`, by `SCEVTraversal`'s order and cut-offs.
     pub fn expr_contains(
@@ -394,6 +410,7 @@ impl ScalarEvolution {
             return true;
         }
         while let Some(s) = worklist.pop() {
+            llrm_mir::counts::bump(llrm_mir::counts::Event::ScevContainsVisits);
             if matches!(self.node(s).kind, Kind::Constant(_) | Kind::Unknown(_)) {
                 continue;
             }

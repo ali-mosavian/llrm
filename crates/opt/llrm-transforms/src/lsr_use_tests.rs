@@ -174,6 +174,26 @@ fn a_registers_setup_cost_is_walked_once_however_often_it_is_rated() {
     });
 }
 
+/// Whether a register's tree holds a recurrence of the loop was walked, with
+/// a set made for the walk, for every formula that held it: 8% of the compile
+/// of a byte-divide loop at -O3. Asked five times, the tree is walked once.
+#[test]
+fn a_registers_tree_is_walked_once_however_often_it_is_asked() {
+    use llrm_mir::counts::{Event, get};
+    with_loop(|_, se, a, _, header, ar| {
+        let before = get(Event::ScevContainsVisits);
+        assert!(se.contains_add_rec_dependent_on_loop(ar, header));
+        assert!(!se.contains_add_rec_dependent_on_loop(a, header));
+        let one_ask = get(Event::ScevContainsVisits) - before;
+        assert!(one_ask > 0, "the trees are walked");
+        for _ in 0..4 {
+            assert!(se.contains_add_rec_dependent_on_loop(ar, header));
+            assert!(!se.contains_add_rec_dependent_on_loop(a, header));
+        }
+        assert_eq!(get(Event::ScevContainsVisits) - before, one_ask, "five asks walk what one does");
+    });
+}
+
 /// The loop's own recurrence is one register and one recurrence, and a start of
 /// 0 needs no setup: `1 instruction, 1 reg, with addrec cost 1`.
 #[test]

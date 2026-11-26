@@ -284,6 +284,9 @@ pub struct ScalarEvolution {
     /// rating (`reset_setup_costs` starts it): a node never changes, and LSR
     /// rates the same registers in thousands of formulae.
     pub(super) setup_costs: HashMap<Scev, u32>,
+    /// `containsAddRecDependentOnLoop`, by expression and loop header: held
+    /// where it is asked through a shared reference.
+    pub(super) add_rec_dependence: std::cell::RefCell<HashMap<(Scev, BlockId), bool>>,
     /// `PredicatedSCEVRewrites`: the recurrence a header phi is under
     /// predicates, by phi and loop; the phi itself where it is none.
     pub(super) predicated_rewrites: HashMap<(Scev, BlockId), (Scev, Vec<wrap_predicate::Predicate>)>,
@@ -367,6 +370,7 @@ impl ScalarEvolution {
             constant_multiple_cache: HashMap::default(),
             not_cache: HashMap::default(),
             setup_costs: HashMap::default(),
+            add_rec_dependence: std::cell::RefCell::default(),
             predicated_rewrites: HashMap::default(),
             loop_dispositions: HashMap::default(),
             block_dispositions: HashMap::default(),
