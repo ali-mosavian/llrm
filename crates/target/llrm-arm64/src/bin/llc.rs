@@ -17,7 +17,7 @@ fn main() {
     // The mid-end recurses along dependency chains (a 3,000-line function
     // overflowed the main thread's 8 MB): the compile runs on a thread with
     // room.
-    let worker = std::thread::Builder::new().stack_size(1 << 30).spawn(run).expect("a thread");
+    let worker = std::thread::Builder::new().stack_size(1 << 30).spawn(|| llrm_support::debug::run_main(run)).expect("a thread");
     std::process::exit(worker.join().unwrap_or(101));
 }
 
