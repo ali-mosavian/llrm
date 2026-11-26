@@ -423,7 +423,7 @@ fn tuning(costs: &llrm_mir::target::OperationCosts) -> llrm_mir::target::Tuning 
         // recursion programs it cost +5556 B and
         // +1.12 M instructions over -O2 (REC-8).
         recursive_inlining_depth: Some((2, 2)),
-        // DEVIATE INL-HOT (owner m32, exit 2026-11-30): a call the pin's
+        // DEVIATE INL-HOT (owner m32, exit 2026-12-20): a call the pin's
         // threshold alone refuses, at a site 16x the caller's entry or hotter,
         // is tried inlined at -O2 and kept where the rate pays, the trial
         // counting the callee's preserved registers (x_sf_* -O2
