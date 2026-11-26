@@ -29,10 +29,10 @@ fn a_recursive_call_through_a_join_stays_a_call_on_wasm() {
     }
 }
 
-/// The same recursion as an internal function with one caller, as a C `static`
-/// is: the early module pass that makes a linear recursion a loop ran with no
-/// target, so wasm's switch (`eliminates_accumulator_through_join`) was never
-/// asked and `recursive_stack_args` stayed 388 B against the pin's 165.
+/// A private linear recursion through a join, as a C `static` function is: the
+/// early module pass that makes such a recursion a loop built its analyses with
+/// no target, so wasm's switch (`eliminates_accumulator_through_join`) was
+/// never read there and the recursion became a loop the runtime unroll grew.
 #[test]
 fn an_internal_recursion_through_a_join_stays_a_call_on_wasm() {
     for level in ["-O2", "-Os"] {
