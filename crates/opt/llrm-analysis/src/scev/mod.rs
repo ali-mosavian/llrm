@@ -280,6 +280,10 @@ pub struct ScalarEvolution {
     /// `getNotSCEV` of a non-constant: built once per expression (it is
     /// asked 728 times for 426 builds on d_faces, 11 K Ir each).
     pub(super) not_cache: HashMap<Scev, Scev>,
+    /// `getSetupCost` of an expression, for the target `owner` names: a node
+    /// never changes, and LSR rates the same registers in thousands of
+    /// formulae.
+    pub(super) setup_costs: (usize, HashMap<Scev, u32>),
     /// `PredicatedSCEVRewrites`: the recurrence a header phi is under
     /// predicates, by phi and loop; the phi itself where it is none.
     pub(super) predicated_rewrites: HashMap<(Scev, BlockId), (Scev, Vec<wrap_predicate::Predicate>)>,
@@ -362,6 +366,7 @@ impl ScalarEvolution {
             signed_ranges: HashMap::default(),
             constant_multiple_cache: HashMap::default(),
             not_cache: HashMap::default(),
+            setup_costs: (0, HashMap::default()),
             predicated_rewrites: HashMap::default(),
             loop_dispositions: HashMap::default(),
             block_dispositions: HashMap::default(),
@@ -398,6 +403,27 @@ impl ScalarEvolution {
         s: Scev,
     ) -> Type {
         self.node(s).kind.tag()
+    }
+
+    /// The setup cost of `reg` for the target `owner` (its address), `compute`d
+    /// once: LSR's `getSetupCost` walks seven levels of a tree whose subtrees
+    /// the formulae share.
+    pub fn memoized_setup_cost(
+        &mut self,
+        owner: usize,
+        reg: Scev,
+        compute: impl FnOnce(&Self) -> u32,
+    ) -> u32 {
+        if self.setup_costs.0 != owner {
+            self.setup_costs = (owner, HashMap::default());
+        }
+        if let Some(&cost) = self.setup_costs.1.get(&reg) {
+            return cost;
+        }
+        llrm_mir::counts::bump(llrm_mir::counts::Event::LsrSetupCosts);
+        let cost = compute(self);
+        self.setup_costs.1.insert(reg, cost);
+        cost
     }
 
     /// `getType`.

@@ -1146,7 +1146,10 @@ impl Cost {
 
         // Favor registers that need no setup in the preheader.
         let prev_setup = self.c.setup_cost;
-        self.c.setup_cost += setup_cost(r.se, r.cx, r.tti, reg, SETUP_COST_DEPTH_LIMIT);
+        let (cx, tti) = (r.cx, r.tti);
+        let owner = std::ptr::from_ref(tti).cast::<()>() as usize;
+        self.c.setup_cost +=
+            r.se.memoized_setup_cost(owner, reg, |se| setup_cost(se, cx, tti, reg, SETUP_COST_DEPTH_LIMIT));
         // Even with the depth limit, the cost stays valid.
         self.c.setup_cost = self.c.setup_cost.min(1 << 16);
         if r.bytes_counted

@@ -150,6 +150,26 @@ fn a_use_after_the_loop_runs_its_adds_once_where_the_target_says_so() {
     });
 }
 
+/// A register's setup cost was walked again for every formula that holds it:
+/// a byte-divide loop at -O3 spent 13 M `setup_cost` visits (15% of its
+/// compile) on a few hundred registers. It is worked out once per register and
+/// target; the cost is the same.
+#[test]
+fn a_registers_setup_cost_is_worked_out_once() {
+    use llrm_mir::counts::{Event, get};
+    with_loop(|cx, se, a, b, header, _| {
+        let tti = X86::of_cpu("core2").unwrap();
+        let mut f = Formula { base_regs: vec![a, b], has_base_reg: true, ..Formula::default() };
+        f.canonicalize(se, header);
+        let lu = basic_use(&[0]);
+        let before = get(Event::LsrSetupCosts);
+        let first = rated_by(&tti, cx, se, header, &lu, &f, &HashSet::default());
+        let second = rated_by(&tti, cx, se, header, &lu, &f, &HashSet::default());
+        assert_eq!(first.c.setup_cost, second.c.setup_cost);
+        assert_eq!(get(Event::LsrSetupCosts) - before, 2, "two registers, each worked out once for two ratings");
+    });
+}
+
 /// The loop's own recurrence is one register and one recurrence, and a start of
 /// 0 needs no setup: `1 instruction, 1 reg, with addrec cost 1`.
 #[test]
