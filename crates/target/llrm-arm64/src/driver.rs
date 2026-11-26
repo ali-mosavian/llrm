@@ -299,20 +299,22 @@ fn lower_function(
         // DEVIATE CCMP-OS (owner x87, exit 2026-12-31): the pin takes the
         // code-size branch of `shouldConvert` at `minsize`; here at `optsize`
         // too (-Os is optsize alone, D8).
-        crate::ccmp::run(&mut machine, flagged(function, &["minsize", "optsize"]), ccmp.as_deref() == Ok("stress"));
+        llrm_support::debug::timed("arm64 ccmp", || {
+            crate::ccmp::run(&mut machine, flagged(function, &["minsize", "optsize"]), ccmp.as_deref() == Ok("stress"))
+        });
         dump("ConditionalCompares", &machine);
     }
     // `EarlyIfConverter` skips an `optnone` function (`skipFunction`).
     if !flagged(function, &["optnone"])
         && let Some(mode) = crate::ifcvt::mode_from_env()
     {
-        crate::ifcvt::run(&mut machine, mode);
+        llrm_support::debug::timed("arm64 early if-conversion", || crate::ifcvt::run(&mut machine, mode));
         dump("EarlyIfConversion", &machine);
     }
     // The shared phases that need SSA see the body as selection made it,
     // phis and all; the private phases below see it after phi elimination.
     if llrm_support::env_flag!("LLRM_ARM64_STAGES") {
-        crate::lir_body::stages::observe(&machine)?;
+        llrm_support::debug::timed("arm64 stage observation", || crate::lir_body::stages::observe(&machine))?;
     }
     llrm_support::debug::timed("arm64 phi elimination", || crate::mfunc::lower_phis(&mut machine)).map_err(|why| format!("@{name}: {why}"))?;
     dump("PhiElimination", &machine);
@@ -375,8 +377,8 @@ fn lower_function(
     // encode; they are the allocator's while the frame stays small. A
     // spill slot is at most 16 B, a register mostly 8: between the two
     // bounds the allocation is kept only if the frame came out small.
-    let (tight, loose) = crate::frame::scratch_estimate(&machine);
-    let snapshot = (tight && !loose).then(|| machine.clone());
+    let (tight, loose) = llrm_support::debug::timed("arm64 scratch estimate", || crate::frame::scratch_estimate(&machine));
+    let snapshot = llrm_support::debug::timed("arm64 machine snapshot", || (tight && !loose).then(|| machine.clone()));
     crate::lir_view::set_frame_pointer_free(
         platform != Platform::Darwin
             && !(machine.dynamic

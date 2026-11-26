@@ -288,25 +288,28 @@ pub fn run(
     function: &mut MFunc,
     optsize: bool,
 ) {
-    dead_code(function);
-    unsplit_edges(function);
+    use llrm_support::debug::timed;
+    timed("arm64 prepass dead code", || dead_code(function));
+    timed("arm64 prepass unsplit edges", || unsplit_edges(function));
     if function.blocks.len() < 2 && function.blocks.iter().all(|block| block.ops.len() < 3) {
         return;
     }
     // No stage below adds, removes or retargets a block: the edges stay.
-    let graph = cfg(function);
-    cse(function, &graph, optsize);
-    hoist(function, &graph);
+    let graph = timed("arm64 prepass cfg", || cfg(function));
+    timed("arm64 prepass cse", || cse(function, &graph, optsize));
+    timed("arm64 prepass hoist", || hoist(function, &graph));
     // What was hoisted from several blocks is one value in the preheader.
-    cse(function, &graph, optsize);
-    sink(function, &graph);
-    crate::sinkfold::run(function, &graph);
-    dead_definitions(function);
-    non_flag_setting(function);
-    redundant_zero_extends(function);
-    redundant_zero_high_moves(function);
-    narrow_extension_uses(function);
-    dead_code(function);
+    timed("arm64 prepass cse", || cse(function, &graph, optsize));
+    timed("arm64 prepass sink", || sink(function, &graph));
+    timed("arm64 prepass sink fold", || crate::sinkfold::run(function, &graph));
+    timed("arm64 prepass dead definitions", || dead_definitions(function));
+    timed("arm64 prepass non flag setting", || non_flag_setting(function));
+    timed("arm64 prepass extensions", || {
+        redundant_zero_extends(function);
+        redundant_zero_high_moves(function);
+        narrow_extension_uses(function);
+    });
+    timed("arm64 prepass dead code", || dead_code(function));
 }
 
 /// The registers `op` reads as 32 bits: the operands of a `W` form and of the
