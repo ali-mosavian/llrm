@@ -110,13 +110,15 @@ pub fn run_on(
     std::fs::create_dir_all(&dir).unwrap();
     let source = format!("{}.export _main\n_main:\n{main}  rts\n{extra}{RUNTIME}", equates(&platform));
     std::fs::write(dir.join("p.s"), source).unwrap();
-    let built = Command::new("cl65")
-        .args(["-t", target, "-o"])
-        .arg(dir.join("p.bin"))
-        .arg(dir.join("p.s"))
-        .output()
-        .expect("cl65");
+    let mut cl65 = Command::new("cl65");
+    cl65.args(["-t", target]);
+    // cc65's stock cfg does not align BSS (ld65 warns and leaves it unaligned)
+    if extra.contains("\n.align") {
+        cl65.arg("-C").arg(concat!(env!("CARGO_MANIFEST_DIR"), "/src/machines/sim6502.cfg"));
+    }
+    let built = cl65.arg("-o").arg(dir.join("p.bin")).arg(dir.join("p.s")).output().expect("cl65");
     assert!(built.status.success(), "cl65: {}", String::from_utf8_lossy(&built.stderr));
+    assert!(!String::from_utf8_lossy(&built.stderr).contains("aligned properly"), "ld65 warned");
     let code = Command::new("sim65")
         .args(["-x", "50000000"])
         .arg(dir.join("p.bin"))

@@ -1236,6 +1236,16 @@ pub trait Machine {
         None
     }
 
+    /// The largest alignment this target gives an `alloca` above
+    /// [`Machine::max_alloca_align`] by turning it into aligned static storage
+    /// after the mid-end. Such an `alloca` is not refused at pipeline entry
+    /// and keeps its alignment; the code generator refuses the ones left
+    /// (`refuse_unkeepable_alignment`), so none lands misaligned. None: every
+    /// excess is refused.
+    fn static_alloca_align(&self) -> Option<u64> {
+        None
+    }
+
     /// The target's throughput model, where it states one: `None` prices a loop
     /// by the sum of `costs()` (every target but x86-64).
     fn throughput(&self) -> Option<&Throughput> {

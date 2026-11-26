@@ -1637,7 +1637,9 @@ pub fn refuse_vectors(program: &Program) -> Result<(), String> {
 
 /// An `alloca` asking more than the target's frames keep and no more than it
 /// accepts (`Machine::kept_stack_align`, `max_alloca_align`) is clamped to what
-/// they keep; one asking more than it accepts is refused by name. A dynamic one
+/// they keep; one asking more than it accepts is refused by name, unless the
+/// target can make it aligned static storage (`static_alloca_align`): that one
+/// keeps its alignment. A dynamic one
 /// is left as asked where the target masks the address
 /// (`honors_dynamic_alloca_align`). Alignment is
 /// the explicit one, else the type's, as known-bits reads it.
@@ -1648,6 +1650,7 @@ pub fn constrain_allocas(program: &mut Program) -> Result<(), String> {
         return Ok(());
     }
     let honors_dynamic = program.target.honors_dynamic_alloca_align();
+    let static_max = program.target.static_alloca_align();
     // The passes that raise an alloca's alignment stop at the datalayout's
     // stack alignment (`tryEnforceAlignment`); no frame here keeps more.
     if let Some(kept) = kept {
@@ -1673,6 +1676,11 @@ pub fn constrain_allocas(program: &mut Program) -> Result<(), String> {
                         continue;
                     }
                     let wanted = align.unwrap_or_else(|| layout.align(&context.types, allocated));
+                    if max.is_some_and(|max| wanted > max) && static_max.is_some_and(|most| wanted <= most) {
+                        // kept as asked: it is aligned static storage or
+                        // refused after the mid-end
+                        continue;
+                    }
                     if let Some(max) = max.filter(|max| wanted > *max) {
                         return Err(format!(
                             "@{name}: an object aligned to {wanted} needs stack realignment, not supported yet (accepts {max})"

@@ -14,6 +14,12 @@
 //! the initializer of an internal global can then take the zero for what
 //! the function left from an earlier call.
 //!
+//! An `alloca` aligned past what the frame keeps
+//! (`Machine::static_alloca_align`) is not refused at pipeline entry: its
+//! global takes the alignment (`.align` in BSS, with the linker configuration's
+//! BSS `align`), and one left on the stack is refused by name when the code
+//! generator reaches it.
+//!
 //! A function with an `alloca` outside the entry block, a counted `alloca`,
 //! or a stack save keeps its stack. The objects of a module together stay
 //! under [`BUDGET`] bytes of RAM.

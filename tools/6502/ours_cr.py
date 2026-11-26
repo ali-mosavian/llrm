@@ -162,7 +162,7 @@ def zero_clocks(n, work):
         cycles = []
         for size in (0, n):
             (w / "f.s").write_text(".export main\nmain: rts\nrc0=$80\nrc1=$81\nrc2=$82\nrc3=$83\nrc4=$84\nrc5=$85\n" + (f'.segment "BSS"\nb: .res {size}\n' if size else ""))
-            k = sh(["cl65", "-t", SIM, "-o", "x.bin", "d.s", "f.s"], w); assert k.returncode == 0, k.stderr
+            k = sh(["cl65", "-t", SIM, *cfg(w), "-o", "x.bin", "d.s", "f.s"], w); assert k.returncode == 0, k.stderr
             cycles.append(run_cycles("x.bin", w))
         shutil.rmtree(w, True)
         ZERO_CLOCKS[n] = cycles[1] - cycles[0]
@@ -172,7 +172,7 @@ def net_cycles(w):
     return run_cycles("x.bin", w) - zero_clocks(bss_bytes(w / "x.map"), w.parent)
 def base_members(work):
     w = Path(tempfile.mkdtemp(prefix="base-", dir=work)); (w / "d.s").write_text(driver()); (w / "f.s").write_text(".export main\nmain: rts\nrc0=$80\nrc1=$81\nrc2=$82\nrc3=$83\nrc4=$84\nrc5=$85\n")
-    k = sh(["cl65", "-t", SIM, "--asm-define", "DUMP", "-m", "x.map", "-o", "x.bin", "d.s", "f.s"], w); assert k.returncode == 0, k.stderr
+    k = sh(["cl65", "-t", SIM, *cfg(w), "--asm-define", "DUMP", "-m", "x.map", "-o", "x.bin", "d.s", "f.s"], w); assert k.returncode == 0, k.stderr
     return set(re.findall(SIM + r"\.lib\((\w+)\.o\)", (w / "x.map").read_text()))
 def split_output(stdout):
     """sim65 prints "<n> cycles" straight after the program's output; the driver ends its dump with a newline so a last byte that is an ASCII digit is not read as part of n."""
@@ -181,6 +181,11 @@ def split_output(stdout):
 
 sys.path.insert(0, str(HERE))
 import crlib
+def cfg(w):
+    """cc65's stock cfg does not align BSS; a program with an over-aligned static (`.align N`) links with ours."""
+    try: aligned = re.search(r"^\s*\.align\b", (w / "f.s").read_text(), re.M)
+    except OSError: aligned = None
+    return ["-C", str(HERE.parents[1] / "crates/target/llrm-6502/src/machines/sim6502.cfg")] if aligned else []
 sys.path.insert(0, str(HERE.parent))
 import corpus_targets
 from flagset import CORPUS_COMMON, program_flags
@@ -190,7 +195,7 @@ def resolve(w, asm_text, cc, flags):  # asm_text(mods) = the program, plus the r
     objs = []; have = set(); mods = ""; index = crlib.index(RTDIR)
     for _ in range(12):
         (w / "f.s").write_text(".autoimport +\n" + asm_text(mods))
-        k = sh(["cl65", "-t", SIM, "-m", "x.map", "-o", "x.bin", "d.s", "f.s", *objs], w)
+        k = sh(["cl65", "-t", SIM, *cfg(w), "-m", "x.map", "-o", "x.bin", "d.s", "f.s", *objs], w)
         if k.returncode == 0: return objs, None
         und = sorted(set(re.findall(r"Unresolved external '(\w+)'", k.stderr)))
         new = {index[u] for u in und if u in index} - have
@@ -236,7 +241,7 @@ def one(job):
         (w / "f.s").write_text(".autoimport +\n" + (f'.segment "CODE"\n.res {PAD}\n' if PAD else "") + asm)
     out = []
     for dump in (True, False):
-        k = sh(["cl65", "-t", SIM, *(["--asm-define", "DUMP"] if dump else []), "-m", "x.map", "-o", "x.bin", "d.s", "f.s", *objs], w)
+        k = sh(["cl65", "-t", SIM, *cfg(w), *(["--asm-define", "DUMP"] if dump else []), "-m", "x.map", "-o", "x.bin", "d.s", "f.s", *objs], w)
         if k.returncode:
             und = sorted(set(re.findall(r"Unresolved external '(\w+)'", k.stderr)))
             return name, "LINK", (" ".join(und) or k.stderr[-100:])[:140]
@@ -259,14 +264,14 @@ def one(job):
     # is not the program's clocks. Mean over the other paddings of code.
     for pad in PADS[1:]:
         (w / "f.s").write_text(".autoimport +\n" + f'.segment "CODE"\n.res {pad}\n' + asm + runtime(asm + modtext))
-        k = sh(["cl65", "-t", SIM, "-m", "x.map", "-o", "x.bin", "d.s", "f.s", *objs], w)
+        k = sh(["cl65", "-t", SIM, *cfg(w), "-m", "x.map", "-o", "x.bin", "d.s", "f.s", *objs], w)
         if k.returncode:
             return name, "LINK", k.stderr[-100:]
         r = sh(["sim65", "-c", "-x", "4000000000", "x.bin"], w, timeout=120, text=False)
         cycles.append(int(re.search(rb"(\d+) cycles", r.stdout).group(1)))
     # executed instructions and bytes of the first layout (the padding is not the program's bytes)
     (w / "f.s").write_text(".autoimport +\n" + (f'.segment "CODE"\n.res {PADS[0]}\n' if PADS[0] else "") + asm + runtime(asm + modtext))
-    sh(["cl65", "-t", SIM, "-m", "x.map", "-o", "x.bin", "d.s", "f.s", *objs], w)
+    sh(["cl65", "-t", SIM, *cfg(w), "-m", "x.map", "-o", "x.bin", "d.s", "f.s", *objs], w)
     nb = bytes_of(w / "x.map", objs)
     zero = zero_clocks(bss_bytes(w / "x.map"), WORK)
     cycles = [c - zero for c in cycles]

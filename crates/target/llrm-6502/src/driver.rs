@@ -1246,6 +1246,12 @@ impl llrm_mir::target::Machine for Mos6502Machine {
         Some(crate::frame::MAX_ALLOCA_ALIGN)
     }
 
+    /// `staticlocals` makes an `alloca` of a function that cannot be re-entered
+    /// a zero-filled global, which `.align` and the linker's BSS `align` place.
+    fn static_alloca_align(&self) -> Option<u64> {
+        Some(crate::frame::MAX_STATIC_ALIGN)
+    }
+
     /// `lda (zp),y`: the index is `y`.
     fn index_register_bits(&self) -> Option<u32> {
         Some(8)
@@ -1345,11 +1351,19 @@ fn data_text(
         }
         // a variable of zeros is BSS, which the platform's startup clears: it
         // costs no bytes in the image
+        // below the alloca limit nothing was asked of the linker
+        let align = match variable.align {
+            Some(align) if align > crate::frame::MAX_ALLOCA_ALIGN => format!(".align {align}\n"),
+            _ => String::new(),
+        };
         if !variable.constant && words.is_empty() && bytes.iter().all(|&b| b == 0) {
-            out.push_str(&format!(".segment \"BSS\"\n{label}: .res {}\n.segment \"CODE\"\n", bytes.len().max(1)));
+            out.push_str(&format!(
+                ".segment \"BSS\"\n{align}{label}: .res {}\n.segment \"CODE\"\n",
+                bytes.len().max(1)
+            ));
             continue;
         }
-        out.push_str(&format!(".segment \"{}\"\n{label}:\n", if variable.constant { "RODATA" } else { "DATA" }));
+        out.push_str(&format!(".segment \"{}\"\n{align}{label}:\n", if variable.constant { "RODATA" } else { "DATA" }));
         let mut at = 0;
         for (word_at, symbol, addend) in words {
             for chunk in bytes[at..word_at].chunks(16) {

@@ -4439,7 +4439,10 @@ impl Builder<'_> {
     /// root.
     /// A target that cannot realign its stack (`max_alloca_align`) refuses an
     /// object aligned past what it keeps: the object would land misaligned
-    /// and `ptr & (align - 1)` fold to zero. The pin realigns (`hasFP`).
+    /// and `ptr & (align - 1)` fold to zero. The pin realigns (`hasFP`). An
+    /// object a target made static (`Machine::static_alloca_align`) is no
+    /// longer an `alloca` here, so this is also the refusal of the ones it did
+    /// not.
     fn refuse_unkeepable_alignment(
         &self,
         allocated: TypeId,

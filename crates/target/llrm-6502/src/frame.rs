@@ -84,6 +84,10 @@ pub fn layout(function: &Function) -> Layout {
 /// by name (`Machine::max_alloca_align`).
 pub const MAX_ALLOCA_ALIGN: u64 = 2;
 
+/// The largest alignment of an `alloca` that `staticlocals` can keep: the
+/// `align` of the BSS segment of every linker configuration (`machines/*.cfg`).
+pub const MAX_STATIC_ALIGN: u64 = 256;
+
 fn adjust(bytes: i64) -> MInst {
     MInst::new(op::ADJSP, vec![Operand::Imm(bytes)])
 }
