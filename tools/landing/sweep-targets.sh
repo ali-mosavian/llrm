@@ -2,6 +2,22 @@
 # sweep-targets.sh: runs prune-target.sh --apply on every cargo target dir over CAP_KB (default 15 GB) under SWEEP_ROOTS (default ~/scratch and the worktrees),
 # active dirs included: it removes only stale hashes (see prune-target.sh), which the owner's next build recreates. Prints `dir: pruned N entries, X bytes` per dir.
 . "$(dirname "${BASH_SOURCE[0]:-$0}")/branch.sh"
+# One sweep at a time per SWEEP_ROOTS: a second says so and exits 0. `flock -o` keeps the lock out of every child, so only a live sweep holds it.
+# With DRY=1, which removes nothing, a sweep scans at most every SWEEP_DRY_MIN (default 360) minutes. SWEEP_LOCK and SWEEP_DRY_STAMP override the files.
+state=$HOME/.cache/llrm/sweep/$(printf %s "${SWEEP_ROOTS:-}" | sha1sum | cut -c1-12)
+lock=${SWEEP_LOCK:-$state.lock}; stamp=${SWEEP_DRY_STAMP:-$state.dry}
+if [ -z "${SWEEP_HELD:-}" ]; then
+  mkdir -p "$(dirname "$lock")" "$(dirname "$stamp")"
+  SWEEP_HELD=1 flock -n -o -E 75 "$lock" bash "${BASH_SOURCE[0]}" "$@"; rc=$?
+  [ $rc = 75 ] && { echo "another sweep holds $lock: nothing done"; exit 0; }
+  exit $rc
+fi
+unset SWEEP_HELD
+if [ -n "${DRY:-}" ]; then
+  dry_min=${SWEEP_DRY_MIN:-360}
+  [ -n "$(find "$stamp" -mmin -"$dry_min" 2>/dev/null)" ] && { echo "dry sweep skipped: one ran within $dry_min min (SWEEP_DRY_MIN=0 forces)"; exit 0; }
+  touch "$stamp"  # at the start: a sweep its timeout ends counts too
+fi
 HERE=$(cd "$(dirname "$0")" && pwd); cap=${CAP_KB:-15728640}
 # default: ~/scratch, and every worktree of this repo (taken from git, so no tool-named directory is spelled out here)
 roots=${SWEEP_ROOTS:-"$HOME/scratch $(git -C "$HERE" worktree list --porcelain | sed -n 's/^worktree //p' | xargs -r -n1 dirname | sort -u | tr '\n' ' ')"}

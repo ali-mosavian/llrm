@@ -1692,3 +1692,13 @@ def test_a_change_to_a_crate_m68k_does_not_build_on_does_not_run_its_pinned_outp
     cfg, pkgs = gate.load(), gate.packages()
     p = gate.plan(["crates/target/llrm-z80/src/x.rs"])
     assert "llrm-m68k" not in gate.commands(p, cfg, pkgs)["crate-tests"]
+
+
+def test_a_shared_pass_or_codegen_diff_runs_the_byte_ratchet():
+    """A shared-pass change grew the 8-bit target's programs unseen: no step the diff selected compared code bytes."""
+    cfg, pkgs = gate.load(), gate.packages()
+    for path in ("crates/codegen/llrm-codegen/src/backend/selectiondag/builder.rs", "crates/opt/llrm-transforms/src/lib.rs",
+                 "crates/target/llrm-z80/src/mfunc.rs", "crates/target/llrm-target/src/lib.rs", "tools/byte_ratchet_z80.tsv", "toolchain/clang/pin"):
+        p = gate.plan([path])
+        assert "pytest-programs" in p.steps and "build" in p.steps, path
+        assert "tests/test_byte_ceilings.py" in gate.commands(p, cfg, pkgs)["pytest-programs"], path
