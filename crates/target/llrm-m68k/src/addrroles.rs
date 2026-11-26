@@ -24,8 +24,8 @@
 
 use llrm_spike_mf::{Kind, Operand, Reg};
 
+use crate::dagisel::local::memory_at;
 use crate::mfunc::{Class, MFunction, operand_class};
-use crate::scaledindex::memory_at;
 
 /// `operand_class`, with the base and the index of an extending load (it has
 /// no printed operands, so the row names no class for them).
@@ -33,7 +33,7 @@ fn class_at(
     name: &str,
     position: usize,
 ) -> Option<Class> {
-    match (crate::scaledindex::memory_at(name), position) {
+    match (memory_at(name), position) {
         (Some((base, _)), at) if at == base => Some(Class::Ar32),
         (Some((_, index)), at) if at == index => Some(Class::Xr32),
         _ => operand_class(name, position),
