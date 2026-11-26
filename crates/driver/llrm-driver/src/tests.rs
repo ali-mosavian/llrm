@@ -6634,6 +6634,31 @@ fn a_loop_block_of_two_float_chains_is_stacked_in_the_selectors_order() {
     assert_eq!(exchanges, 4, "{exchanges} fxch: {listing}");
 }
 
+/// TRIAL-CAP-M64: QuickrBasic `exec.c` -Os built the module 7 times (59.6 G
+/// compile instructions against 2.5 G for clang): each -Os trial re-runs the
+/// mid-end over the whole module. A module with a function over
+/// `TRIAL_INSTS_MAX` is built once: fewer selections than the same module with
+/// a small second function.
+#[test]
+fn a_module_with_a_function_over_the_trial_cap_takes_no_os_trial_on_m64() {
+    let one = include_str!("tests_data/prefix_sums.ll").replace("@m32-datalayout@", "@m64-datalayout@");
+    let chain = |links: usize| {
+        let body: String = (0..links).map(|i| format!("  %v{} = add i32 %v{}, {}\n", i + 1, i, i + 1)).collect();
+        format!("define dso_local i32 @other(i32 %v0) {{\n{body}  ret i32 %v{links}\n}}\n")
+    };
+    let selections = |text: String| {
+        let before = llrm_mir::counts::get(llrm_mir::counts::Event::Selections);
+        compiled(&flags(&["-m64", "-Os"]), &text, "bench_prefix").unwrap();
+        llrm_mir::counts::get(llrm_mir::counts::Event::Selections) - before
+    };
+    let with_trials = selections(format!("{one}\n{}", chain(10)));
+    let over_cap = selections(format!("{one}\n{}", chain(llrm_x86_m64::TRIAL_INSTS_MAX + 100)));
+    assert!(
+        over_cap < with_trials,
+        "a module over the cap ran its trials: {over_cap} selections against {with_trials} for the same loop beside a small function"
+    );
+}
+
 /// x86-m32 x_bubble -Os: the unrotated trial module was 16 B shorter as an
 /// object file and 2 B longer in code (the padding between functions moved), so
 /// the trial compares the bytes without padding. Since #10479 (Ext-TSP
@@ -6714,6 +6739,25 @@ fn a_recursion_called_with_a_constant_row_is_cloned_at_o3_only_when_asked() {
         let mut arguments = vec!["-m32", "-O3", "-march=i486"];
         arguments.extend_from_slice(extra);
         let (built, _) = compiled(&flags(&arguments), text, "queens").unwrap();
+        llrm_codegen::backend::masm::text(&built).unwrap().lines().count()
+    };
+    let (default, without, asked) = (lines(&[]), lines(&["-fno-ipa-cp-clone"]), lines(&["-fipa-cp-clone"]));
+    assert_eq!(default, without, "-O3 cloned by default: {default} lines against {without} without clones");
+    assert!(asked > 2 * without, "-fipa-cp-clone made no clones: {asked} lines against {without}");
+}
+
+/// x86-m64 -O3 made the clones gcc's `-fipa-cp-clone` makes and the pin does
+/// not: spill_store_order took 857 M compile instructions and 3,403 B against
+/// 323 M and 1,875 B without, QuickrBasic -O3 +1.0% bytes and +2.3%
+/// compile instructions over tests/run/c and the 126 modules, for 0.001% fewer
+/// executed instructions (IPACP-O3 ended on m64 2026-11-26).
+#[test]
+fn a_recursion_called_with_a_constant_row_is_not_cloned_at_o3_on_m64_unless_asked() {
+    let text = include_str!("tests_data/queens_place.ll").replace("@m32-datalayout@", "@m64-datalayout@");
+    let lines = |extra: &[&str]| {
+        let mut arguments = vec!["-m64", "-O3"];
+        arguments.extend_from_slice(extra);
+        let (built, _) = compiled(&flags(&arguments), &text, "queens").unwrap();
         llrm_codegen::backend::masm::text(&built).unwrap().lines().count()
     };
     let (default, without, asked) = (lines(&[]), lines(&["-fno-ipa-cp-clone"]), lines(&["-fipa-cp-clone"]));

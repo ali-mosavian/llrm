@@ -69,6 +69,23 @@ fn priced_hot(
     (calls, dies): (i64, bool),
     frequency: Option<f64>,
 ) -> (i64, i64) {
+    match inline_cost_hot(text, at, sole, size, tti, params, (calls, dies), frequency) {
+        InlineCost::Cost { cost, threshold, .. } => (cost, threshold),
+        other => panic!("{other:?}"),
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn inline_cost_hot(
+    text: &str,
+    at: usize,
+    sole: bool,
+    size: CallerSize,
+    tti: Option<&dyn llrm_mir::tti::Tti>,
+    params: InlineParams,
+    (calls, dies): (i64, bool),
+    frequency: Option<f64>,
+) -> InlineCost {
     let module: Module = parsed(text);
     let layout = DataLayout::default();
     let (caller_id, _, caller) = module.functions().find(|(_, global, _)| global.name.as_deref() == Some("f")).unwrap();
@@ -100,10 +117,7 @@ fn priced_hot(
         planned: None,
         tti,
     };
-    match inline_cost(&site, params) {
-        InlineCost::Cost { cost, threshold, .. } => (cost, threshold),
-        other => panic!("{other:?}"),
-    }
+    inline_cost(&site, params)
 }
 
 fn priced(
@@ -1402,6 +1416,39 @@ fn the_inliner_reads_the_inline_policy_of_the_target() {
     assert!(cost >= threshold, "{cost} against {threshold}");
 }
 
+/// m64 -O2 kept `bench_crc(0)` a call (21 executed instructions became 561):
+/// the target's bar of 150 refused a cost of 180 the level's own 225 takes, and
+/// a refusal by the bar alone never reached the priced trial. A speed site the
+/// cut bar refuses and the own bar takes is `blocked`, for the trial to decide;
+/// without the own bar it is a plain refusal.
+#[test]
+fn a_site_over_the_cut_bar_and_under_the_levels_own_is_blocked_for_the_trial() {
+    let own = InlineParams::from_level(2).default_threshold;
+    let (cost, _) = priced(COMPARE_LOOP, 0, false, CallerSize::Speed);
+    assert!(0 < cost && cost < own, "the fixture's cost {cost} is not between 0 and {own}");
+    let blocked = |cut_from, o1_bound, size| {
+        let params = InlineParams { default_threshold: cost, cut_from, o1_bound, ..InlineParams::from_level(2) };
+        match inline_cost_hot(COMPARE_LOOP, 0, false, size, None, params, (2, false), None) {
+            InlineCost::Cost { blocked, .. } => blocked,
+            other => panic!("{other:?}"),
+        }
+    };
+    assert!(blocked(Some(own), false, CallerSize::Speed), "the cut bar's refusal is not a trial");
+    assert!(!blocked(None, false, CallerSize::Speed), "a bar that was not cut made a trial");
+    assert!(!blocked(Some(own), true, CallerSize::Speed), "-O1 takes the pin's verdict, no trial");
+    // A trial costs the caller's cleanup list again: a call with an argument
+    // that is not a constant has nothing to fold whole (+4.55% compile at -O2
+    // when every refused site was tried).
+    let unknown = COMPARE_LOOP
+        .replace("define void @f() {", "define void @f(i32 %x) {")
+        .replace("@callee(i32 noundef 1)", "@callee(i32 noundef %x)");
+    let params = InlineParams { default_threshold: cost, cut_from: Some(own), ..InlineParams::from_level(2) };
+    match inline_cost_hot(&unknown, 0, false, CallerSize::Speed, None, params, (2, false), None) {
+        InlineCost::Cost { blocked, .. } => assert!(!blocked, "a call of an unknown argument made a trial"),
+        other => panic!("{other:?}"),
+    }
+}
+
 /// z80 -O1 inlined with the -O2 byte price (1 B = 3 T): 5 cells bigger or
 /// slower than -O1 must be (loop_fusion +43,813 T). A rate that does not bind
 /// at -O1 leaves the pin's verdict there and refuses at -O2.
@@ -2005,15 +2052,23 @@ b0:
 /// An x86 -Os target whose size bound yields at a hot site within `percent`.
 fn hot_yield_tti(percent: Option<i64>) -> impl llrm_mir::tti::Tti {
     use llrm_mir::target::Tuning;
-    llrm_x86::tti::X86::of_cpu("i486").unwrap().with_tuning(Tuning {
-        inline_size_guard_at_size: true,
-        inline_size_hot_growth_percent: percent,
-        ..Tuning::PIN
-    })
+    llrm_x86::tti::X86::of_cpu("i486")
+        .unwrap()
+        .with_tuning(
+            Tuning {
+                inline_size_guard_at_size: true,
+                inline_size_hot_growth_percent: percent,
+                ..Tuning::PIN
+            },
+        )
 }
 
-/// Whether the first call of `HOT_CALLEE` is inlined at a site `frequency` times its caller's entry.
-fn hot_callee_inlined(percent: Option<i64>, frequency: f64) -> bool {
+/// Whether the first call of `HOT_CALLEE` is inlined at a site `frequency`
+/// times its caller's entry.
+fn hot_callee_inlined(
+    percent: Option<i64>,
+    frequency: f64,
+) -> bool {
     let params = InlineParams { compute_full_inline_cost: true, ..InlineParams::from_level(2) };
     let (cost, threshold) = priced_hot(
         HOT_CALLEE,
@@ -2039,24 +2094,20 @@ fn a_hot_site_passes_the_size_bound_within_the_growth_budget() {
     use llrm_mir::target::Tuning;
     let text = HOT_CALLEE;
     let tti = |percent: Option<i64>| {
-        llrm_x86::tti::X86::of_cpu("i486").unwrap().with_tuning(Tuning {
-            inline_size_guard_at_size: true,
-            inline_size_hot_growth_percent: percent,
-            ..Tuning::PIN
-        })
+        llrm_x86::tti::X86::of_cpu("i486")
+            .unwrap()
+            .with_tuning(
+                Tuning {
+                    inline_size_guard_at_size: true,
+                    inline_size_hot_growth_percent: percent,
+                    ..Tuning::PIN
+                },
+            )
     };
     let inlined = |percent: Option<i64>, frequency: f64| {
         let params = InlineParams { compute_full_inline_cost: true, ..InlineParams::from_level(2) };
-        let (cost, threshold) = priced_hot(
-            text,
-            0,
-            false,
-            CallerSize::OptSize,
-            Some(&tti(percent)),
-            params,
-            (2, true),
-            Some(frequency),
-        );
+        let (cost, threshold) =
+            priced_hot(text, 0, false, CallerSize::OptSize, Some(&tti(percent)), params, (2, true), Some(frequency));
         cost < threshold
     };
     assert!(!inlined(None, 961.0), "premise: the bound holds a hot site where the target states no share");
@@ -2065,8 +2116,8 @@ fn a_hot_site_passes_the_size_bound_within_the_growth_budget() {
     assert!(!inlined(Some(0), 961.0), "growth over the share keeps the bound");
 }
 
-/// The hot-site yield trusts the units' growth, which credits the callee's death
-/// over all its sites; cold sites that keep it make the inline cost bytes
+/// The hot-site yield trusts the units' growth, which credits the callee's
+/// death over all its sites; cold sites that keep it make the inline cost bytes
 /// (QuickrBasic `suggest.c` +92 B, `comp.c` +49 B, `x_idioms` +143 B). The
 /// trial compile that keeps those calls refuses the yield, and notes each
 /// caller where it stood, so the finished object can decide.
@@ -2075,10 +2126,7 @@ fn a_hot_yield_is_noted_and_refused_in_the_keep_hot_calls_trial() {
     let _ = crate::trial::take_hot_yields();
     assert!(hot_callee_inlined(Some(1000), 961.0), "premise: the yield inlines the hot site");
     assert_eq!(crate::trial::take_hot_yields(), ["f"], "the caller where the yield stood is noted");
-    assert!(
-        !crate::trial::with_kept_hot_calls(|| hot_callee_inlined(Some(1000), 961.0)),
-        "the trial keeps the call"
-    );
+    assert!(!crate::trial::with_kept_hot_calls(|| hot_callee_inlined(Some(1000), 961.0)), "the trial keeps the call");
     assert!(crate::trial::take_hot_yields().is_empty(), "the trial notes nothing");
     assert!(!hot_callee_inlined(Some(1000), 1.0));
     assert!(crate::trial::take_hot_yields().is_empty(), "a cold site is not a yield");

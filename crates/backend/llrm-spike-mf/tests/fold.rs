@@ -429,3 +429,30 @@ fn a_function_that_folds_nothing_scans_each_blocks_terminators_a_few_times() {
     // 4x the blocks: 4x the work if linear, 16x if each query scans every block
     assert!(large <= 6 * small, "{small} instructions scanned for 20 blocks, {large} for 80");
 }
+
+/// `blocks` blocks that each end in a jump to the next one: every jump folds.
+fn jump_chain(blocks: u32) -> MFunction<()> {
+    let mut all: Vec<Vec<Inst>> = (0..blocks).map(|at| vec![op("work", vec![]), jump(at + 1)]).collect();
+    all.push(vec![ret()]);
+    layout(all)
+}
+
+/// Every branch edit dropped the kept predecessors and the next query scanned
+/// every block's terminators again, so a function of many blocks whose jumps
+/// fold took time in proportion to blocks x blocks (exec.c's `exec_loop`:
+/// 47 000 rebuilds, about 10 % of its compile instructions). The edits keep
+/// the predecessors.
+#[test]
+fn a_function_whose_branches_fold_scans_each_blocks_terminators_a_few_times() {
+    let scans = |blocks: u32| {
+        let mut function = jump_chain(blocks);
+        llrm_spike_mf::fold::take_scanned();
+        let folded = branch_fold::<Two>(&mut function);
+        assert!(folded, "premise: nothing folded");
+        assert_eq!(function.blocks.len(), 1, "premise: the chain stayed {:?}", shape(&function));
+        llrm_spike_mf::fold::take_scanned()
+    };
+    let (small, large) = (scans(20), scans(80));
+    assert!(small > 0, "premise: no predecessor was asked for");
+    assert!(large <= 6 * small, "{small} instructions scanned for 20 blocks, {large} for 80");
+}
