@@ -1939,6 +1939,24 @@ fn test_a_selection_builds_one_cost_model() {
     assert!(built <= 3, "{built} cost models built for one function");
 }
 
+/// Selection asked `Profile::tests_status_word` once a block, and each ask
+/// built a cost model. One function, one answer.
+#[test]
+fn test_a_selection_of_many_blocks_builds_no_cost_model_per_block() {
+    let layout = "target datalayout = \"e-p:32:32-i8:8-i16:16-i32:32-i64:32-f32:32-f64:32-f80:32-n8:16:32-S32\"\n";
+    let mut body = String::from("define i32 @f(i32 %a) {\nentry:\n  br label %b0\n");
+    for k in 0..12 {
+        body.push_str(&format!("b{k}:\n  br label %b{}\n", k + 1));
+    }
+    body.push_str("b12:\n  ret i32 %a\n}\n");
+    let before = llrm_mir::counts::get(llrm_mir::counts::Event::MachineModels);
+    let module = crate::testing::module(&format!("{layout}{body}")).expect("parses");
+    selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+        .expect("selects");
+    let built = llrm_mir::counts::get(llrm_mir::counts::Event::MachineModels) - before;
+    assert!(built <= 3, "{built} cost models built for one function of 14 blocks");
+}
+
 /// A volatile `double` constant store at m32 was split into two `i32` stores
 /// once `store_fp_constant_as_i64` was on (float_conversions_loop +4 B over the
 /// pin's `fld; fstp`): the pin splits only a simple store (`ST->isSimple()`).

@@ -196,3 +196,27 @@ fn a_miss_of_the_low_bit_partner_reads_each_operand_once() {
 }
 
 const LOOKUPS_BOUND: usize = 7;
+
+/// `compute_known_bits` asked an operand's type twice before it looked at the
+/// value, once for the vector lane and once for the width: every node of every
+/// query paid both. A leaf's node reads its type once.
+#[test]
+fn a_known_bits_node_reads_the_operands_type_once() {
+    let module = parse::module("define i32 @f(i32 %x) {\nentry:\n  ret i32 %x\n}\n").expect("parses");
+    let layout = DataLayout::default();
+    let function = module
+        .globals
+        .iter()
+        .find_map(|global| match &global.kind {
+            GlobalKind::Function(function) => Some(function),
+            _ => None,
+        })
+        .expect("a function");
+    let query = Query::new(&module, function, &layout);
+    let parameter = Operand::Value(function.parameters()[0]);
+    super::query::TYPE_READS.with(|count| count.set(0));
+    let known = super::known::compute_known_bits(&query, parameter, 0);
+    assert_eq!(known.width, 32);
+    let reads = super::query::TYPE_READS.with(|count| count.get());
+    assert_eq!(reads, 1, "{reads} type reads for one leaf node");
+}

@@ -1773,7 +1773,8 @@ pub fn compute_known_bits(
     crate::counts::bump(crate::counts::Event::KnownBitsComputed);
     // DEVIATE (vectors, w11): the rules below are the scalar ones; a vector is
     // what every lane holds, a splat constant's number, else nothing.
-    if let Some(lane) = q.int_vector_lane_bits(v) {
+    let (lane, width) = q.lane_and_width(v);
+    if let Some(lane) = lane {
         return match v {
             Operand::Constant(id) => match q.context().splat_int(id) {
                 Some((bits, width)) => KnownBits::constant(width, bits),
@@ -1782,7 +1783,7 @@ pub fn compute_known_bits(
             _ => KnownBits::unknown(lane),
         };
     }
-    let mut known = KnownBits::unknown(width_of(q, v));
+    let mut known = KnownBits::unknown(width.max(1));
     compute_known_bits_into(q, v, &mut known, depth);
     known
 }
