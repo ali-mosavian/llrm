@@ -57,3 +57,9 @@ def test_a_ceiling_file_of_other_levels_is_refused(tmp_path):
 def test_a_missing_compiler_stops_the_run(tmp_path):
     with pytest.raises(SystemExit, match="llrm-none-llc"):
         byte_ratchet.tools({"compiler": "llrm-none-llc", "needs": []}, tmp_path)
+
+
+def test_a_missing_assembler_stops_the_run(tmp_path):
+    (tmp_path / "cc").touch(mode=0o755)
+    with pytest.raises(SystemExit, match="no-such-assembler"):
+        byte_ratchet.tools({"compiler": "cc", "needs": ["no-such-assembler"]}, tmp_path)
