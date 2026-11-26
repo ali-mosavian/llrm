@@ -487,3 +487,38 @@ done:
         assert!(!out.contains("move.l\t%d0, %a"), "{cpu:?}: no copy to load through:\n{out}");
     }
 }
+
+/// A pointer copied for an indexed add and also stored: the add read the copy
+/// through its either-class source, so the one data read counted as the add's
+/// was the store, which was then given the address register. The encoder wrote
+/// `%a4` as `%d4`: `jpeg_fixed` and `jpeg_single` crashed at 68000 -Os.
+#[test]
+fn a_stored_pointer_is_not_given_the_address_register_of_its_indexed_add() {
+    use llrm_m68k::addrarith::address_adds;
+    use llrm_m68k::mfunc::{Block, Class, Inst, Kind, MFunction, Operand, Reg, operand_class};
+    use llrm_m68k::reg;
+    let (virt, phys) = (Reg::Virt, Reg::Phys);
+    let add = Inst::new(Kind::Op("ADD32dr"), vec![Operand::Def(virt(3)), Operand::Use(virt(2)), Operand::Use(virt(1))]);
+    let mut store =
+        Inst::new(Kind::Op("MOV32pd"), vec![Operand::Imm(0), Operand::Use(phys(reg::A0)), Operand::Use(virt(1))]);
+    store.may_store = true;
+    let mut load =
+        Inst::new(Kind::Op("MOV32dp"), vec![Operand::Def(phys(reg::D0)), Operand::Imm(0), Operand::Use(virt(3))]);
+    load.may_load = true;
+    let insts = vec![Inst::new(Kind::Copy, vec![Operand::Def(virt(1)), Operand::Use(virt(0))]), add, store, load];
+    let mut function = MFunction::new("f");
+    function.classes = vec![Class::Xr32, Class::Xr32, Class::Dr32, Class::Xr32];
+    function.blocks.push(Block { id: 0, insts, phis: vec![] });
+    address_adds(&mut function, Cpu::M68000, true, false, true);
+    for inst in &function.blocks[0].insts {
+        let Kind::Op(name) = inst.kind else { continue };
+        for (at, operand) in inst.operands.iter().enumerate() {
+            let Operand::Use(Reg::Virt(v)) = operand else { continue };
+            let data_only = operand_class(name, at) == Some(Class::Dr32);
+            assert!(
+                !(data_only && function.classes[*v as usize] == Class::Ar32),
+                "{name} operand {at} reads an address register"
+            );
+        }
+    }
+}

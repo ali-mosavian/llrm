@@ -499,8 +499,8 @@ impl llrm_target::Target for M64 {
                             // Pin order: visitADD's or-disjoint, then
                             // pushAddIntoCmovOfConsts; see Tuning.
                             add_to_or_disjoint: true,
-                            // DEVIATE LV-OS (owner llrm-target-x86-m64, exit
-                            // 2026-11-24): see Tuning.
+                            // DEVIATE LV-OS (owner llrm-target-x86-m64-b, exit
+                            // 2026-12-03): see Tuning.
                             vectorize_at_size: false,
                             // The selector has `pcmp*`, `cmpps`, `cmppd` and
                             // the mask select.

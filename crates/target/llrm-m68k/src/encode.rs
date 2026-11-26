@@ -178,6 +178,17 @@ fn operand_value(
     }
 }
 
+/// [`encode`] of an instruction that goes into the object: refused where a
+/// register is in the other bank than its class, which the bits would not show
+/// (`%a6` is written as `%d6`). [`encode`] alone also prices forms a later
+/// pass rewrites.
+pub fn encode_final(inst: &Inst) -> Result<Encoded, String> {
+    match crate::classcheck::wrong_bank(inst) {
+        Some(wrong) => Err(wrong),
+        None => encode(inst),
+    }
+}
+
 /// `encodeInstruction`.
 pub fn encode(inst: &Inst) -> Result<Encoded, String> {
     let (width, pieces) = match crate::divide::encoding(inst.opcode) {

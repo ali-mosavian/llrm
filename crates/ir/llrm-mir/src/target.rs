@@ -743,7 +743,7 @@ pub struct Tuning {
     pub add_to_or_disjoint: bool,
     /// `LoopVectorize` widens an `optsize` loop whose trip count VF divides
     /// (`isScalarEpilogueAllowed`). false: DEVIATE LV-OS (owner
-    /// llrm-target-x86-m64, exit 2026-11-24), the loop stays scalar: m64 -Os
+    /// llrm-target-x86-m64-b, exit 2026-12-03), the loop stays scalar: m64 -Os
     /// bytes +5..+50% on 15 corpus files.
     pub vectorize_at_size: bool,
     /// The backend selects a vector `icmp`, `fcmp` and `select`
