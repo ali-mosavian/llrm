@@ -6594,9 +6594,9 @@ fn the_os_trials_compile_each_dimension_against_the_base_once() {
     assert!(selections <= 6, "{selections} selections of two functions: more than three compiles");
 }
 
-/// TRIAL-CAP-M32: -Os on a module with a 2,000+ instruction function beside a rotated loop
-/// ran the -Os trials, each a mid-end over the whole module: 4.3x the
-/// compile time of the one build. A module with a function over
+/// TRIAL-CAP-M32: -Os on a module with a 2,000+ instruction function beside a
+/// rotated loop ran the -Os trials, each a mid-end over the whole module: 4.3x
+/// the compile time of the one build. A module with a function over
 /// `TRIAL_INSTS_MAX` is built once: fewer selections than the same module with
 /// a small second function.
 #[test]
@@ -6617,6 +6617,21 @@ fn a_module_with_a_function_over_the_trial_cap_takes_no_os_trial() {
         over_cap < with_trials,
         "a module over the cap ran its trials: {over_cap} selections against {with_trials} for the same loop beside a small function"
     );
+}
+
+/// x86-m32 -O2: a loop block with two float chains (`acc += x; x = x * 0.5 +
+/// 1`) is converted to the stack once, in the order the instruction selector
+/// gave (the pin's FPStackifier). DEVIATE 11 converted it in every order of its
+/// chains and kept the shortest (2 `fxch` in the listing, not 4) for one
+/// program in 111 and 1.6-7% of the compile of the float files; it ended
+/// 2026-11-26.
+#[test]
+fn a_loop_block_of_two_float_chains_is_stacked_in_the_selectors_order() {
+    let text = include_str!("tests_data/float_chains_in_loop_block.ll");
+    let (built, _) = compiled(&flags(&["-m32", "-O2", "-march=i486"]), text, "float_chains").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    let exchanges = listing.lines().filter(|line| line.trim().starts_with("fxch")).count();
+    assert_eq!(exchanges, 4, "{exchanges} fxch: {listing}");
 }
 
 /// x86-m32 x_bubble -Os: the unrotated trial module was 16 B shorter as an
