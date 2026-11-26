@@ -30,6 +30,7 @@ use std::hash::Hash;
 use llrm_support::hash::{HashMap, HashSet};
 
 use crate::fold::{self, Branches};
+use crate::graph::{Graph, Layout};
 use crate::mfunc::{Block, Inst, MFunction, Operand};
 use crate::regalloc::Assignment;
 use crate::sink::Jump;
@@ -54,6 +55,28 @@ pub trait TailMergeFunction {
 
     /// Every block, in layout order.
     fn blocks(&self) -> Vec<Self::Block>;
+    /// The block laid out right after `block` (`std::next`).
+    fn layout_next(
+        &self,
+        block: Self::Block,
+    ) -> Option<Self::Block> {
+        let blocks = self.blocks();
+        let at = blocks.iter().position(|one| *one == block)?;
+        blocks.get(at + 1).copied()
+    }
+    /// The block laid out right before `block` (`std::prev`).
+    fn layout_prev(
+        &self,
+        block: Self::Block,
+    ) -> Option<Self::Block> {
+        let blocks = self.blocks();
+        let at = blocks.iter().position(|one| *one == block)?;
+        at.checked_sub(1).map(|prev| blocks[prev])
+    }
+    /// The first block.
+    fn entry(&self) -> Self::Block {
+        self.blocks()[0]
+    }
     fn successors(
         &self,
         block: Self::Block,
@@ -225,18 +248,14 @@ impl<F: TailMergeFunction> Merger<'_, F> {
         &self,
         block: F::Block,
     ) -> Option<F::Block> {
-        let blocks = self.function.blocks();
-        let at = blocks.iter().position(|one| *one == block)?;
-        blocks.get(at + 1).copied()
+        self.function.layout_next(block)
     }
 
     fn layout_prev(
         &self,
         block: F::Block,
     ) -> Option<F::Block> {
-        let blocks = self.function.blocks();
-        let at = blocks.iter().position(|one| *one == block)?;
-        at.checked_sub(1).map(|prev| blocks[prev])
+        self.function.layout_prev(block)
     }
 
     /// `a->isLayoutSuccessor(b)`: `b` is laid out right after `a`.
@@ -490,7 +509,7 @@ impl<F: TailMergeFunction> Merger<'_, F> {
                 self.remove_blocks_with_hash(hash, succ, pred);
                 continue;
             }
-            let entry = self.function.blocks()[0];
+            let entry = self.function.entry();
             let tails = self.same_tails.clone();
             let mut index = tails.len();
             if tails.len() == 2 && self.follows(tails[0].block, tails[1].block) && tails[1].whole_block() {
@@ -558,7 +577,7 @@ impl<F: TailMergeFunction> Merger<'_, F> {
         }
 
         // blocks with several predecessors, each predecessor in canonical form
-        let mut cursor = self.function.blocks().first().and_then(|entry| self.layout_next(*entry));
+        let mut cursor = self.layout_next(self.function.entry());
         while let Some(ibb) = cursor {
             cursor = self.layout_next(ibb);
             if self.function.predecessors(ibb).len() < 2 {
@@ -642,24 +661,12 @@ struct Mf<'a, C, J> {
     graph: std::cell::RefCell<Option<Graph>>,
     /// Block id to its place in the layout: rebuilt only when a block is
     /// inserted.
-    positions: std::cell::RefCell<Option<Vec<usize>>>,
+    positions: std::cell::RefCell<Layout>,
     /// Whether a tail stops short of a call area it did not open
     /// ([`Jump::call_area`]).
     keep_areas: bool,
     jump: std::marker::PhantomData<J>,
 }
-
-/// The edges of every block by block id: `addSuccessor` / `removeSuccessor`
-/// keep both ends in step as a block's jumps change.
-struct Graph {
-    /// Sorted, without repeats ([`Mf::edges`]).
-    successors: Vec<Vec<u32>>,
-    /// The blocks that name or fall into the block, in no order; the layout
-    /// order is put on them when they are asked for.
-    predecessors: Vec<Vec<u32>>,
-}
-
-const ABSENT: usize = usize::MAX;
 
 thread_local! {
     /// Walks over every block of a function made to answer a position or
@@ -668,8 +675,8 @@ thread_local! {
 }
 
 /// How many times this thread's tail merging walked a whole function to place a
-/// block or list the predecessors of one: the cost that grew with every branch
-/// edit (exec.c's `exec_loop`: 40 % of the compile).
+/// block, list its blocks or list the predecessors of one: the cost that grew
+/// with every branch edit (exec.c's `exec_loop`: 40 % of the compile).
 pub fn layout_scans() -> usize {
     LAYOUT_SCANS.with(std::cell::Cell::get)
 }
@@ -707,21 +714,7 @@ impl<C, J> Mf<'_, C, J> {
 
     fn build_graph(&self) -> Graph {
         scanned();
-        let blocks = &self.function.blocks;
-        let size = blocks.iter().map(|block| block.id as usize + 1).max().unwrap_or(0);
-        let mut graph = Graph { successors: vec![Vec::new(); size], predecessors: vec![Vec::new(); size] };
-        let mut out = Vec::new();
-        for (at, block) in blocks.iter().enumerate() {
-            self.edges(at, &mut out);
-            for &to in &out {
-                // a jump to a block that is not there reaches no one
-                if let Some(into) = graph.predecessors.get_mut(to as usize) {
-                    into.push(block.id);
-                }
-            }
-            graph.successors[block.id as usize] = out.clone();
-        }
-        graph
+        Graph::build(&self.function.blocks, |at, out| self.edges(at, out))
     }
 
     /// The jumps of these blocks changed: their edges are read again, both
@@ -731,25 +724,7 @@ impl<C, J> Mf<'_, C, J> {
         ids: &[u32],
     ) {
         let Some(mut graph) = self.graph.get_mut().take() else { return };
-        let size = ids.iter().map(|&id| id as usize + 1).fold(graph.successors.len(), usize::max);
-        graph.successors.resize(size, Vec::new());
-        graph.predecessors.resize(size, Vec::new());
-        let mut out = Vec::new();
-        for &id in ids {
-            self.edges(self.at(id), &mut out);
-            let old = std::mem::take(&mut graph.successors[id as usize]);
-            for &to in old.iter().filter(|to| !out.contains(to)) {
-                if let Some(into) = graph.predecessors.get_mut(to as usize) {
-                    into.retain(|&from| from != id);
-                }
-            }
-            for &to in out.iter().filter(|to| !old.contains(to)) {
-                if let Some(into) = graph.predecessors.get_mut(to as usize) {
-                    into.push(id);
-                }
-            }
-            graph.successors[id as usize] = out.clone();
-        }
+        graph.relink(ids, |id| self.at(id), |at, out| self.edges(at, out));
         *self.graph.get_mut() = Some(graph);
     }
 
@@ -759,7 +734,7 @@ impl<C, J> Mf<'_, C, J> {
         &mut self,
         ids: &[u32],
     ) {
-        *self.positions.get_mut() = None;
+        self.positions.get_mut().invalidate();
         self.relink(ids);
     }
 
@@ -767,18 +742,7 @@ impl<C, J> Mf<'_, C, J> {
         &self,
         id: u32,
     ) -> usize {
-        let mut cached = self.positions.borrow_mut();
-        let positions = cached.get_or_insert_with(|| {
-            scanned();
-            let blocks = &self.function.blocks;
-            let size = blocks.iter().map(|block| block.id as usize + 1).max().unwrap_or(0);
-            let mut position = vec![ABSENT; size];
-            for (at, block) in blocks.iter().enumerate() {
-                position[block.id as usize] = at;
-            }
-            position
-        });
-        positions.get(id as usize).copied().filter(|&at| at != ABSENT).expect("a block that exists")
+        self.positions.borrow_mut().at(&self.function.blocks, id, scanned)
     }
 }
 
@@ -804,14 +768,47 @@ impl<C, J: Jump> TailMergeFunction for Mf<'_, C, J> {
     type Cond = Inst;
 
     fn blocks(&self) -> Vec<u32> {
+        scanned();
         self.function.blocks.iter().map(|block| block.id).collect()
+    }
+
+    fn layout_next(
+        &self,
+        block: u32,
+    ) -> Option<u32> {
+        let next = self.function.blocks.get(self.at(block) + 1).map(|next| next.id);
+        #[cfg(debug_assertions)]
+        {
+            let blocks = &self.function.blocks;
+            let at = blocks.iter().position(|one| one.id == block).expect("a block that exists");
+            assert_eq!(next, blocks.get(at + 1).map(|next| next.id), "stale position of block {block}");
+        }
+        next
+    }
+
+    fn layout_prev(
+        &self,
+        block: u32,
+    ) -> Option<u32> {
+        let prev = self.at(block).checked_sub(1).map(|prev| self.function.blocks[prev].id);
+        #[cfg(debug_assertions)]
+        {
+            let blocks = &self.function.blocks;
+            let at = blocks.iter().position(|one| one.id == block).expect("a block that exists");
+            assert_eq!(prev, at.checked_sub(1).map(|prev| blocks[prev].id), "stale position of block {block}");
+        }
+        prev
+    }
+
+    fn entry(&self) -> u32 {
+        self.function.blocks[0].id
     }
 
     fn successors(
         &self,
         block: u32,
     ) -> Vec<u32> {
-        let kept = self.with_graph(|graph| graph.successors.get(block as usize).cloned().unwrap_or_default());
+        let kept = self.with_graph(|graph| graph.successors(block).to_vec());
         #[cfg(debug_assertions)]
         {
             let mut scanned = Vec::new();
@@ -825,7 +822,7 @@ impl<C, J: Jump> TailMergeFunction for Mf<'_, C, J> {
         &self,
         block: u32,
     ) -> Vec<u32> {
-        let mut kept = self.with_graph(|graph| graph.predecessors.get(block as usize).cloned().unwrap_or_default());
+        let mut kept = self.with_graph(|graph| graph.predecessors(block).to_vec());
         kept.sort_unstable_by_key(|&from| self.at(from));
         #[cfg(debug_assertions)]
         {
@@ -1141,7 +1138,7 @@ pub fn merge_tails_crossing<J: Jump, C>(
             _ => None,
         },
         graph: std::cell::RefCell::new(None),
-        positions: std::cell::RefCell::new(None),
+        positions: std::cell::RefCell::new(Layout::default()),
         keep_areas,
         jump: std::marker::PhantomData,
     };
