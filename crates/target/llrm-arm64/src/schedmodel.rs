@@ -42,7 +42,7 @@ use llrm_dagisel::generated::aarch64::aarch64_apple_m1::MACHINE_OPCODES;
 use llrm_dagisel::generated::aarch64::sched::CORTEX_A510_MODEL;
 use llrm_dagisel::sched::{Modeled, SchedModel, SchedPred};
 
-use crate::opcode_rows::llvm_names;
+use crate::opcode_rows::{FORM_NAMES, llvm_names};
 
 /// The pin's opcode number of each opcode name the DAG tables emit.
 fn opcode_numbers() -> &'static HashMap<&'static str, u16> {
@@ -92,6 +92,18 @@ impl Arm64Model {
             Modeled::Unmodeled | Modeled::Unsupported => None,
         }
     }
+}
+
+/// Every form name the scheduler can map to an opcode, in table order.
+#[doc(hidden)]
+pub fn opcode_names() -> Vec<&'static str> {
+    FORM_NAMES.iter().map(|(name, _)| *name).collect()
+}
+
+/// The first LLVM opcode form `name` stands for.
+#[doc(hidden)]
+pub fn opcode_of_name(name: &str) -> Option<&'static str> {
+    llvm_names(name).first().copied()
 }
 
 /// The opcode the pin has for `insn` where the scheduler runs: the LLVM name
