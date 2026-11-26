@@ -9,7 +9,7 @@ priced in the order they ran, so they overlap across branches and loop trips; a 
 import argparse, array, hashlib, os, re, subprocess, sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-LLVM = os.environ.get('LLVM_BIN', os.path.expanduser('~/scratch/llvm-build-aarch64/bin'))
+LLVM = os.environ.get('LLVM_BIN', '/usr/lib/llvm-20/bin')
 CALL = re.compile(r'^(bl|blr)\s')
 WINDOW = 100_000  # instructions llvm-mca takes at once, at about 1.5 KB of its memory each
 # A store that updates its base register: `str w1, [x0], #2` (post) or `str w1, [x0, #2]!` (pre).
