@@ -30,11 +30,23 @@ fn an_align_2_local_is_not_assumed_aligned_by_the_mid_end() {
     assert!(!text.contains("ret i8 0"), "ptr & 1 folded to 0 from the alloca's align:\n{text}");
 }
 
+/// Fixed-point types are naturally aligned (`_Accum` 4, `long _Accum` 8), above the 2 an `int` has: a local of one was
+/// refused "aligned to 4 needs stack realignment" (`fixed_point` in `tests/run/c`, every level).
+#[test]
+fn a_local_up_to_the_widest_scalar_alignment_is_clamped_not_refused() {
+    for align in [4, 8] {
+        for level in [Level::O0, Level::O2, Level::Os] {
+            assembly(&probe().replace("align 2", &format!("align {align}")), &Request::new(level))
+                .unwrap_or_else(|error| panic!("align {align} {level:?}: {error}"));
+        }
+    }
+}
+
 #[test]
 fn a_local_aligned_past_the_accepted_alignment_is_refused_by_name() {
     for level in [Level::O0, Level::O2, Level::Os] {
-        let error = assembly(&probe().replace("align 2", "align 4"), &Request::new(level)).unwrap_err();
-        assert!(error.contains("aligned to 4"), "{level:?}: {error}");
+        let error = assembly(&probe().replace("align 2", "align 16"), &Request::new(level)).unwrap_err();
+        assert!(error.contains("aligned to 16"), "{level:?}: {error}");
     }
 }
 
