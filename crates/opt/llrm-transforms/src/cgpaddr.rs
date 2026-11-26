@@ -581,6 +581,36 @@ fn register_free(
     )
 }
 
+/// `isProfitableToFoldIntoAddressingMode`'s first test
+/// ([L5763](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/CodeGenPrepare.cpp#L5763)):
+/// every register of the mode after the fold is already live at the access
+/// (`valueAlreadyLiveAtInst`), so the fold extends no live range. The mode
+/// before the instruction holds no register here (DEVIATE CGP3: the pin's
+/// `AMBefore` can hold the scaled register of an outer `gep`, which this
+/// inner-first match does not see; such a register counts as not live, which
+/// only folds less).
+fn folding_extends_no_live_range(
+    unit: &passes::Unit,
+    block: BlockId,
+    after: [Option<Operand>; 3],
+) -> bool {
+    after.iter().flatten().all(|&held| {
+        let Operand::Value(value) = held else { return true };
+        let ValueDef::Instruction(def) = unit.function.value(value).def else {
+            // An argument is live where it is read in the block; anything else is a constant.
+            return !matches!(unit.function.value(value).def, ValueDef::Argument(_))
+                || unit.function.users(value).iter().any(|one| unit.function.parent(one.user) == Some(block));
+        };
+        // A static alloca is the frame pointer: live for the whole function.
+        if matches!(unit.function.instruction(def).opcode, Opcode::Alloca { .. })
+            && llrm_mir::instructioncost::is_static_alloca(unit.function, def)
+        {
+            return true;
+        }
+        unit.function.users(value).iter().any(|one| unit.function.parent(one.user) == Some(block))
+    })
+}
+
 fn is_global(
     context: &Context,
     operand: Operand,
@@ -855,6 +885,7 @@ fn matched_over(
         && registers
         && unit.function.users(result).iter().count() > 1
         && !crate::spill::address_only(unit.function, result, DEPTH)
+        && !folding_extends_no_live_range(unit, block, [Some(inner.base), reg, index.map(|(held, _)| held)])
     {
         return plain();
     }
