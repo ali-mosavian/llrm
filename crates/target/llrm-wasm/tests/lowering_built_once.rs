@@ -26,15 +26,31 @@ l:
 r:
   ret i32 %a
 }
+define i32 @narrow_default(i32 %a) {
+  %t = trunc i32 %a to i8
+  %r = sext i8 %t to i32
+  ret i32 %r
+}
+define i32 @narrow_without(i32 %a) #0 {
+  %t = trunc i32 %a to i8
+  %r = sext i8 %t to i32
+  ret i32 %r
+}
+attributes #0 = { \"target-features\"=\"-sign-ext\" }
 ";
 
 /// The action table was rebuilt for every basic block: a fixed cost per block
-/// that dominated small functions.
+/// that dominated small functions. Kept per feature set: a function without
+/// `sign-ext` still expands its sign extensions beside one that has it.
 #[test]
-fn the_action_table_is_built_once_however_many_blocks_are_selected() {
+fn the_action_table_is_built_once_per_feature_set_not_per_block() {
     let options = Options { level: Level::O2, ..Options::default() };
     let before = lowerings_built();
+    let text = assembly(IR, Width::W32, options).unwrap();
     assembly(IR, Width::W32, options).unwrap();
-    assembly(IR, Width::W32, options).unwrap();
-    assert!(lowerings_built() - before <= 1, "built {} times for 7 blocks", lowerings_built() - before);
+    let built = lowerings_built() - before;
+    assert_eq!(built, 2, "two feature sets, ten blocks, built {built} times");
+    let body = |name: &str| text[text.find(&format!("{name}:")).unwrap()..].split("end_function").next().unwrap().to_string();
+    assert!(body("narrow_default").contains("i32.extend8_s"), "{text}");
+    assert!(!body("narrow_without").contains("i32.extend8_s"), "{text}");
 }
