@@ -1939,9 +1939,9 @@ fn test_a_selection_builds_one_cost_model() {
     assert!(built <= 3, "{built} cost models built for one function");
 }
 
-/// Selection asked `Profile::tests_status_word` once a block, and each ask built
-/// a cost model (192 calls of one module, 13 K Ir each, 2.5 M). One function,
-/// one answer.
+/// Selection asked `Profile::tests_status_word` once a block, and each ask
+/// built a cost model (192 calls of one module, 13 K Ir each, 2.5 M). One
+/// function, one answer.
 #[test]
 fn test_a_selection_of_many_blocks_builds_no_cost_model_per_block() {
     let layout = "target datalayout = \"e-p:32:32-i8:8-i16:16-i32:32-i64:32-f32:32-f64:32-f80:32-n8:16:32-S32\"\n";
