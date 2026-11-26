@@ -2,9 +2,9 @@ use super::*;
 
 /// A block of 30,000 adds of two registers made outside it: each root looked
 /// back through every instruction before it for a product and a sibling (no
-/// scan finds one), 450 M operations visited; `fcmp_all` -O2 spent 52% of its
-/// 3 G instructions there. With the definitions found by search it is a few
-/// milliseconds; the bound is 1,000 times that.
+/// scan finds one), 450 M operations visited: a function with thousands of
+/// independent compares spent half its compile there. With the definitions
+/// found by search it is a few milliseconds; the bound is 100 times that.
 #[test]
 fn a_long_block_of_adds_is_not_scanned_back_from_every_root() {
     let mut function = MFunc::new("f");
