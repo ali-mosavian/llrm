@@ -102,6 +102,11 @@ def net_code(ours: dict | None, language: str, program: str, level: str) -> int 
     return bench.net_code(ours["code"], level)
 
 
+def reference_level(level: str) -> str:
+    """The references' build a cell of C or Nib is judged against: its own level, and their -O2 for -O3, which none of them has (oversight, 2026-11-26)."""
+    return "O2" if level == "O3" else level
+
+
 def rows(table: dict) -> tuple[list[tuple], collections.Counter]:
     """(rows, counts per level and verdict) of a bench run's {"NAME/LANG/LEVEL": counts}."""
     present = {key.rsplit("/", 2)[0] for key in table}
@@ -112,7 +117,7 @@ def rows(table: dict) -> tuple[list[tuple], collections.Counter]:
             continue
         ours = counts(value, program, language)
         if language in ("c", "nib"):
-            bar, names, at = bench.bar_program(program, language, present), C_REFS, level
+            bar, names, at = bench.bar_program(program, language, present), C_REFS, reference_level(level)
         else:
             bar, names, at = program, BAS_REFS, "O2"
         refs = {name: counts(table.get(f"{bar}/{name}/{at}"), bar, name) for name in names}
@@ -167,7 +172,7 @@ def reference_coverage(table: dict) -> dict[str, tuple[int, int]]:
         if language in C_REFS + BAS_REFS or language not in OURS or bench.is_twin_name(program):
             continue
         if language in ("c", "nib"):
-            bar, names, at = bench.bar_program(program, language, present), C_REFS, level
+            bar, names, at = bench.bar_program(program, language, present), C_REFS, reference_level(level)
         else:
             bar, names, at = program, BAS_REFS, "O2"
         for name in names:
@@ -187,7 +192,7 @@ def render(table: dict, dist: Path, harness: str, now: datetime.datetime) -> str
         f"# dist {dist}; md5: {md5_lines(dist)}",
         f"# harness commit {harness}; bench.py --opt {' '.join(sorted({key.rsplit('/', 1)[1] for key in table if key.rsplit('/', 2)[1] in OURS}))} --references --no-judge; no -march: the default CPU ({OURS_ISA})",
         "# net_code: a Nib cell with file I/O less the std.io skeleton's fixed bytes (io_skeleton/fixed.toml, not this build's measure); net_vs_plain_code: net_code less plain_ext_code (strict at O1/Os, priced at O2)",
-        "# bytes: code (CODE), data (initialised), static (data+bss); judged (ruling 2026-11-14): Os on total bytes (code+data; BASIC code+static) and clocks; O1/O2/O3 on clocks only, bytes reported in findings;"
+        "# bytes: code (CODE), data (initialised), static (data+bss); judged (ruling 2026-11-14): Os on total bytes (code+data; BASIC code+static) and clocks; O1/O2/O3 on clocks only, bytes reported in findings; C and Nib O3 cells against the references' O2 build (they have no O3);"
         " best external per language: C = ow/bcc/tc/tcpp, Nib = the C compilers on the C twin with the Nib semantics (NAME~init, NAME~bounds; the plain source's best in plain_ext_*), BASIC = bc/pds71/vbdos (O2 key)",
         "# verdicts: OK, WORSE, CONVENTION (a reference stores the zeros ours holds in bss: shown, not counted a win or a loss), WORSE_LB (a reference lacks a cell: lower bound), NO_BAR (no reference), NO_BAR_BY_CONSTRUCTION (bench.toml `references = false`: listed for regression tracking, never counted in the bar), NO_TWIN (a Nib program whose twin is not measured: unproven, never OK), TWIN (a reference twin, not judged), UNMEASURED/REFUSED (counted, never OK)",
         "# reference cells measured/asked: " + " ".join(f"{name}={got}/{asked}" for name, (got, asked) in reference_coverage(table).items()) + "; a cell without a bar reads NO_BAR or WORSE_LB",
