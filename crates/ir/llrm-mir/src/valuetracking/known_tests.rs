@@ -198,8 +198,8 @@ fn a_miss_of_the_low_bit_partner_reads_each_operand_once() {
 const LOOKUPS_BOUND: usize = 7;
 
 /// `compute_known_bits` asked an operand's type twice before it looked at the
-/// value: once for the vector lane, once for the width (52 K nodes, ~35 Ir
-/// each, of one -O2 module). A leaf's node reads its type once.
+/// value, once for the vector lane and once for the width: every node of every
+/// query paid both. A leaf's node reads its type once.
 #[test]
 fn a_known_bits_node_reads_the_operands_type_once() {
     let module = parse::module("define i32 @f(i32 %x) {\nentry:\n  ret i32 %x\n}\n").expect("parses");
