@@ -521,6 +521,14 @@ fn priced(
         None => (name, None),
     };
     let mut operands: Vec<Operand> = split_operands(rest).into_iter().map(operand).collect::<Result<_, _>>()?;
+    // `divsl.l %d0, %d0:%d1` is the 32 / 32 `divs.l %d0, %d1` with the
+    // remainder register named (as in [`from_gnu`]): the manual's one `DIVS.L`
+    // row prices both
+    let base = match (base, suffix) {
+        ("divsl", Some("l")) => "divs",
+        ("divul", Some("l")) => "divu",
+        _ => base,
+    };
     if matches!(base, "lea" | "pea") {
         // the address of a symbol is absolute short in four bytes, long in six
         if let Some(one @ Operand::Target) = operands.first_mut() {
