@@ -200,6 +200,12 @@ fn topological(
     (order.len() == nodes.len()).then_some(order)
 }
 
+#[cfg(test)]
+thread_local! {
+    /// The instructions `acyclic` made nodes of, summed over its calls.
+    pub(crate) static REGION_NODES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 /// Whether the instructions of `block`, each bundle (`bundles`: the scalars of
 /// each, and the values each reads through a gather) one node, can be ordered:
 /// the bundles' lanes do not wait on each other, nor round a cycle of bundles.
@@ -209,12 +215,33 @@ pub(crate) fn acyclic(
     bundles: &[(Vec<InstId>, Vec<InstId>)],
     pure_calls: &IdSet<InstId>,
 ) -> bool {
-    let insts: Vec<InstId> = function
-        .iter_block(block)
-        .filter(|inst| {
-            function.instruction(*inst).opcode != Opcode::Phi && !function.instruction(*inst).opcode.is_terminator()
-        })
+    // `BlockScheduling` only schedules the region the bundles span
+    // (`ScheduleStart`..`ScheduleEnd`): every edge runs forward in the block,
+    // so a cycle of bundles lies between the first and the last lane, and
+    // what is outside cannot be on one. A gathered value is read by a lane,
+    // so it stands before the last lane.
+    let lanes: IdSet<InstId> = bundles
+        .iter()
+        .flat_map(|(lanes, _)| lanes.iter().copied())
+        .filter(|lane| function.parent(*lane) == Some(block))
         .collect();
+    let mut insts: Vec<InstId> = Vec::new();
+    let mut seen = 0;
+    for inst in function.iter_block(block) {
+        if seen == lanes.len() {
+            break;
+        }
+        let in_region = seen > 0 || lanes.contains(&inst);
+        if lanes.contains(&inst) {
+            seen += 1;
+        }
+        let opcode = &function.instruction(inst).opcode;
+        if in_region && *opcode != Opcode::Phi && !opcode.is_terminator() {
+            insts.push(inst);
+        }
+    }
+    #[cfg(test)]
+    REGION_NODES.with(|nodes| nodes.set(nodes.get() + insts.len()));
     let mut node_of: IdMap<InstId, usize> = IdMap::new();
     for (at, inst) in insts.iter().enumerate() {
         node_of.insert(*inst, at);
@@ -231,7 +258,8 @@ pub(crate) fn acyclic(
     for inst in &insts {
         let to = node_of[inst];
         for def in reads(function, block, *inst) {
-            let from = node_of[&def];
+            // Before the region: it stands ahead of every bundle.
+            let Some(&from) = node_of.get(&def) else { continue };
             if from == to {
                 // Two lanes of one bundle, one reading the other.
                 return false;

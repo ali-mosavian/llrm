@@ -1004,10 +1004,10 @@ pub(crate) fn try_window(
     stores: &[InstId],
     store_ty: TypeId,
     align: u64,
+    position: &IdMap<InstId, usize>,
     tti: &dyn Tti,
     scaler: &Scaler,
 ) -> Option<Tree> {
-    let position = positions(function);
     let values: Vec<Operand> = stores.iter().map(|store| function.instruction(*store).operands[0]).collect();
     let mut builder = Builder {
         scaler,
@@ -1017,7 +1017,7 @@ pub(crate) fn try_window(
         block,
         entries: Vec::new(),
         made: IdMap::new(),
-        position: std::borrow::Cow::Owned(position),
+        position: std::borrow::Cow::Borrowed(position),
         failed: false,
     };
     // The root: the stores.
@@ -1055,8 +1055,8 @@ pub(crate) fn try_window(
     share_gathers(&mut entries);
     let tree = Tree { entries, block, pure_calls: Default::default(), reschedule: false, reduction: None };
     let made = builder.made;
-    let position = builder.position.into_owned();
-    if !schedulable(unit, function, &tree, &made, &position) {
+    let builder_position = builder.position;
+    if !schedulable(unit, function, &tree, &made, &builder_position) {
         llrm_support::debug!("slp", "tree: not schedulable");
         return None;
     }
@@ -1072,10 +1072,10 @@ pub(crate) fn try_phis(
     function: &Function,
     block: BlockId,
     phis: &[InstId],
+    facts: &BlockFacts,
     tti: &dyn Tti,
     scaler: &Scaler,
 ) -> Option<Tree> {
-    let position = positions(function);
     let values: Vec<Operand> = phis.iter().map(|phi| result_of(function, *phi)).collect();
     let mut builder = Builder {
         scaler,
@@ -1085,7 +1085,7 @@ pub(crate) fn try_phis(
         block,
         entries: Vec::new(),
         made: IdMap::new(),
-        position: std::borrow::Cow::Owned(position),
+        position: std::borrow::Cow::Borrowed(&facts.position),
         failed: false,
     };
     let root = builder.build(values, 0);
@@ -1098,20 +1098,9 @@ pub(crate) fn try_phis(
         );
         return None;
     }
-    let pure_calls: IdSet<InstId> = function
-        .iter_block(block)
-        .filter(|inst| {
-            llrm_mir::memory::callee(unit.context, function, *inst)
-                .and_then(|callee| unit.globals.get(callee.0 as usize)?.intrinsic())
-                .is_some_and(llrm_analysis::vectorutils::is_trivially_vectorizable)
-        })
-        .collect();
-    let divides = crate::slpschedule::safe_divides(unit.context, function, block);
-    let mut pure_calls = pure_calls;
-    pure_calls.extend(function.iter_block(block).filter(|inst| divides.contains(inst)));
     let mut entries = builder.entries;
     share_gathers(&mut entries);
-    let tree = Tree { entries, block, pure_calls, reschedule: false, reduction: None };
+    let tree = Tree { entries, block, pure_calls: facts.pure_calls.clone(), reschedule: false, reduction: None };
     let made = builder.made;
     if tiny_and_not_fully_vectorizable(&tree) {
         llrm_support::debug!("slp", "phi tree x{}: tiny", phis.len());
@@ -1130,7 +1119,7 @@ pub(crate) fn try_phis(
 /// stand anywhere those do: the calls of a trivially vectorizable intrinsic,
 /// and the divisions whose divisor is a constant that cannot trap
 /// (`isSafeToSpeculativelyExecute`).
-fn pure_instructions(
+pub(crate) fn pure_instructions(
     unit: &MemUnit,
     function: &Function,
     block: BlockId,
@@ -1169,7 +1158,7 @@ pub(crate) fn try_seeds(
     function: &Function,
     block: BlockId,
     seeds: &[InstId],
-    position: &IdMap<InstId, usize>,
+    facts: &BlockFacts,
     tti: &dyn Tti,
     scaler: &Scaler,
 ) -> Option<Tree> {
@@ -1182,7 +1171,7 @@ pub(crate) fn try_seeds(
         block,
         entries: Vec::new(),
         made: IdMap::new(),
-        position: std::borrow::Cow::Borrowed(position),
+        position: std::borrow::Cow::Borrowed(&facts.position),
         failed: false,
     };
     let root = builder.build(values, 0);
@@ -1190,10 +1179,9 @@ pub(crate) fn try_seeds(
         llrm_support::debug!("slp", "seed tree x{}: no tree", seeds.len());
         return None;
     }
-    let pure_calls = pure_instructions(unit, function, block);
     let mut entries = builder.entries;
     share_gathers(&mut entries);
-    let tree = Tree { entries, block, pure_calls, reschedule: true, reduction: None };
+    let tree = Tree { entries, block, pure_calls: facts.pure_calls.clone(), reschedule: true, reduction: None };
     let made = builder.made;
     if tiny_and_not_fully_vectorizable(&tree) {
         llrm_support::debug!("slp", "seed tree x{}: tiny", seeds.len());
@@ -1215,6 +1203,7 @@ pub(crate) fn try_inserts(
     function: &Function,
     block: BlockId,
     inserts: &[InstId],
+    facts: &BlockFacts,
     tti: &dyn Tti,
     scaler: &Scaler,
 ) -> Option<Tree> {
@@ -1233,7 +1222,6 @@ pub(crate) fn try_inserts(
     };
     let values: Vec<Operand> = inserts.iter().map(|insert| function.instruction(*insert).operands[1]).collect();
     let lane_ty = function.operand_type(context, values[0])?;
-    let position = positions(function);
     let mut builder = Builder {
         scaler,
         tti,
@@ -1242,7 +1230,7 @@ pub(crate) fn try_inserts(
         block,
         entries: Vec::new(),
         made: IdMap::new(),
-        position: std::borrow::Cow::Owned(position),
+        position: std::borrow::Cow::Borrowed(&facts.position),
         failed: false,
     };
     builder
@@ -1268,20 +1256,9 @@ pub(crate) fn try_inserts(
         llrm_support::debug!("slp", "insert tree x{}: no tree", inserts.len());
         return None;
     }
-    let pure_calls: IdSet<InstId> = function
-        .iter_block(block)
-        .filter(|inst| {
-            llrm_mir::memory::callee(unit.context, function, *inst)
-                .and_then(|callee| unit.globals.get(callee.0 as usize)?.intrinsic())
-                .is_some_and(llrm_analysis::vectorutils::is_trivially_vectorizable)
-        })
-        .collect();
-    let divides = crate::slpschedule::safe_divides(unit.context, function, block);
-    let mut pure_calls = pure_calls;
-    pure_calls.extend(function.iter_block(block).filter(|inst| divides.contains(inst)));
     let mut entries = builder.entries;
     share_gathers(&mut entries);
-    let tree = Tree { entries, block, pure_calls, reschedule: false, reduction: None };
+    let tree = Tree { entries, block, pure_calls: facts.pure_calls.clone(), reschedule: false, reduction: None };
     let made = builder.made;
     if tiny_and_not_fully_vectorizable(&tree) {
         llrm_support::debug!("slp", "insert tree x{}: tiny", inserts.len());
@@ -1417,10 +1394,10 @@ pub(crate) fn try_reduction(
     block: BlockId,
     info: &ReductionInfo,
     values: &[Operand],
+    facts: &BlockFacts,
     tti: &dyn Tti,
     scaler: &Scaler,
 ) -> Option<Tree> {
-    let position = positions(function);
     let root = info.links[0];
     let mut builder = Builder {
         scaler,
@@ -1430,7 +1407,7 @@ pub(crate) fn try_reduction(
         block,
         entries: Vec::new(),
         made: IdMap::new(),
-        position: std::borrow::Cow::Owned(position),
+        position: std::borrow::Cow::Borrowed(&facts.position),
         failed: false,
     };
     // The root: the chain, whose uses of the values are not external ones.
@@ -1469,13 +1446,8 @@ pub(crate) fn try_reduction(
         llrm_support::debug!("slp", "reduction tree x{}: tiny", values.len());
         return None;
     }
-    let tree = Tree {
-        entries,
-        block,
-        pure_calls: crate::slpschedule::safe_divides(unit.context, function, block),
-        reschedule: false,
-        reduction: Some(info.clone()),
-    };
+    let tree =
+        Tree { entries, block, pure_calls: facts.divides.clone(), reschedule: false, reduction: Some(info.clone()) };
     let (tree, total) = trim_non_profitable(unit, function, tree, 0, tti, scaler)?;
     // Scheduling is of the tree that stays: the trimmed subtrees are scalars.
     if !schedulable_phis(function, &tree) {
@@ -2289,6 +2261,31 @@ fn last_phi(
         .take_while(|inst| function.instruction(*inst).opcode == Opcode::Phi)
         .last()
         .expect("a block with a phi")
+}
+
+/// What the attempts at one block read of a function that does not change
+/// between them: where each instruction stands, the instructions that may stand
+/// anywhere their operands do, and the divides among them. `BlockScheduling`
+/// keeps a block's data across the bundles it tries; an attempt that made no
+/// tree leaves the function as it was, so these stand until one is emitted.
+pub(crate) struct BlockFacts {
+    pub(crate) position: IdMap<InstId, usize>,
+    pub(crate) pure_calls: IdSet<InstId>,
+    pub(crate) divides: IdSet<InstId>,
+}
+
+impl BlockFacts {
+    pub(crate) fn of(
+        unit: &MemUnit,
+        function: &Function,
+        block: BlockId,
+    ) -> Self {
+        Self {
+            position: positions(function),
+            pure_calls: pure_instructions(unit, function, block),
+            divides: crate::slpschedule::safe_divides(unit.context, function, block),
+        }
+    }
 }
 
 /// Where each instruction stands in its block.
