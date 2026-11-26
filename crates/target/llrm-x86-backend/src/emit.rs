@@ -48,7 +48,6 @@
 //! `EmitCopyToRegClassNode`, `EmitCopyFromReg`.
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
 
 use llrm_codegen::backend::isel::{_read, _written};
 use llrm_codegen::backend::selectiondag::dag::{NodeData, SDNodeFlags, SDValue, SelectionDAG};
@@ -367,22 +366,22 @@ fn fold_immediate_pushes(
             defined.entry(value).or_insert(place);
         }
     }
-    PUSH_FOLD_VISITS.fetch_add(insns.len(), Ordering::Relaxed);
+    llrm_mir::counts::add(llrm_mir::counts::Event::PushFoldVisits, insns.len() as u64);
     let mut gone: llrm_support::hash::HashSet<usize> = Default::default();
     let mut made: HashMap<usize, Vec<Arc<Insn>>> = HashMap::default();
     for (at, old) in insns.iter().enumerate() {
-        let Some(&Loc::Held(held)) = old.what.as_ref().filter(|what| what.op == Operation::Push).and_then(|what| what.sources.first())
+        let Some(&Loc::Held(held)) =
+            old.what.as_ref().filter(|what| what.op == Operation::Push).and_then(|what| what.sources.first())
         else {
             continue;
         };
         let reads = if vregs.contains(&held.value) { 0 } else { reads.get(&held.value).copied().unwrap_or(0) };
         let Some(&place) = defined.get(&held.value) else { continue };
-        let immediate = insns[place].what.as_ref().and_then(
-            |what| match (&what.op, &what.dests[..], &what.sources[..]) {
+        let immediate =
+            insns[place].what.as_ref().and_then(|what| match (&what.op, &what.dests[..], &what.sources[..]) {
                 (Operation::Move, [Loc::Held(_)], [Loc::Imm(imm)]) => Some(imm.clone()),
                 _ => None,
-            },
-        );
+            });
         let (Some(imm), 1) = (immediate, reads) else { continue };
         let mut what = old.what.clone().expect("a push");
         // DEVIATE SD243 (real mode): tuned for size, a dword constant with a
@@ -420,14 +419,6 @@ fn fold_immediate_pushes(
         }
     }
     *insns = rebuilt;
-}
-
-/// Instructions `fold_immediate_pushes` has looked at in this process.
-static PUSH_FOLD_VISITS: AtomicUsize = AtomicUsize::new(0);
-
-/// Instructions `fold_immediate_pushes` has looked at in this process.
-pub fn push_fold_visits() -> usize {
-    PUSH_FOLD_VISITS.load(Ordering::Relaxed)
 }
 
 /// The constant a store of the minsize patterns writes: `and [m], 0` stores 0,

@@ -92,9 +92,8 @@ use llrm_analysis::loads::{Available, DEF_MAX_INSTS_TO_SCAN, find_available_load
 use llrm_analysis::memory::Unit;
 use llrm_mir::context::ConstantKind;
 use llrm_mir::edit::Position;
-use llrm_mir::facts::Fact;
 use llrm_mir::module::{InstId, Operand};
-use llrm_mir::opcode::{Attribute, CastOp, Flags, Opcode};
+use llrm_mir::opcode::{CastOp, Flags, Opcode};
 use llrm_mir::types::Type;
 use llrm_mir::valuetracking::nonzero::null_pointer_is_defined;
 
@@ -747,7 +746,14 @@ impl Combiner<'_> {
                     // The callee called is read; so is an argument the call
                     // neither keeps nor writes through.
                     Opcode::Call(_) if one.index as usize + 1 == instruction.operands.len() => {}
-                    Opcode::Call(_) if self.is_only_read_by(one.user, one.index as usize) => {}
+                    Opcode::Call(_)
+                        if llrm_mir::memory::only_reads_argument(
+                            self.context,
+                            self.env.globals,
+                            self.function,
+                            one.user,
+                            one.index as usize,
+                        ) => {}
                     Opcode::Call(_) => match self.intrinsic_of(one.user)? {
                         Intrinsic::LifetimeStart | Intrinsic::LifetimeEnd => markers.push(one.user),
                         Intrinsic::MemCpy | Intrinsic::MemMove => {
@@ -782,27 +788,6 @@ impl Combiner<'_> {
             }
         }
         Some((copy?, markers))
-    }
-
-    /// `doesNotCapture(i) && (onlyReadsMemory() || onlyReadsMemory(i))` of
-    /// argument `index` of `call`, at the site or on the callee; never an
-    /// `inalloca` argument, which the call clobbers.
-    fn is_only_read_by(
-        &self,
-        call: InstId,
-        index: usize,
-    ) -> bool {
-        let Opcode::Call(info) = &self.function.instruction(call).opcode else { return false };
-        let Some(site) = info.argument_attrs.get(index) else { return false };
-        let callee = llrm_mir::memory::callee(self.context, self.function, call)
-            .and_then(|one| self.env.globals.get(one.0 as usize)?.function());
-        let parameter = callee.and_then(|one| one.parameter_attrs.get(index));
-        let attrs = || std::iter::once(site).chain(parameter);
-        let states = |fact: Fact| attrs().any(|one| fact.stated_by(one));
-        let in_alloca = attrs().flatten().any(|one| matches!(one, Attribute::Type(name, _) if name == "inalloca"));
-        let reads_only = !llrm_mir::memory::stated(&info.attrs).writes
-            || callee.is_some_and(|one| !llrm_mir::memory::stated(&one.attrs).writes);
-        !in_alloca && states(Fact::NoCapture) && (reads_only || states(Fact::ReadOnly) || states(Fact::ReadNone))
     }
 
     /// `pointsToConstantMemory` of a plain global: a constant that the linker

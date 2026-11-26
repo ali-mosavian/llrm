@@ -427,18 +427,59 @@ fn argument_areas_are_not_rescanned_once_per_call() {
         let value = 100 + call;
         let held = Held { value, width: 2, offset: 0 };
         let two = Loc::Imm(Imm { value: 2, width: 2, address: None });
-        insns.push(next(Semantics { name: Some("sub".into()), dests: vec![Loc::Reg(Reg { register: sp, width: 2 })], sources: vec![Loc::Reg(Reg { register: sp, width: 2 }), two], ..Semantics::new(Operation::Binary) }, vec![], vec![]));
+        insns.push(next(
+            Semantics {
+                name: Some("sub".into()),
+                dests: vec![Loc::Reg(Reg { register: sp, width: 2 })],
+                sources: vec![Loc::Reg(Reg { register: sp, width: 2 }), two],
+                ..Semantics::new(Operation::Binary)
+            },
+            vec![],
+            vec![],
+        ));
         let seven = Loc::Imm(Imm { value: 7, width: 2, address: None });
-        insns.push(next(Semantics { name: Some("mov".into()), dests: vec![Loc::Held(held)], sources: vec![seven], ..Semantics::new(Operation::Move) }, vec![value], vec![]));
-        let cell = Mem { addr: None, width: 2, through: sp, offset: 0, disp_width: 0, base: None, stack_argument: false, selector: None, index: None, scale: 1, index_through: RegId::None, exact: false };
-        insns.push(next(Semantics { name: Some("mov".into()), dests: vec![Loc::Mem(cell)], sources: vec![Loc::Held(held)], ..Semantics::new(Operation::Move) }, vec![], vec![value]));
+        insns.push(next(
+            Semantics {
+                name: Some("mov".into()),
+                dests: vec![Loc::Held(held)],
+                sources: vec![seven],
+                ..Semantics::new(Operation::Move)
+            },
+            vec![value],
+            vec![],
+        ));
+        let cell = Mem {
+            addr: None,
+            width: 2,
+            through: sp,
+            offset: 0,
+            disp_width: 0,
+            base: None,
+            stack_argument: false,
+            selector: None,
+            index: None,
+            scale: 1,
+            index_through: RegId::None,
+            exact: false,
+        };
+        insns.push(next(
+            Semantics {
+                name: Some("mov".into()),
+                dests: vec![Loc::Mem(cell)],
+                sources: vec![Loc::Held(held)],
+                ..Semantics::new(Operation::Move)
+            },
+            vec![],
+            vec![value],
+        ));
         insns.push(next(Semantics::new(Operation::Call), vec![], vec![]));
         reads.insert(value, 1);
     }
-    let before = crate::emit::push_fold_visits();
+    let seen = || llrm_mir::counts::get(llrm_mir::counts::Event::PushFoldVisits) as usize;
+    let before = seen();
     let mut state = EmitState::default();
     crate::emit::pushed_arguments(&mut insns, sp, &mut state, &mut Vec::new(), &reads, None).unwrap();
-    let visits = crate::emit::push_fold_visits() - before;
+    let visits = seen() - before;
     assert_eq!(insns.len(), 2 * calls as usize, "each area and its mov go: push imm, call");
-    assert!(visits <= 4 * calls as usize, "{visits} instructions visited for {calls} calls");
+    assert!(visits > 0 && visits <= 4 * calls as usize, "{visits} instructions visited for {calls} calls");
 }
