@@ -500,7 +500,7 @@ impl llrm_target::Target for M64 {
                             // pushAddIntoCmovOfConsts; see Tuning.
                             add_to_or_disjoint: true,
                             // DEVIATE LV-OS (owner llrm-target-x86-m64-b, exit
-                            // 2026-12-20): see Tuning.
+                            // 2026-12-03): see Tuning.
                             vectorize_at_size: false,
                             // The selector has `pcmp*`, `cmpps`, `cmppd` and
                             // the mask select.
