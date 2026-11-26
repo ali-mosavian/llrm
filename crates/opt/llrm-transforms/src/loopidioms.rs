@@ -301,8 +301,7 @@ pub fn filled_with(
     }) {
         return false;
     }
-    // DEVIATE 17 (exit 2026-11-12, `Tti::memory_idioms_at_optsize`): a size
-    // build keeps its loops where the call costs more bytes than the loop.
+    // `Tti::memory_idioms_at_optsize`: a size build may keep its loops.
     let for_size = size
         || function.attrs.iter().any(|attr| {
             matches!(
@@ -310,9 +309,11 @@ pub fn filled_with(
                 llrm_mir::opcode::Attribute::Flag(name) if name == "optsize" || name == "minsize"
             )
         });
-    if for_size && outer.target().tti().is_some_and(|tti| !tti.memory_idioms_at_optsize()) {
+    let keeps = |constant| for_size && outer.target().tti().is_some_and(|tti| !tti.memory_idioms_at_optsize(constant));
+    if keeps(true) {
         return false;
     }
+    let constant_only = keeps(false);
     let costs = if size { outer.target().size_costs() } else { outer.target().costs() };
     let bytes = outer.target().size_costs();
     let mut changed = false;
@@ -328,6 +329,7 @@ pub fn filled_with(
                 let facts = standing.of(&unit);
                 _fill(&unit.with_registers(facts), callees, &loop_, &costs, &bytes, size)
             };
+            let found = found.filter(|found| !constant_only || found.proof.count.is_some());
             if let Some(found) = found {
                 _filled(context, layout, declared, function, &found);
                 standing.changed();

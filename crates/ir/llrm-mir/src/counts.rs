@@ -136,6 +136,8 @@ pub enum Event {
     LoopAnalyses,
     /// A top-level `computeKnownBits` of a value (`compute_known_bits`).
     KnownBitsComputed,
+    /// A body `FunctionUses` walked for the globals it names.
+    UseBodies,
     /// An instruction x86's immediate push fold looked at
     /// (`fold_immediate_pushes`).
     PushFoldVisits,
@@ -143,7 +145,7 @@ pub enum Event {
 
 const SLOTS: usize = 64;
 
-const NAMES: [&str; 51] = [
+const NAMES: [&str; 52] = [
     "function_clones",
     "function_forks",
     "machinings",
@@ -194,6 +196,7 @@ const NAMES: [&str; 51] = [
     "fact_sets",
     "loop_analyses",
     "known_bits_computed",
+    "use_bodies",
     "push_fold_visits",
 ];
 
@@ -211,7 +214,7 @@ thread_local! {
     static PASSES: RefCell<Vec<PassRow>> = const { RefCell::new(Vec::new()) };
     /// (pass, analysis, misses): the analyses a pass made the manager compute.
     static ASKS: RefCell<Vec<(&'static str, &'static str, u64)>> = const { RefCell::new(Vec::new()) };
-    static EVENTS: [Cell<u64>; 51] = const { [const { Cell::new(0) }; 51] };
+    static EVENTS: [Cell<u64>; NAMES.len()] = const { [const { Cell::new(0) }; NAMES.len()] };
     /// (name, hits, misses) by the address of the name, which is a literal.
     static FOUND: [Cell<usize>; SLOTS] = const { [const { Cell::new(0) }; SLOTS] };
     static ANALYSES: RefCell<Vec<(&'static str, u64, u64)>> = const { RefCell::new(Vec::new()) };

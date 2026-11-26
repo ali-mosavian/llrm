@@ -3734,6 +3734,10 @@ fn a_hot_copy_the_model_prices_at_nothing_is_kept_for_the_call_it_drops() {
 }
 
 fn m32_costs() -> std::rc::Rc<dyn llrm_mir::target::Machine> {
+    m32_priced(llrm_mir::target::OperationCosts::default())
+}
+
+fn m32_priced(operations: llrm_mir::target::OperationCosts) -> std::rc::Rc<dyn llrm_mir::target::Machine> {
     use llrm_target::Target;
     let prices = llrm_target::CpuPrices {
         costs: Vec::new(),
@@ -3743,7 +3747,7 @@ fn m32_costs() -> std::rc::Rc<dyn llrm_mir::target::Machine> {
         call_registers: 3,
         float_registers: 0,
         address_forms: Vec::new(),
-        operations: llrm_mir::target::OperationCosts::default(),
+        operations,
         spaces: llrm_x86_m32::layout().spaces.roles,
         private: None,
         calling: None,
@@ -4154,4 +4158,63 @@ fn only_a_level_entry_below_the_levels_own_bar_is_a_cut() {
     tti.tuning.inline_threshold_o2 = None;
     tti.tuning.inline_threshold = Some(125);
     assert_eq!(levels(&tti), [None, None, None], "a flat bar is no cut");
+}
+
+/// A trial simplified the copy a second time and priced the callee after its
+/// first run only, so whatever a second run finds in any body read as clocks
+/// saved by inlining, and a large copy was taken that saved next to none.
+#[test]
+fn test_a_trial_prices_the_callee_cleaned_as_often_as_its_copy() {
+    use llrm_mir::program::ProgramPass;
+    let work = format!(
+        "define internal void @work(i32 %x) {{\nb0:\n{}{}  ret void\n}}\n",
+        "  store volatile i32 %x, ptr @g\n".repeat(2000),
+        (0..1000).map(|i| format!("  %d{i} = mul i32 %x, {}\n", 7 + 2 * i)).collect::<String>()
+    );
+    let mut module = parsed(&format!(
+        "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"\n\n@g = global i32 0\n\n{work}
+define void @top(i32 %n) {{
+b0:
+  br label %head
+
+head:
+  %i = phi i32 [ 0, %b0 ], [ %j, %head ]
+  call void @work(i32 %i)
+  call void @work(i32 %n)
+  %j = add i32 %i, 1
+  %c = icmp slt i32 %j, %n
+  br i1 %c, label %head, label %out
+
+out:
+  ret void
+}}
+"
+    ));
+    llrm_mir::program::Program::lend(
+        &mut module,
+        // A 486's line: the byte price is 312 milliclocks.
+        m32_priced(llrm_mir::target::OperationCosts { cache_line: 16, line_fill_clocks: 5, ..Default::default() }),
+        |program: &mut llrm_mir::program::Program| {
+            let mut walk = crate::walk::Walk {
+                promote_rate: None,
+                rerun_unchanged: true,
+                speed_rate: true,
+                inline: Default::default(),
+                // A cleanup the first run over a body does not reach.
+                simplify: Box::new(|module, _, id, stage| {
+                    if stage.starts_with("walk.trial") {
+                        let callees = llrm_mir::memory::callees(module);
+                        let (context, function) = crate::interprocedural::function_mut(module, id);
+                        crate::dead::dead(context, &callees, function);
+                    }
+                }),
+            };
+            walk.run(program, &mut Default::default())
+        },
+    )
+    .and_then(|done| done)
+    .expect("the walk runs");
+    let text = llrm_mir::print::module(&module);
+    let top = text.split("define").find(|one| one.contains("@top(")).expect("@top");
+    assert!(top.contains("call void @work"), "work was copied for clocks it does not save:\n{top}");
 }
