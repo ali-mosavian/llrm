@@ -1180,9 +1180,10 @@ fn a_callee_saved_cell_goes_to_the_loop_values_only() {
     let text = compile(ir, "mix");
     // inline, or `ldy #n` before the helper that saves rc8.. up to n of them
     let inline = (8..16).filter(|n| text.contains(&format!("  lda rc{n}\n  pha"))).count();
-    let shared = text.split_once("  ldy #").filter(|(_, rest)| rest.contains("jsr __csave")).and_then(|(_, rest)| {
-        rest.split_once('\n').and_then(|(n, _)| n.parse::<usize>().ok())
-    });
+    let shared = text
+        .split_once("  ldy #")
+        .filter(|(_, rest)| rest.contains("jsr __csave"))
+        .and_then(|(_, rest)| rest.split_once('\n').and_then(|(n, _)| n.parse::<usize>().ok()));
     assert_eq!(shared.unwrap_or(inline), 3, "{text}");
     // cold arrives in a
     assert!(text.contains("  sta s_mix"), "cold is in a slot: {text}");
@@ -1949,7 +1950,10 @@ done:
     // the result's high byte is the count of the loop times 256: the word
     // leaves in `a` and `x`, whatever the helper did with them
     for (v, hi) in [(5u16, 0i32), (10, 1), (99, 1), (100, 2), (65535, 4)] {
-        let setup = set("rc8", 0xA1) + &set("rc9", 0xB2) + &set("rc10", 0xC3) + &format!("  ldx #{}\n  lda #{}\n", v >> 8, v & 0xFF);
+        let setup = set("rc8", 0xA1)
+            + &set("rc9", 0xB2)
+            + &set("rc10", 0xC3)
+            + &format!("  ldx #{}\n  lda #{}\n", v >> 8, v & 0xFF);
         let after = format!(
             "  stx rc2\n  lda rc8\n  cmp #$A1\n  bne bad\n  lda rc9\n  cmp #$B2\n  bne bad\n  lda rc10\n  cmp #$C3\n  bne bad\n  lda rc2\n  rts\nbad:\n  lda #99\n  rts\n"
         );

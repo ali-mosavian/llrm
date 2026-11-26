@@ -240,8 +240,8 @@ fn word_chain_price(chain: &[(&'static str, i64)]) -> (i64, i64) {
 /// A word multiplied by a constant as the shifts and adds of `chain_search`
 /// (Bernstein 1986), where the pin leaves every constant but `2^k +- 1` to the
 /// `__mulhi3` call: `ld de, #c; call` is 6 B and a loop of about 65 T a bit of
-/// the constant. Taken by the rate 1 B = 3 T, and 1 B = 40 T at -O1, -Os and -Oz
-/// (word_sign_zero_guard's `* 1000` is 12 B for 43% of the clocks).
+/// the constant. Taken by the rate 1 B = 3 T, and 1 B = 40 T at -O1, -Os and
+/// -Oz (word_sign_zero_guard's `* 1000` is 12 B for 43% of the clocks).
 ///
 /// DEVIATE Z80-MUL-CHAIN (owner z80, exit 2026-11-24): the pin has no such
 /// search; AArch64's `performMulCombine` and X86's `combineMul` are the
@@ -269,11 +269,7 @@ pub(crate) fn word_chain(
         2 * weight + 8,
     )?;
     let price = word_chain_price(&chain);
-    let wins = if forced {
-        price.1 <= call.1
-    } else {
-        weight * price.0 + price.1 < limit
-    };
+    let wins = if forced { price.1 <= call.1 } else { weight * price.0 + price.1 < limit };
     wins.then_some((chain, price, call))
 }
 

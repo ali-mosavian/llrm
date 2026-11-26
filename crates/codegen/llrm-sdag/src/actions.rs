@@ -1083,23 +1083,28 @@ impl TargetLowering {
         // No shuffle is selected by pattern: `LegalizeDAG` builds the vector of
         // the lanes the mask picks.
         t.set_ops(&[ISD::VectorShuffle], &[MVT::V16I8, MVT::V8I16, MVT::V4I32, MVT::V2I64], Action::Expand);
-        // `LowerEXTRACT_VECTOR_ELT` of the float lanes (a lane other than 0 is a `pshufd` first).
+        // `LowerEXTRACT_VECTOR_ELT` of the float lanes (a lane other than 0 is
+        // a `pshufd` first).
         t.set_ops(&[ISD::ExtractElement], &[MVT::V4F32, MVT::V2F64], Action::Custom);
-        // The SSE2 float vectors (`v4f32`, `v2f64`): `addps`..`divpd` are patterns; builds, shuffles, lane inserts and
-        // extracts take the expansions (a constant is a pool load, the rest goes through the stack). DEVIATE X86V3
-        // (owner llrm-target-x86-m64-b, exit 2026-11-24): the pin shuffles (`shufps`, `unpcklpd`, `movss`).
+        // The SSE2 float vectors (`v4f32`, `v2f64`): `addps`..`divpd` are
+        // patterns; builds, shuffles, lane inserts and extracts take
+        // the expansions (a constant is a pool load, the rest goes through the
+        // stack). DEVIATE X86V3 (owner llrm-target-x86-m64-b, exit
+        // 2026-11-24): the pin shuffles (`shufps`, `unpcklpd`, `movss`).
         let float_vectors = [MVT::V4F32, MVT::V2F64];
         t.set_ops(
             &[ISD::BuildVector, ISD::VectorShuffle, ISD::InsertVectorElt, ISD::ScalarToVector],
             &float_vectors,
             Action::Expand,
         );
-        // `LowerSINT_TO_FP`: `v2i32` to `v2f64`; `v4i32` to `v4f32` is a pattern.
+        // `LowerSINT_TO_FP`: `v2i32` to `v2f64`; `v4i32` to `v4f32` is a
+        // pattern.
         t.set_ops(&[ISD::SIntToFp], &[MVT::V2I32], Action::Custom);
-        // `LowerUINT_TO_FP`: `v4i32` to `v4f32` is `cvtdq2ps` when the sign bit is clear, else the
-        // mantissa-halves sequence.
+        // `LowerUINT_TO_FP`: `v4i32` to `v4f32` is `cvtdq2ps` when the sign bit
+        // is clear, else the mantissa-halves sequence.
         t.set_ops(&[ISD::UIntToFp], &[MVT::V4I32], Action::Custom);
-        // `LowerSCALAR_TO_VECTOR`: a byte or a word is widened to a dword for `movd`.
+        // `LowerSCALAR_TO_VECTOR`: a byte or a word is widened to a dword for
+        // `movd`.
         t.set_ops(&[ISD::ScalarToVector], &[MVT::V16I8, MVT::V8I16], Action::Custom);
         // `LowerMUL`: `v4i32` without `pmulld` is `pmuludq` on the even and the
         // odd lanes; `v2i64` without `pmullq` is three `pmuludq`.

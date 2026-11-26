@@ -1623,10 +1623,15 @@ fn estimate_weights<'a>(
             let from = source.unwrap_or(module);
             // -O2 and -O3 judge clocks; -O1 and -Os break ties by them
             if matches!(level, Level::O2 | Level::O3) {
-                let at = sites.iter().position(|(one, _)| std::ptr::eq(*one, from)).unwrap_or_else(|| {
-                    sites.push((from, crate::weights::CallSites::of(from)));
-                    sites.len() - 1
-                });
+                let at = sites
+                    .iter()
+                    .position(|(one, _)| std::ptr::eq(*one, from))
+                    .unwrap_or_else(
+                        || {
+                            sites.push((from, crate::weights::CallSites::of(from)));
+                            sites.len() - 1
+                        },
+                    );
                 return sites[at].1.block_weights(from, name, layout);
             }
             let function = from.named(name).and_then(|id| from.global(id).function());
