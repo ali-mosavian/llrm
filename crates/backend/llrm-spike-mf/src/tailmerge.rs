@@ -54,6 +54,28 @@ pub trait TailMergeFunction {
 
     /// Every block, in layout order.
     fn blocks(&self) -> Vec<Self::Block>;
+    /// The block laid out right after `block` (`std::next`).
+    fn layout_next(
+        &self,
+        block: Self::Block,
+    ) -> Option<Self::Block> {
+        let blocks = self.blocks();
+        let at = blocks.iter().position(|one| *one == block)?;
+        blocks.get(at + 1).copied()
+    }
+    /// The block laid out right before `block` (`std::prev`).
+    fn layout_prev(
+        &self,
+        block: Self::Block,
+    ) -> Option<Self::Block> {
+        let blocks = self.blocks();
+        let at = blocks.iter().position(|one| *one == block)?;
+        at.checked_sub(1).map(|prev| blocks[prev])
+    }
+    /// The first block.
+    fn entry(&self) -> Self::Block {
+        self.blocks()[0]
+    }
     fn successors(
         &self,
         block: Self::Block,
@@ -225,18 +247,14 @@ impl<F: TailMergeFunction> Merger<'_, F> {
         &self,
         block: F::Block,
     ) -> Option<F::Block> {
-        let blocks = self.function.blocks();
-        let at = blocks.iter().position(|one| *one == block)?;
-        blocks.get(at + 1).copied()
+        self.function.layout_next(block)
     }
 
     fn layout_prev(
         &self,
         block: F::Block,
     ) -> Option<F::Block> {
-        let blocks = self.function.blocks();
-        let at = blocks.iter().position(|one| *one == block)?;
-        at.checked_sub(1).map(|prev| blocks[prev])
+        self.function.layout_prev(block)
     }
 
     /// `a->isLayoutSuccessor(b)`: `b` is laid out right after `a`.
@@ -490,7 +508,7 @@ impl<F: TailMergeFunction> Merger<'_, F> {
                 self.remove_blocks_with_hash(hash, succ, pred);
                 continue;
             }
-            let entry = self.function.blocks()[0];
+            let entry = self.function.entry();
             let tails = self.same_tails.clone();
             let mut index = tails.len();
             if tails.len() == 2 && self.follows(tails[0].block, tails[1].block) && tails[1].whole_block() {
@@ -558,7 +576,7 @@ impl<F: TailMergeFunction> Merger<'_, F> {
         }
 
         // blocks with several predecessors, each predecessor in canonical form
-        let mut cursor = self.function.blocks().first().and_then(|entry| self.layout_next(*entry));
+        let mut cursor = self.layout_next(self.function.entry());
         while let Some(ibb) = cursor {
             cursor = self.layout_next(ibb);
             if self.function.predecessors(ibb).len() < 2 {
@@ -668,8 +686,8 @@ thread_local! {
 }
 
 /// How many times this thread's tail merging walked a whole function to place a
-/// block or list the predecessors of one: the cost that grew with every branch
-/// edit (exec.c's `exec_loop`: 40 % of the compile).
+/// block, list its blocks or list the predecessors of one: the cost that grew
+/// with every branch edit (exec.c's `exec_loop`: 40 % of the compile).
 pub fn layout_scans() -> usize {
     LAYOUT_SCANS.with(std::cell::Cell::get)
 }
@@ -804,7 +822,40 @@ impl<C, J: Jump> TailMergeFunction for Mf<'_, C, J> {
     type Cond = Inst;
 
     fn blocks(&self) -> Vec<u32> {
+        scanned();
         self.function.blocks.iter().map(|block| block.id).collect()
+    }
+
+    fn layout_next(
+        &self,
+        block: u32,
+    ) -> Option<u32> {
+        let next = self.function.blocks.get(self.at(block) + 1).map(|next| next.id);
+        #[cfg(debug_assertions)]
+        {
+            let blocks = &self.function.blocks;
+            let at = blocks.iter().position(|one| one.id == block).expect("a block that exists");
+            assert_eq!(next, blocks.get(at + 1).map(|next| next.id), "stale position of block {block}");
+        }
+        next
+    }
+
+    fn layout_prev(
+        &self,
+        block: u32,
+    ) -> Option<u32> {
+        let prev = self.at(block).checked_sub(1).map(|prev| self.function.blocks[prev].id);
+        #[cfg(debug_assertions)]
+        {
+            let blocks = &self.function.blocks;
+            let at = blocks.iter().position(|one| one.id == block).expect("a block that exists");
+            assert_eq!(prev, at.checked_sub(1).map(|prev| blocks[prev].id), "stale position of block {block}");
+        }
+        prev
+    }
+
+    fn entry(&self) -> u32 {
+        self.function.blocks[0].id
     }
 
     fn successors(

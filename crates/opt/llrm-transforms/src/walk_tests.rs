@@ -1013,7 +1013,8 @@ fn test_ipa_cp_clones_a_tree_recursion_before_it_is_copied_into_itself() {
     .expect("the pipeline runs");
     let text = llrm_mir::print::module(&module);
     // The chain of clones is whole before the walk, which inlines each into the
-    // one before it: no clone is left to name, and no call passes the whole range.
+    // one before it: no clone is left to name, and no call passes the whole
+    // range.
     assert!(!text.contains("@chop(i32 0, i32 64)"), "chop was not cloned for its constants:\n{text}");
     assert!(!text.contains(crate::tailcallelim::DEFERRED), "a function still waits:\n{text}");
 }
@@ -3084,10 +3085,11 @@ b0:
     llrm_mir::print::module(&module).matches("call i32 @paths").count()
 }
 
-/// bench rectwo at m32 -O3 ran 1230664 clocks against gcc's 555904: the copies were made of the
-/// two-call body and kept 43 calls; gcc eliminates the tail call first and nests the loop it
-/// leaves (466986 clocks that way). The body here is the same shape. -O2 keeps the tree's copies
-/// (fib's pure calls merge across them: 99618 clocks against 228901).
+/// bench rectwo at m32 -O3 ran 1230664 clocks against gcc's 555904: the copies
+/// were made of the two-call body and kept 43 calls; gcc eliminates the tail
+/// call first and nests the loop it leaves (466986 clocks that way). The body
+/// here is the same shape. -O2 keeps the tree's copies (fib's pure calls merge
+/// across them: 99618 clocks against 228901).
 #[test]
 fn test_m32_o3_paths_is_copied_as_nested_loops_not_as_a_tree_of_calls() {
     let calls = m32_paths_calls(crate::pipeline::Options::speed());
@@ -3097,7 +3099,8 @@ fn test_m32_o3_paths_is_copied_as_nested_loops_not_as_a_tree_of_calls() {
 /// fib at m32 -O2 was copied into itself to the 150 `gcc_insns` the pass
 /// allowed and ran 240256 clocks against gcc's 210636 (gcc's cap is 450; -O2
 /// takes it, 99687 clocks). -O3 took the same copies with the loop first and
-/// depth 8 and lost to -O2 on fib, frames and rectwo (REC-8): it copies as -O2 does.
+/// depth 8 and lost to -O2 on fib, frames and rectwo (REC-8): it copies as -O2
+/// does.
 #[test]
 fn test_m32_o3_copies_fib_as_o2_does() {
     let o2 = m32_fib_calls(crate::pipeline::Options::default());
@@ -3293,40 +3296,70 @@ b1:
     assert_eq!(three, one, "the callee goes once");
 }
 
-/// m68k qmove -O1: the count said 21 against 23 for `pl_ground_accel` into `bench_qmove` (an external callee that
-/// stays), the byte model +213 B; the trial kept the copy and the object grew 126 B. sfm16_dbg: -5 B by the model,
+/// m68k qmove -O1: the count said 21 against 23 for `pl_ground_accel` into
+/// `bench_qmove` (an external callee that stays), the byte model +213 B; the
+/// trial kept the copy and the object grew 126 B. sfm16_dbg: -5 B by the model,
 /// +18 B built.
 #[test]
 fn test_an_o1_trial_that_does_not_shrink_the_caller_by_an_eighth_is_refused() {
     assert!(!super::trial_accepted(true, false, false, true, false, false, 21, 23, 0, 0, 213, 0, 600, true));
-    assert!(!super::trial_accepted(true, false, false, true, false, false, 21, 23, 0, 0, -4, 0, 600, true), "a shrink within the model's error is refused");
-    assert!(!super::trial_accepted(true, false, false, true, false, false, 17, 17, 0, 0, 0, 0, 600, true), "a tie at 0 B gains nothing at -O1");
-    assert!(super::trial_accepted(true, false, false, true, false, false, 21, 23, 0, 0, -80, 0, 600, true), "a shrink of an eighth of the caller stays");
-    assert!(super::trial_accepted(true, false, false, true, false, false, 21, 23, 0, 0, 213, 0, 600, false), "-Os keeps the count's verdict");
+    assert!(
+        !super::trial_accepted(true, false, false, true, false, false, 21, 23, 0, 0, -4, 0, 600, true),
+        "a shrink within the model's error is refused"
+    );
+    assert!(
+        !super::trial_accepted(true, false, false, true, false, false, 17, 17, 0, 0, 0, 0, 600, true),
+        "a tie at 0 B gains nothing at -O1"
+    );
+    assert!(
+        super::trial_accepted(true, false, false, true, false, false, 21, 23, 0, 0, -80, 0, 600, true),
+        "a shrink of an eighth of the caller stays"
+    );
+    assert!(
+        super::trial_accepted(true, false, false, true, false, false, 21, 23, 0, 0, 213, 0, 600, false),
+        "-Os keeps the count's verdict"
+    );
 }
 
-/// m68k sfm16_float -Os: five calls to `canon`, 60 instructions against 57 and a credit of 4, so the count accepted the
-/// copies; the byte estimate said +28 B (built +28). A callee that goes with its last calls must not grow the bytes.
+/// m68k sfm16_float -Os: five calls to `canon`, 60 instructions against 57 and
+/// a credit of 4, so the count accepted the copies; the byte estimate said +28
+/// B (built +28). A callee that goes with its last calls must not grow the
+/// bytes.
 #[test]
 fn test_an_os_trial_that_grows_the_bytes_is_refused_though_the_count_accepts_it() {
     assert!(!super::trial_accepted(true, false, false, true, false, false, 60, 57, 4, 0, 28, 0, 756, false));
-    assert!(super::trial_accepted(true, false, false, true, false, false, 60, 57, 4, 0, -4, 0, 756, false), "a copy that shrinks the code stays");
-    assert!(super::trial_accepted(false, false, false, true, false, false, 60, 57, 4, 0, 28, 0, 756, false), "off the gate's targets the count decides");
-    assert!(super::trial_accepted(true, false, false, true, false, false, 57, 57, 4, 0, 12, 0, 756, false), "copies no larger than the caller are decided by the count");
+    assert!(
+        super::trial_accepted(true, false, false, true, false, false, 60, 57, 4, 0, -4, 0, 756, false),
+        "a copy that shrinks the code stays"
+    );
+    assert!(
+        super::trial_accepted(false, false, false, true, false, false, 60, 57, 4, 0, 28, 0, 756, false),
+        "off the gate's targets the count decides"
+    );
+    assert!(
+        super::trial_accepted(true, false, false, true, false, false, 57, 57, 4, 0, 12, 0, 756, false),
+        "copies no larger than the caller are decided by the count"
+    );
 }
 
-/// z80 frame_address_stack_args -O2: `kernel` (external, so it stays) copied into `line` saved 123 clocks and 63 B, and
-/// the priced trial refused it for want of a callee that goes (455 T became 7,594 T). A copy that shrinks the module
-/// and the clocks stays; one that grows it without a callee going is still refused (jpeg `decode`, +441k instructions).
+/// z80 frame_address_stack_args -O2: `kernel` (external, so it stays) copied
+/// into `line` saved 123 clocks and 63 B, and the priced trial refused it for
+/// want of a callee that goes (455 T became 7,594 T). A copy that shrinks the
+/// module and the clocks stays; one that grows it without a callee going is
+/// still refused (jpeg `decode`, +441k instructions).
 #[test]
 fn test_a_priced_trial_that_shrinks_the_module_stays_without_a_dying_callee() {
     assert!(super::trial_accepted(true, false, false, true, true, false, 72, 79, 0, 123, -63, 3000, 756, false));
     assert!(!super::trial_accepted(true, false, false, true, true, false, 72, 79, 0, 123, 10, 3000, 756, false));
-    assert!(!super::trial_accepted(true, false, false, true, true, false, 72, 79, 0, 0, -63, 3000, 756, false), "no clocks saved, no copy");
+    assert!(
+        !super::trial_accepted(true, false, false, true, true, false, 72, 79, 0, 0, -63, 3000, 756, false),
+        "no clocks saved, no copy"
+    );
 }
 
-/// arm64 -O3 jpeg: a priced trial kept copies that left the module no larger without a callee
-/// going, 5,828 -> 7,324 B and +1.2M instructions. Only a target that asks keeps them.
+/// arm64 -O3 jpeg: a priced trial kept copies that left the module no larger
+/// without a callee going, 5,828 -> 7,324 B and +1.2M instructions. Only a
+/// target that asks keeps them.
 #[test]
 fn test_a_shrinking_copy_without_a_dying_callee_stays_only_where_the_target_asks() {
     assert!(super::trial_accepted(true, false, false, true, true, false, 72, 79, 0, 123, -63, 3000, 756, false));
@@ -3383,9 +3416,10 @@ rec:
     assert!(!is_tree(linear, "sum"), "sum is a tree");
 }
 
-/// A target that has not opted in prices `llvm.lifetime.*` as the calls they are in the IR (the inlining bars of x86 m16
-/// were fit so; pricing them 0 there stopped `sum` being inlined into `top` in `an_os_call_on_stack_records`), one that has
-/// prices them 0.
+/// A target that has not opted in prices `llvm.lifetime.*` as the calls they
+/// are in the IR (the inlining bars of x86 m16 were fit so; pricing them 0
+/// there stopped `sum` being inlined into `top` in
+/// `an_os_call_on_stack_records`), one that has prices them 0.
 #[test]
 fn test_free_intrinsics_are_priced_only_where_a_target_asks() {
     let module = parsed(
@@ -3400,9 +3434,11 @@ fn test_free_intrinsics_are_priced_only_where_a_target_asks() {
     assert_eq!(priced(false) - priced(true), 5 + 2 * 2, "the marker call and its two arguments");
 }
 
-/// `llvm.smul.fix.sat` was priced as a call (12 B) at every CPU while it expands to a widening multiply, shifts, compares
-/// and selects: fixed_point's objects are 2.9 kB at the 68000 and 1.6 kB at the 68020 against an estimate of 1.6 kB at
-/// both. A target that opts in prices it on its own table, the product from `multiply_widening`.
+/// `llvm.smul.fix.sat` was priced as a call (12 B) at every CPU while it
+/// expands to a widening multiply, shifts, compares and selects: fixed_point's
+/// objects are 2.9 kB at the 68000 and 1.6 kB at the 68020 against an estimate
+/// of 1.6 kB at both. A target that opts in prices it on its own table, the
+/// product from `multiply_widening`.
 #[test]
 fn test_fixed_point_intrinsics_are_priced_as_their_expansion_where_a_target_asks() {
     let module = parsed(
@@ -3431,17 +3467,23 @@ fn test_fixed_point_intrinsics_are_priced_as_their_expansion_where_a_target_asks
     assert_eq!(priced(true, 160) - priced(true, 8), 160 - 8, "the product is the table's `multiply_widening`");
 }
 
-/// A product of two values extended from the word is the CPU's widening multiply, not a double-word product: the walker
-/// prices `mul i64 (sext i32), (sext i32)` at `multiply_widening` and a plain `mul i64` at `multiply_wide`.
+/// A product of two values extended from the word is the CPU's widening
+/// multiply, not a double-word product: the walker prices `mul i64 (sext i32),
+/// (sext i32)` at `multiply_widening` and a plain `mul i64` at `multiply_wide`.
 #[test]
 fn test_a_product_of_two_extended_words_is_the_widening_product() {
     let module = parsed(
         "define i64 @f(i32 %a, i32 %b) {\n  %x = sext i32 %a to i64\n  %y = sext i32 %b to i64\n  %r = mul i64 %x, %y\n  ret i64 %r\n}\ndefine i64 @g(i64 %a, i64 %b) {\n  %r = mul i64 %a, %b\n  ret i64 %r\n}\n",
     );
-    let by_name = |name: &str| module.functions().find(|(_, global, _)| global.name.as_deref() == Some(name)).unwrap().2;
+    let by_name =
+        |name: &str| module.functions().find(|(_, global, _)| global.name.as_deref() == Some(name)).unwrap().2;
     let layout = llrm_mir::datalayout::DataLayout::parse("E-m:e-p:32:16:32-i32:16:32-n8:16:32").unwrap();
-    let costs = llrm_mir::target::OperationCosts { extend: 2, multiply_wide: 100, multiply_widening: 10, ..Default::default() };
-    let (widening, wide) = (crate::walk::function_bytes(&module, &layout, &costs, by_name("f")), crate::walk::function_bytes(&module, &layout, &costs, by_name("g")));
+    let costs =
+        llrm_mir::target::OperationCosts { extend: 2, multiply_wide: 100, multiply_widening: 10, ..Default::default() };
+    let (widening, wide) = (
+        crate::walk::function_bytes(&module, &layout, &costs, by_name("f")),
+        crate::walk::function_bytes(&module, &layout, &costs, by_name("g")),
+    );
     assert_eq!(widening - wide, 2 * 2 + 10 - 100, "two extensions and the widening product, against the wide product");
 }
 
@@ -3638,28 +3680,49 @@ b0:
     assert!(size(&Viewed(true, false, true), true) > own, "a measured view serves a speed caller");
 }
 
-/// `memcpy_libcall` -Os on the 6502: both sites of a private `same` were refused by three instruction units
-/// (78 against 62 + 13 for the callee) while a byte model said the copies shrink the module.
+/// `memcpy_libcall` -Os on the 6502: both sites of a private `same` were
+/// refused by three instruction units (78 against 62 + 13 for the callee) while
+/// a byte model said the copies shrink the module.
 #[test]
 fn a_trial_decided_by_bytes_keeps_the_copies_that_shrink_the_module() {
-    assert!(super::trial_accepted(false, false, true, false, false, false, 78, 62, 13, 0, -23, 0, 400, false), "smaller: kept whatever the units say");
-    assert!(!super::trial_accepted(false, false, true, false, false, false, 60, 62, 13, 0, 4, 0, 400, false), "larger: refused whatever the units say");
-    assert!(!super::trial_accepted(false, false, true, false, false, false, 62, 62, 13, 0, 0, 0, 400, false), "no gain: refused");
+    assert!(
+        super::trial_accepted(false, false, true, false, false, false, 78, 62, 13, 0, -23, 0, 400, false),
+        "smaller: kept whatever the units say"
+    );
+    assert!(
+        !super::trial_accepted(false, false, true, false, false, false, 60, 62, 13, 0, 4, 0, 400, false),
+        "larger: refused whatever the units say"
+    );
+    assert!(
+        !super::trial_accepted(false, false, true, false, false, false, 62, 62, 13, 0, 0, 0, 400, false),
+        "no gain: refused"
+    );
 }
 
-/// Two Os trials that tie to the byte were both refused, whatever the copies save: a tied pair is
-/// decided by the clocks, and a tie that saves none stays as written. Bytes never lose to clocks.
+/// Two Os trials that tie to the byte were both refused, whatever the copies
+/// save: a tied pair is decided by the clocks, and a tie that saves none stays
+/// as written. Bytes never lose to clocks.
 #[test]
 fn a_trial_whose_bytes_tie_is_decided_by_the_clocks_it_saves() {
-    assert!(super::trial_accepted(false, false, true, false, false, false, 62, 62, 13, 40, 0, 0, 400, false), "tied, faster: kept");
-    assert!(!super::trial_accepted(false, false, true, false, false, false, 62, 62, 13, 0, 0, 0, 400, false), "tied, no faster: refused");
-    assert!(!super::trial_accepted(false, false, true, false, false, false, 62, 62, 13, 9999, 4, 0, 400, false), "larger by a byte: refused however fast");
+    assert!(
+        super::trial_accepted(false, false, true, false, false, false, 62, 62, 13, 40, 0, 0, 400, false),
+        "tied, faster: kept"
+    );
+    assert!(
+        !super::trial_accepted(false, false, true, false, false, false, 62, 62, 13, 0, 0, 0, 400, false),
+        "tied, no faster: refused"
+    );
+    assert!(
+        !super::trial_accepted(false, false, true, false, false, false, 62, 62, 13, 9999, 4, 0, 400, false),
+        "larger by a byte: refused however fast"
+    );
 }
 
-/// DEVIATE INL-SPEED-OS: jpeg_fixed -Os `receive` and `extend` (two sites each, 200,699 runs a call, +1 and -1 bytes):
-/// the latency model priced each call as its callee's body, so the trial read 0 clocks saved and stayed refused, 375 k
-/// calls left. The call and the return the copy drops count; a cold site, or one that grows the code past 4 B a site,
-/// still does not.
+/// DEVIATE INL-SPEED-OS: jpeg_fixed -Os `receive` and `extend` (two sites each,
+/// 200,699 runs a call, +1 and -1 bytes): the latency model priced each call as
+/// its callee's body, so the trial read 0 clocks saved and stayed refused, 375
+/// k calls left. The call and the return the copy drops count; a cold site, or
+/// one that grows the code past 4 B a site, still does not.
 #[test]
 fn a_hot_copy_the_model_prices_at_nothing_is_kept_for_the_call_it_drops() {
     use super::speed_keeps_at_size;
@@ -3731,11 +3794,9 @@ b0:
 ";
     let mut module = parsed(text);
     let applied = crate::pipeline::Applied { options: crate::pipeline::Options::size(), ..Default::default() };
-    llrm_mir::program::Program::lend(
-        &mut module,
-        m32_costs(),
-        |program: &mut llrm_mir::program::Program| crate::pipeline::applied(program, &applied),
-    )
+    llrm_mir::program::Program::lend(&mut module, m32_costs(), |program: &mut llrm_mir::program::Program| {
+        crate::pipeline::applied(program, &applied)
+    })
     .and_then(|done| done)
     .expect("the pipeline runs");
     let printed = llrm_mir::print::module(&module);
@@ -3774,11 +3835,9 @@ b0:
 ";
     let mut module = parsed(text);
     let applied = crate::pipeline::Applied { options: crate::pipeline::Options::standard(), ..Default::default() };
-    llrm_mir::program::Program::lend(
-        &mut module,
-        m32_costs(),
-        |program: &mut llrm_mir::program::Program| crate::pipeline::applied(program, &applied),
-    )
+    llrm_mir::program::Program::lend(&mut module, m32_costs(), |program: &mut llrm_mir::program::Program| {
+        crate::pipeline::applied(program, &applied)
+    })
     .and_then(|done| done)
     .expect("the pipeline runs");
     let printed = llrm_mir::print::module(&module);
@@ -3812,11 +3871,15 @@ fn test_arm64_makes_no_ipa_cp_clones_unless_asked() {
     assert_ne!(run(Some(true)), asked_not, "the premise: the clones change this module");
 }
 
-/// A pass translated from gcc names its gcc source by a link to gcc's git tree, and its file carries the licence gcc's
-/// source has. #10096 merged `ree.rs` with the link and no header.
+/// A pass translated from gcc names its gcc source by a link to gcc's git tree,
+/// and its file carries the licence gcc's source has. #10096 merged `ree.rs`
+/// with the link and no header.
 #[test]
 fn test_a_file_that_links_gcc_source_is_marked_gpl() {
-    fn scan(dir: &std::path::Path, found: &mut Vec<String>) {
+    fn scan(
+        dir: &std::path::Path,
+        found: &mut Vec<String>,
+    ) {
         for entry in std::fs::read_dir(dir).unwrap().flatten() {
             let path = entry.path();
             if path.is_dir() {
@@ -3945,15 +4008,26 @@ b0:
     assert!(!text.contains("i16 %a"), "the pegs are still passed:\n{text}");
 }
 
-/// x86-m32 -Os, QB `file.c` `set`: three copies of `justify`, 68 instructions against 60 and a credit of 9, so the
-/// count accepted them; the estimate said +102 B (built +110). A size caller's trial that grows the bytes is refused;
-/// a speed caller's (-Os rows that run as -O1) keeps the count's verdict, as before.
+/// x86-m32 -Os, QB `file.c` `set`: three copies of `justify`, 68 instructions
+/// against 60 and a credit of 9, so the count accepted them; the estimate said
+/// +102 B (built +110). A size caller's trial that grows the bytes is refused;
+/// a speed caller's (-Os rows that run as -O1) keeps the count's verdict, as
+/// before.
 #[test]
 fn test_a_credit_gate_refuses_a_count_accepted_copy_that_grows_the_bytes_at_a_size_caller() {
     assert!(!super::trial_accepted(false, true, false, false, false, false, 68, 60, 9, 0, 102, 0, 321, false));
-    assert!(super::trial_accepted(false, true, false, false, false, false, 68, 60, 9, 0, -4, 0, 321, false), "a copy that shrinks stays");
-    assert!(super::trial_accepted(false, true, false, false, false, false, 68, 60, 9, 0, 102, 0, 321, true), "a speed caller keeps the count");
-    assert!(super::trial_accepted(false, false, false, false, false, false, 68, 60, 9, 0, 102, 0, 321, false), "off the gate the count decides");
+    assert!(
+        super::trial_accepted(false, true, false, false, false, false, 68, 60, 9, 0, -4, 0, 321, false),
+        "a copy that shrinks stays"
+    );
+    assert!(
+        super::trial_accepted(false, true, false, false, false, false, 68, 60, 9, 0, 102, 0, 321, true),
+        "a speed caller keeps the count"
+    );
+    assert!(
+        super::trial_accepted(false, false, false, false, false, false, 68, 60, 9, 0, 102, 0, 321, false),
+        "off the gate the count decides"
+    );
 }
 
 /// `@top` after the pipeline at `options` on a target with `levels` as its
@@ -4025,22 +4099,31 @@ fn test_a_per_level_inline_bar_moves_the_decision_of_its_level_only() {
 #[test]
 fn test_a_level_bar_replaces_the_flat_bar_for_its_level_only() {
     let tti = |flat, o2| {
-        llrm_x86::tti::X86::of_cpu("i486").unwrap().with_tuning(llrm_mir::target::Tuning {
-            inline_threshold: flat,
-            inline_threshold_o2: o2,
-            ..llrm_mir::target::Tuning::PIN
-        })
+        llrm_x86::tti::X86::of_cpu("i486")
+            .unwrap()
+            .with_tuning(
+                llrm_mir::target::Tuning {
+                    inline_threshold: flat,
+                    inline_threshold_o2: o2,
+                    ..llrm_mir::target::Tuning::PIN
+                },
+            )
     };
     let bar = |tti: &llrm_x86::tti::X86, level| super::threshold_override(Some(tti), level);
     let both = tti(Some(50), Some(300));
-    assert_eq!([Some(1), Some(2), Some(3), None].map(|level| bar(&both, level)), [Some(50), Some(300), Some(50), Some(50)]);
+    assert_eq!(
+        [Some(1), Some(2), Some(3), None].map(|level| bar(&both, level)),
+        [Some(50), Some(300), Some(50), Some(50)]
+    );
     let none = tti(None, None);
     assert_eq!([Some(1), Some(2), Some(3), None].map(|level| bar(&none, level)), [None; 4]);
 }
 
-/// x86_32 prices bytes at -O1 (`speed_rate_at_o1`), and the bar's level was read from that flag: its -O1 ran
-/// level 2, so a bar stated for -O1 was never read and one for -O2 moved both (QB m32 -O1 sat +111 KB over the
-/// best bar with `inline_threshold_o1` set to anything). The level is the pass's own -O level.
+/// x86_32 prices bytes at -O1 (`speed_rate_at_o1`), and the bar's level was
+/// read from that flag: its -O1 ran level 2, so a bar stated for -O1 was never
+/// read and one for -O2 moved both (QB m32 -O1 sat +111 KB over the
+/// best bar with `inline_threshold_o1` set to anything). The level is the
+/// pass's own -O level.
 #[test]
 fn test_a_target_that_prices_bytes_at_o1_still_reads_its_o1_bar_there() {
     let calls = |top: &str| top.contains("call i16 @f");
@@ -4049,4 +4132,26 @@ fn test_a_target_that_prices_bytes_at_o1_still_reads_its_o1_bar_there() {
     assert!(calls(&top_at(o1(), [low, None, None])), "-O1's own bar did not apply");
     assert!(!calls(&top_at(o1(), [None, low, None])), "-O2's bar moved -O1");
     assert!(calls(&top_at(crate::pipeline::Options::standard(), [None, low, None])), "-O2's own bar did not apply");
+}
+
+/// m32 -O1 (a bar of 125 there) and every m16 level moved when the cut-bar
+/// trial took a target's flat bar, or a level it does not cut, for a cut
+/// (`switch_peeled_table` -O1 and six m16 programs came out different). Only a
+/// level entry below the level's own bar is one.
+#[test]
+fn only_a_level_entry_below_the_levels_own_bar_is_a_cut() {
+    use llrm_mir::tti::Tti;
+    let mut tti = llrm_x86::tti::X86::of_cpu("x86-64").unwrap();
+    tti.tuning.inline_threshold_o1 = Some(112);
+    tti.tuning.inline_threshold_o2 = Some(150);
+    let levels =
+        |tti: &llrm_x86::tti::X86| [1, 2, 3].map(|level| super::cut_from(Some(tti as &dyn Tti), Some(level), 225));
+    assert_eq!(levels(&tti), [None, Some(225), None], "the -O2 entry is the cut, the -O1 one is not");
+    assert_eq!(super::cut_from(Some(&tti), None, 225), None, "a size caller has no level");
+    tti.tuning.inline_threshold_o1 = None;
+    tti.tuning.inline_threshold_o2 = Some(300);
+    assert_eq!(levels(&tti), [None, None, None], "an entry above the own bar is no cut");
+    tti.tuning.inline_threshold_o2 = None;
+    tti.tuning.inline_threshold = Some(125);
+    assert_eq!(levels(&tti), [None, None, None], "a flat bar is no cut");
 }

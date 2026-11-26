@@ -6721,6 +6721,25 @@ fn a_recursion_called_with_a_constant_row_is_cloned_at_o3_only_when_asked() {
     assert!(asked > 2 * without, "-fipa-cp-clone made no clones: {asked} lines against {without}");
 }
 
+/// x86-m64 -O3 made the clones gcc's `-fipa-cp-clone` makes and the pin does
+/// not: spill_store_order took 857 M compile instructions and 3,403 B against
+/// 323 M and 1,875 B without, QuickrBasic -O3 +1.0% bytes and +2.3%
+/// compile instructions over tests/run/c and the 126 modules, for 0.001% fewer
+/// executed instructions (IPACP-O3 ended on m64 2026-11-26).
+#[test]
+fn a_recursion_called_with_a_constant_row_is_not_cloned_at_o3_on_m64_unless_asked() {
+    let text = include_str!("tests_data/queens_place.ll").replace("@m32-datalayout@", "@m64-datalayout@");
+    let lines = |extra: &[&str]| {
+        let mut arguments = vec!["-m64", "-O3"];
+        arguments.extend_from_slice(extra);
+        let (built, _) = compiled(&flags(&arguments), &text, "queens").unwrap();
+        llrm_codegen::backend::masm::text(&built).unwrap().lines().count()
+    };
+    let (default, without, asked) = (lines(&[]), lines(&["-fno-ipa-cp-clone"]), lines(&["-fipa-cp-clone"]));
+    assert_eq!(default, without, "-O3 cloned by default: {default} lines against {without} without clones");
+    assert!(asked > 2 * without, "-fipa-cp-clone made no clones: {asked} lines against {without}");
+}
+
 /// x86-m32 recchop -O3: `chop(0, 64)` halves its range, so neither `lo = 0` nor
 /// `hi = 64` alone makes the loop's trip count known (gcc: "loops with known
 /// iterations: 0", evaluation 47.6 against 500, no clone, 1204 B). Pricing both

@@ -424,14 +424,28 @@ impl CmpConv {
 
 /// `shouldConvert`: whether the model says the `ccmp` is worth the branch it
 /// takes out.
-fn should_convert(
+thread_local! {
+    static METRICS_BUILT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many times this thread has modelled a whole body for the trace metrics.
+pub fn metrics_built() -> usize {
+    METRICS_BUILT.with(std::cell::Cell::get)
+}
+
+/// `traces` are the trace metrics of the body, made when a candidate first
+/// needs them (`MachineTraceMetrics` is lazy too): the model of every
+/// instruction of the function is the cost of making them, and at minimum size
+/// most candidates are decided by their code size alone.
+fn should_convert<'a>(
     conv: &CmpConv,
-    traces: &mut tracemetrics::Traces,
+    traces: &mut Option<tracemetrics::Traces<'a>>,
+    func: &'a std::cell::OnceCell<tracemetrics::Func>,
+    build: &dyn Fn() -> tracemetrics::Func,
     function: &MFunc,
     min_size: bool,
     penalty: u32,
 ) -> bool {
-    let trace = traces.trace(conv.cmp_bb);
     if min_size {
         let delta = conv.expected_code_size_delta();
         if delta < 0 {
@@ -441,6 +455,8 @@ fn should_convert(
             return false;
         }
     }
+    let traces = traces.get_or_insert_with(|| tracemetrics::Traces::new(func.get_or_init(build)));
+    let trace = traces.trace(conv.cmp_bb);
     // The compare delays the branch: it waits for the second compare's inputs.
     let delay_limit = penalty * 3 / 4;
     // The head's own trace: the depths of its instructions are those of any
@@ -480,8 +496,12 @@ pub fn run(
     let mut converted = 0;
     let mut position = 0;
     'epoch: loop {
-        let func = build_func(function, &cfg, &model);
-        let mut traces = tracemetrics::Traces::new(&func);
+        let func = std::cell::OnceCell::new();
+        let mut traces = None;
+        let build = || {
+            METRICS_BUILT.with(|built| built.set(built.get() + 1));
+            build_func(function, &cfg, &model)
+        };
         let used = used_registers(function);
         while position < order.len() {
             let head = order[position];
@@ -493,7 +513,7 @@ pub fn run(
                 position += 1;
                 continue;
             };
-            if !stress && !should_convert(&candidate, &mut traces, function, min_size, penalty) {
+            if !stress && !should_convert(&candidate, &mut traces, &func, &build, function, min_size, penalty) {
                 position += 1;
                 continue;
             }

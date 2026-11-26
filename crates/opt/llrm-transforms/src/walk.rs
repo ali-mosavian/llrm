@@ -350,12 +350,18 @@ impl ProgramPass for Walk {
             o1_bound: !self.speed_rate,
             cold_site_ignores_sinks: program.target.tti().is_some_and(|tti| tti.cold_site_ignores_sinks()),
             last_call_in_cold_site: program.target.tti().is_some_and(|tti| tti.inline_last_call_in_cold_site()),
-            last_call_when_growth_barred: program.target.tti().is_some_and(|tti| tti.inline_last_call_when_growth_barred()),
+            last_call_when_growth_barred: program
+                .target
+                .tti()
+                .is_some_and(|tti| tti.inline_last_call_when_growth_barred()),
             ..crate::inlinecost::InlineParams::from_level(if self.inline.limit >= 250 { 3 } else { 2 })
         };
         // The target's tuning table, at the level the pass runs at.
         let level = self.inline.level();
         if let Some(threshold) = threshold_override(program.target.tti().as_deref(), level) {
+            // A level entry of the tuning table is a cut; a flat bar is the
+            // target's own and keeps its verdict.
+            params.cut_from = cut_from(program.target.tti().as_deref(), level, params.default_threshold);
             params.default_threshold = threshold;
         }
         let size = self.inline.caller_size();
@@ -428,6 +434,7 @@ impl ProgramPass for Walk {
                                     size != crate::inlinecost::CallerSize::Speed
                                         || (tti.inline_policy().by_rate > 0
                                             && (self.speed_rate || tti.speed_inline_rate_at_o1()))
+                                        || (params.cut_from.is_some() && self.speed_rate)
                                         || (!self.speed_rate && tti.inline_trials_at_o1())
                                 }))
                                 .then_some(&mut trials),
@@ -840,7 +847,13 @@ impl ProgramPass for Walk {
                                 } else {
                                     0
                                 };
-                                let (saved, growth) = if size == crate::inlinecost::CallerSize::Speed && rate > 0 {
+                                // A cut bar's trial (`InlineParams::cut_from`)
+                                // is priced
+                                // though the target states no rate: the copy
+                                // stays where the
+                                // module is no larger and the clocks fewer.
+                                let at_price = rate > 0 || (params.cut_from.is_some() && self.speed_rate);
+                                let (saved, growth) = if size == crate::inlinecost::CallerSize::Speed && at_price {
                                     let costs = program.target.speed_trial_costs();
                                     let now = module.global(id).function().expect("a body");
                                     let callees: Vec<&llrm_mir::module::Function> = calls
@@ -1014,7 +1027,7 @@ impl ProgramPass for Walk {
                                 // register
                                 // pairs saved on every call, +441k
                                 // instructions).
-                                let priced = rate > 0 && size == crate::inlinecost::CallerSize::Speed;
+                                let priced = at_price && size == crate::inlinecost::CallerSize::Speed;
                                 let kept_bytes =
                                     function_bytes(module, &program.layout, &program.target.trial_costs(), &kept);
                                 // DEVIATE OS-INLINE-TRIAL (`trial::Site`): a
@@ -1067,29 +1080,33 @@ impl ProgramPass for Walk {
                                 } else {
                                     0
                                 };
-                                // DEVIATE UNROLL-SPEED-TRIAL: the variant that takes no growth
-                                // refuses this trial's too, and a base compile notes the growth
+                                // DEVIATE UNROLL-SPEED-TRIAL: the variant that
+                                // takes no growth
+                                // refuses this trial's too, and a base compile
+                                // notes the growth
                                 // it takes, for the driver to try that variant.
                                 let refuses_growth = priced
                                     && growth > 0
-                                    && crate::trial::speed_unroll().is_some_and(crate::trial::SpeedUnroll::refuses_trial_growth);
-                                let ruled = !refuses_growth && (speed_at_size
-                                    || trial_accepted(
-                                        tti.opt_size_inline_byte_gate(),
-                                        tti.opt_size_inline_credit_gate(),
-                                        tti.opt_size_inline_trial_by_bytes(),
-                                        tti.inline_trial_keeps_shrinking_copy(),
-                                        priced,
-                                        hot || (priced && by_trips),
-                                        tried + margin,
-                                        best,
-                                        credit,
-                                        saved,
-                                        growth,
-                                        rate,
-                                        kept_bytes,
-                                        size == crate::inlinecost::CallerSize::Speed,
-                                    ));
+                                    && crate::trial::speed_unroll()
+                                        .is_some_and(crate::trial::SpeedUnroll::refuses_trial_growth);
+                                let ruled = !refuses_growth
+                                    && (speed_at_size
+                                        || trial_accepted(
+                                            tti.opt_size_inline_byte_gate(),
+                                            tti.opt_size_inline_credit_gate(),
+                                            tti.opt_size_inline_trial_by_bytes(),
+                                            tti.inline_trial_keeps_shrinking_copy(),
+                                            priced,
+                                            hot || (priced && by_trips),
+                                            tried + margin,
+                                            best,
+                                            credit,
+                                            saved,
+                                            growth,
+                                            rate,
+                                            kept_bytes,
+                                            size == crate::inlinecost::CallerSize::Speed,
+                                        ));
                                 if ruled
                                     && priced
                                     && growth > 0
@@ -1655,6 +1672,21 @@ impl SelfInline {
     }
 }
 
+/// The level's own bar `own`, where the target's tuning table states a lower
+/// one for `level`: that bar is a cut (`InlineParams::cut_from`). A flat bar of
+/// the target's is not one.
+fn cut_from(
+    tti: Option<&dyn llrm_mir::tti::Tti>,
+    level: Option<u8>,
+    own: i64,
+) -> Option<i64> {
+    // -O1 prices no byte in clocks: its cut is the bar's verdict, with no
+    // trial.
+    let level = level.filter(|level| *level >= 2)?;
+    let bar = tti?.inline_threshold_at_level(level)?;
+    (bar < own).then_some(own)
+}
+
 /// The target's `DefaultThreshold` for a caller at `level` (1, 2, 3; none for
 /// a size caller): its level entry, else its flat one; none: the pass's own.
 fn threshold_override(
@@ -2130,7 +2162,10 @@ fn trial_accepted(
         // A copy that leaves the module no larger and runs in fewer clocks
         // needs no callee to go with it. INL-HOT: a hot site needs no
         // callee going with the copy; the rate alone decides.
-        return (credit > 0 || hot || (keeps_shrinking && growth <= 0 && saved > 0)) && growth * rate <= saved * 1000;
+        // No rate: the copy must not grow the module.
+        return (credit > 0 || hot || (keeps_shrinking && growth <= 0 && saved > 0))
+            && growth * rate <= saved * 1000
+            && (rate > 0 || growth <= 0);
     }
     if by_bytes {
         // Bytes decide; clocks only where they tie exactly.
