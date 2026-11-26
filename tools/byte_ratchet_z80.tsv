@@ -17,7 +17,7 @@ bench/matmul/matmul	689	689	689	696
 bench/nbody/nbody	3402	3370	3370	3370
 bench/nbody_fixed/nbody_fixed	1674	1677	1677	1677
 bench/nbody_single/nbody_single	1639	1639	1639	1639
-bench/particle/particle	482	482	482	836
+bench/particle/particle	482	482	482	496
 bench/queens/queens	338	338	338	337
 bench/quicksort/quicksort	570	570	570	570
 bench/recchop/recchop	303	303	303	304
@@ -90,14 +90,14 @@ tests/run/c/float_in_memory_loop_f32	183	113	113	183
 tests/run/c/float_in_place_update	473	13	13	472
 tests/run/c/float_return	248	248	248	248
 tests/run/c/frame_address_stack_args	441	441	441	441
-tests/run/c/frameless	1341	1341	1341	1338
+tests/run/c/frameless	1341	1341	1341	1342
 tests/run/c/function_table	41	36	36	42
 tests/run/c/gapped_insertion_sort_words	414	414	414	413
 tests/run/c/huffman_decode	684	684	684	686
-tests/run/c/idioms	1633	1638	1638	1499
+tests/run/c/idioms	1633	1638	1638	1493
 tests/run/c/inlined_tail_call_keeps_frame_stores	53	53	53	53
 tests/run/c/int64_division	1042	40	40	127
-tests/run/c/int64_divmod_edges	2291	2393	2393	2239
+tests/run/c/int64_divmod_edges	2291	2393	2393	2213
 tests/run/c/int_compared_with_float	486	486	486	486
 tests/run/c/known_loads_walks	2028	2008	2018	1798
 tests/run/c/licm_duplicate_phi_input	229	229	229	229
@@ -137,8 +137,8 @@ tests/run/c/register_upper_half	313	313	313	313
 tests/run/c/rep_count	176	176	176	175
 tests/run/c/rint_libcall	933	933	933	933
 tests/run/c/rotate_small	559	559	559	522
-tests/run/c/sat_builtins	2134	2134	2134	2134
-tests/run/c/sat_sub_u64_shared_compare	217	217	217	217
+tests/run/c/sat_builtins	2064	2064	2064	2064
+tests/run/c/sat_sub_u64_shared_compare	210	210	210	210
 tests/run/c/sbb_wide_sub	314	314	314	314
 tests/run/c/shift64_variable	817	817	817	817
 tests/run/c/shift_int32_variable	269	209	209	209
@@ -169,7 +169,7 @@ tests/run/c/switch_table_in_code	330	330	330	330
 tests/run/c/table_named_by_data	61	61	61	61
 tests/run/c/tail_call_long_argument	114	114	114	114
 tests/run/c/tail_calls	1154	1121	1121	1151
-tests/run/c/u64_divide_wide_divisor	707	707	707	712
+tests/run/c/u64_divide_wide_divisor	707	707	707	707
 tests/run/c/u64_shift_select_arms	537	537	537	537
 tests/run/c/u64_shift_variable_kinds	3486	3486	3486	3486
 tests/run/c/uint64_to_float	66	66	66	66
@@ -177,7 +177,7 @@ tests/run/c/value_of_valueless	23	23	23	23
 tests/run/c/variadic	314	314	314	310
 tests/run/c/volatile_bitfield	406	406	406	406
 tests/run/c/volatile_bitfield_aligned	185	185	185	185
-tests/run/c/wide_shift_by_one	695	695	695	695
+tests/run/c/wide_shift_by_one	686	686	686	686
 tests/run/c/word_array_abs_x	407	407	407	407
 tests/run/c/word_compare_branches	778	630	630	628
 tests/run/c/word_compares	575	575	575	591

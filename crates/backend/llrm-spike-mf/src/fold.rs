@@ -1037,12 +1037,14 @@ pub fn branch_fold_hoisting_keeping_call_areas<T: Target + Jump>(
 }
 
 /// [`branch_fold_hoisting`] whose tail merging also joins blocks of different
-/// loops ([`crate::tailmerge::merge_tails_across_loops`]).
+/// loops ([`crate::tailmerge::merge_tails_across_loops`]). `frequencies`, by
+/// block id, is kept current as blocks split and merge.
 pub fn branch_fold_hoisting_across_loops<T: Target + Jump>(
     function: &mut MFunction<T::Class>,
     assignment: &Assignment,
+    frequencies: &mut HashMap<u32, f64>,
 ) -> bool {
-    fold::<T>(function, Some(assignment), crate::tailmerge::Crossing::Always, None, false)
+    fold::<T>(function, Some(assignment), crate::tailmerge::Crossing::Always, Some(frequencies), false)
 }
 
 /// [`branch_fold_hoisting`] whose tail merging joins the blocks of the named
