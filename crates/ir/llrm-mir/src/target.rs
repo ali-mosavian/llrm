@@ -333,6 +333,11 @@ pub struct Tuning {
     /// whole-function trials can read it: the m32 -Os hinted-call trial and
     /// the arm64 ccmp trial (a `Tti`-level limit, default off).
     pub trial_insts_max: Option<usize>,
+    /// `trial_insts_max` for a build that wants size, where it differs: the
+    /// speed builds' trials can pay for a big function what the size builds'
+    /// do not (QB `exec.c` m68k: the -O1 trials shrink it by a third, the -Os
+    /// ones by nothing). `None`: `trial_insts_max`.
+    pub trial_insts_max_at_size: Option<usize>,
     /// At `-Os` a constant `rep stos` takes the unit with the fewest bytes
     /// (value setup, count, string op and the inline tail), where the pin's
     /// unit is the destination's alignment: a `rep stosb` is a 2-byte `mov
@@ -1034,6 +1039,7 @@ impl Tuning {
         rep_stos_at_size: false,
         rep_stos_at_size_max: 128,
         trial_insts_max: None,
+        trial_insts_max_at_size: None,
         rep_stos_priced_unit: false,
         rep_movs_at_size: false,
         rep_movs_at_size_max: 128,

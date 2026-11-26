@@ -172,6 +172,21 @@ pub struct M68k {
 }
 
 impl M68k {
+    /// Clocks of `__mulsi3` on a CPU without `muls.l`, from the timing table:
+    /// `jsr`, three `mulu.w` partial products, two `add.l`, a `swap`, `rts`.
+    fn mulsi3_clocks(&self) -> i64 {
+        let of = |text: &str, bytes: u32| {
+            crate::timing::cost(self.cpu, text, bytes, false).map_or(0, |cost| i64::from(cost.clocks))
+        };
+        of("jsr (%a0)", 2)
+            + 3 * of("mulu.w %d1, %d0", 2)
+            + 2 * of("add.l %d1, %d0", 2)
+            + of("swap %d0", 2)
+            + of("rts", 2)
+    }
+}
+
+impl M68k {
     /// The cost model of `cpu`.
     pub fn for_cpu(cpu: crate::dagisel::hooks::Cpu) -> M68k {
         M68k { cpu, ..M68k::default() }
@@ -475,9 +490,10 @@ impl Tti for M68k {
         "M68k"
     }
 
-    /// DEVIATE SINK-COMMON-SIZE (owner w12, exit 2026-12-05; M32-SINK-COMMON-SIZE,
-    /// gcc `-fcrossjumping`): at -Os SimplifyCFG sinks common code in every
-    /// slot; the pin does so only in the late one. Priced by the phis it makes.
+    /// DEVIATE SINK-COMMON-SIZE (owner w12, exit 2026-12-05;
+    /// M32-SINK-COMMON-SIZE, gcc `-fcrossjumping`): at -Os SimplifyCFG
+    /// sinks common code in every slot; the pin does so only in the late
+    /// one. Priced by the phis it makes.
     fn sink_common_at_size(&self) -> bool {
         true
     }
@@ -496,8 +512,8 @@ impl Tti for M68k {
 
     /// DEVIATE INLINE-BODY-CALL (the z80's `body_call_cost`; the pin prices a
     /// call as one instruction): a call inside an inlined body is its `jsr` and
-    /// pushed arguments, as bytes. Priced flat, a helper of two calls looked 15 B
-    /// and was copied into seven wrappers at -Os (num_fpmath +252 B).
+    /// pushed arguments, as bytes. Priced flat, a helper of two calls looked 15
+    /// B and was copied into seven wrappers at -Os (num_fpmath +252 B).
     fn body_call_cost(
         &self,
         shape: &llrm_mir::tti::CallShape,
@@ -648,6 +664,27 @@ impl Tti for M68k {
     fn range_narrowing_width(&self) -> Option<u32> {
         let has_long_divide = self.cpu.at_least(crate::dagisel::hooks::Cpu::M68020);
         (!has_long_divide).then_some(16)
+    }
+
+    /// DEVIATE UNROLL-MUL-CALL: without `muls.l` a multiply by `(2^n +- 1) <<
+    /// k` is the combiner's chain, which the loop's own overhead repays;
+    /// any other is `__mulsi3`, priced from the timing table as its
+    /// sequence: the call, three `mulu.w` partial products, two adds, a
+    /// `swap` and the return.
+    fn multiply_by_constant_clocks(
+        &self,
+        factor: Option<i64>,
+    ) -> i64 {
+        if self.cpu.at_least(crate::dagisel::hooks::Cpu::M68020) {
+            return 0;
+        }
+        match factor {
+            Some(0 | 1) => 0,
+            Some(factor) => {
+                crate::dagisel::mulprice::chain(self.cpu, factor as u32).map_or_else(|| self.mulsi3_clocks(), |_| 0)
+            }
+            None => self.mulsi3_clocks(),
+        }
     }
 
     /// DEVIATE UNROLL-OS-TRIAL (owner m68k, exit 2026-11-24): the unrolled size
