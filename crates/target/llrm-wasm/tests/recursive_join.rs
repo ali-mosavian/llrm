@@ -7,8 +7,11 @@
 use std::path::Path;
 use std::process::Command;
 
-fn asm(level: &str) -> String {
-    let ir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/ir/recursive_join.ll");
+fn asm(
+    file: &str,
+    level: &str,
+) -> String {
+    let ir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/ir").join(file);
     let out = Command::new(env!("CARGO_BIN_EXE_llrm-wasm-llc"))
         .args(["-S", level, "-o", "-"])
         .arg(ir)
@@ -21,7 +24,19 @@ fn asm(level: &str) -> String {
 #[test]
 fn a_recursive_call_through_a_join_stays_a_call_on_wasm() {
     for level in ["-O1", "-O2", "-Os"] {
-        let out = asm(level);
+        let out = asm("recursive_join.ll", level);
+        assert!(out.contains("call\tdeep"), "{level}: the recursion was made a loop:\n{out}");
+    }
+}
+
+/// A private linear recursion through a join, as a C `static` function is: the
+/// early module pass that makes such a recursion a loop built its analyses with
+/// no target, so wasm's switch (`eliminates_accumulator_through_join`) was
+/// never read there and the recursion became a loop the runtime unroll grew.
+#[test]
+fn an_internal_recursion_through_a_join_stays_a_call_on_wasm() {
+    for level in ["-O2", "-Os"] {
+        let out = asm("recursive_join_private.ll", level);
         assert!(out.contains("call\tdeep"), "{level}: the recursion was made a loop:\n{out}");
     }
 }
