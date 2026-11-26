@@ -56,7 +56,7 @@ fn a_copy_the_byte_rate_refuses_is_inlined_at_speed_when_the_backend_writes_it_s
 /// (and a third time for the unroll trial's price): 13 selections
 /// for 5 functions. It is priced from the assembly the output and the unroll
 /// trial use. At -O2 both sides are finished, each rolled and unrolled: four
-/// builds, each selected once (18).
+/// builds, each selected once.
 #[test]
 fn a_trial_that_keeps_nothing_selects_the_kept_side_once() {
     let mut request = Request::new(Level::O2);

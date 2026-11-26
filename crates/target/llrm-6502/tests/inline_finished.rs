@@ -8,8 +8,8 @@ use std::process::Command;
 use common::pipeline::llrm_cc;
 use llrm_6502::driver::inline_pays;
 
-// whole runs, start-up included: 58,810 called and 57,683 inlined; 31,026 and
-// 18,129.
+// Bounds of whole runs, start-up included, between the called and the inlined
+// program.
 const MIX_CLOCKS: i64 = 58_200;
 const BOUND_CLOCKS: i64 = 22_000;
 
@@ -39,10 +39,9 @@ fn measured(
     (text, clocks)
 }
 
-/// The trial summed each function's bytes before the outliner ran: two inlined
-/// copies of a loop counted 71 B more than the calls though the linked program
-/// was 32 B smaller, so the calls stayed (676 B and 53,680 clocks, 644 and
-/// 52,573 inlined).
+/// The trial summed each function's bytes before the outliner ran: inlined
+/// copies of a loop counted larger than the calls though the linked program was
+/// smaller, so the calls stayed.
 #[test]
 fn copies_the_outliner_shares_are_not_refused_on_their_bytes_before_it() {
     for level in ["-O2", "-O3"] {
@@ -53,9 +52,9 @@ fn copies_the_outliner_shares_are_not_refused_on_their_bytes_before_it() {
     }
 }
 
-/// The rate refused a callee whose loop bound each site passes: kept 29,272
-/// clocks, inlined 16,429 for 228 B. The clock model priced the call at ten
-/// trips against the copy's 98, and judged before the unroll trial.
+/// The rate refused a callee whose loop bound each site passes, though the
+/// inlined program is far faster: the clock model priced the call at guessed
+/// trips against the copy's counted ones, and judged before the unroll trial.
 #[test]
 fn a_copy_that_repays_its_bytes_once_unrolled_is_made() {
     for level in ["-O2", "-O3"] {

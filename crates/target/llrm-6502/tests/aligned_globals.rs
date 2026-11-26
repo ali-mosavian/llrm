@@ -1,6 +1,5 @@
-//! An `aligned` global had no `.align` and no linker segment to align it: of
-//! three asked to 16 the addresses ended in 15, 11 and 8. Needs `llrm-cc` built
-//! (`LLRM_CC`).
+//! An `aligned` global had no `.align` and no linker segment to align it: its
+//! address was not aligned. Needs `llrm-cc` built (`LLRM_CC`).
 
 mod common;
 

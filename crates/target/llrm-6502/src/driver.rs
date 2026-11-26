@@ -568,9 +568,8 @@ fn trial_inlined(
 /// finished programs (unrolled, outlined, runtime linked), clocks against
 /// bytes (`inline_pays`). Sites that share a function are one group, tried on
 /// top of the groups already kept. Neither earlier price will do: bytes before
-/// the outliner refused two copied loops it then shares (+71 B counted, -33 B
-/// linked), and clocks before the unroll trial refused a copy whose loop that
-/// trial then takes (+191 B for no clocks; finished, +228 B for 12,843).
+/// the outliner refuse copied loops it then shares, and clocks before the
+/// unroll trial refuse a copy whose loop that trial then takes.
 ///
 /// Compile time: a program with no refused site compiles once; one with some
 /// runs the mid-end, the unroll trial and the backend once more a group.
@@ -642,7 +641,7 @@ fn judged_inlines(
 
 /// Whether an inline that saves `saved` clocks for `added` bytes, in `callers`
 /// functions, is kept at -O2 and -O3: the judge of those levels, 3 clocks a
-/// byte (user ruling 2026-11-26), so a smaller copy may cost the clocks its
+/// byte (user ruling 2026-11-25), so a smaller copy may cost the clocks its
 /// bytes repay. A growth stays under the bounds of `trial_pays`.
 pub fn inline_pays(
     saved: i64,
@@ -1200,9 +1199,9 @@ fn instructions(program: &Program) -> usize {
 const TRIAL_GROWTH_LIMIT: i64 = 16 * 1024;
 
 /// Thousandths of a clock a byte at -O2 and -O3: the judge of those levels
-/// (clocks + 3 * bytes, user ruling 2026-11-26). DEVIATE 6502-UNROLL-RATE
-/// (owner x87, exit 2026-12-15): the rate was infinite there, which kept
-/// `dirty`'s 96-trip store loop (long_double_constant_store -O3 2,490 clk against 979).
+/// (clocks + 3 * bytes, user ruling 2026-11-25). DEVIATE 6502-UNROLL-RATE
+/// (owner x87, exit 2026-12-15): an infinite rate there refused every unroll
+/// that repays its bytes.
 const TRIAL_MILLICLOCKS_PER_BYTE: i64 = 3000;
 
 /// The most a priced trial may add for each function it unrolls in: the pin's

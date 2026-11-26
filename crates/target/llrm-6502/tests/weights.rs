@@ -56,9 +56,9 @@ fn a_branch_without_weights_leaves_the_loop_weight() {
     assert_eq!(at("bump"), 10, "{weighted:?}");
 }
 
-/// A callee whose loop runs to its parameter, called with 98 and with 18. Priced
-/// as written it weighed ten trips and the inlined copy 98: the call looked
-/// cheaper than the copy that ran 13,000 clocks fewer, and stayed.
+/// A callee whose loop runs to its parameter. Priced as written it weighed the
+/// guessed trips and the inlined copy its counted ones: the call looked cheaper
+/// than the faster copy, and stayed.
 #[test]
 fn a_loop_bounded_by_a_parameter_weighs_the_trips_the_calls_pass() {
     let module = llrm_mir::parse::module(

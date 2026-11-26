@@ -259,10 +259,10 @@ impl Tti for Mos6502 {
     /// The inliner itself refuses every copy that grows the code at -O2/-O3,
     /// at a rate no clocks repay; the refused copies it notes are judged on
     /// finished programs at 3 clocks a byte (`driver::inline_pays`, user
-    /// ruling 2026-11-26). DEVIATE 6502-RATE (owner w11, exit 2026-12-20,
-    /// row 6502-INLINE-RATE): a price in the inliner weighs a loop at about 32
-    /// trips and sees neither the outliner nor what the copy folds; the pin's
-    /// threshold alone priced 6.8 KB for 4.05M clocks.
+    /// ruling 2026-11-25). DEVIATE 6502-RATE (owner w11, exit 2026-12-20,
+    /// row 6502-INLINE-RATE): a price in the inliner sees neither the outliner
+    /// nor what the copy folds, and the pin's threshold alone does not price
+    /// the bytes.
     fn speed_inline_milliclocks_per_byte(&self) -> i64 {
         1 << 40
     }
