@@ -280,6 +280,28 @@ b0:
     assert!(!after.contains("ret i16 %a"), "{after}");
 }
 
+/// A function whose live parameter is `returned` keeps its return value (the
+/// pin's `HasLiveReturnedArg`). Dropping it left `returned` on a void
+/// function, which the pin's verifier rejects.
+#[test]
+fn a_return_value_of_a_returned_parameter_is_kept() {
+    let after = run(&format!(
+        "{SINK}define internal i16 @f(i16 returned %a) {{
+b0:
+  store i16 %a, ptr @sink, align 2
+  ret i16 %a
+}}
+define void @top(i16 %x) {{
+b0:
+  %r = call i16 @f(i16 %x)
+  ret void
+}}
+"
+    ));
+    assert!(after.contains("define internal i16 @f(i16 returned %a)"), "{after}");
+    assert!(!after.contains("void @f"), "{after}");
+}
+
 /// One caller that reads the result keeps it for all.
 #[test]
 fn a_return_value_one_call_reads_is_kept() {

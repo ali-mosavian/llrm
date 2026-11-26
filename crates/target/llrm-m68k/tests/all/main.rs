@@ -2,6 +2,7 @@
 //! the whole stack 287 times. A new test is a file here and a `mod` line;
 //! `tests/support` and the fixtures stay where they are.
 
+mod class_split_occurrences;
 mod any_extend_shared;
 mod far_branch;
 mod far_tail_call;
@@ -169,6 +170,7 @@ mod inline_bar;
 mod inline_call_prices;
 mod inline_constant_division;
 mod inline_dying_credit;
+mod inline_o1_bar;
 mod inline_outline_trial;
 mod inline_second_round;
 mod inline_threshold;

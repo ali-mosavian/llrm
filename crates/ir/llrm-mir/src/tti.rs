@@ -2535,6 +2535,11 @@ pub trait Tti {
         128
     }
 
+    /// `Tuning::trial_insts_max`.
+    fn trial_insts_max(&self) -> Option<usize> {
+        None
+    }
+
     /// `Tuning::rep_stos_at_size`.
     fn rep_stos_at_size(&self) -> bool {
         false
@@ -2750,6 +2755,12 @@ pub trait Tti {
     /// unroll (its tuning table); none: the pass's own.
     fn unroll_threshold_overrides(&self) -> (Option<u32>, Option<u32>) {
         (None, None)
+    }
+
+    /// The instructions the unroll cost analysis simulates before it gives up
+    /// (the target's table); none: the pass's own.
+    fn unroll_analysis_budget(&self) -> Option<u64> {
+        None
     }
 
     /// Whether the target takes gcc's path splitting at `-O3`

@@ -324,6 +324,15 @@ pub struct Tuning {
     /// `rep_movs_at_size_max`; DEVIATE REP-STOS-OS bounds itself to the pin's
     /// limit (owner x86-m32, exit 2026-11-30).
     pub rep_stos_at_size_max: u64,
+    /// DEVIATE TRIAL-CAP (owner m68k, exit 2026-12-20): a size bound, not a
+    /// function condition. A function whose first build has more instructions
+    /// than this is built once, with every optional rewrite as that build
+    /// has it; the backend's trials build a function again per rewrite, and
+    /// a 17,000-instruction function took 21 builds (synth.c at -O1: 311 s,
+    /// 20 s capped). `None`: the pin's, which builds once. Other targets'
+    /// whole-function trials can read it: the m32 -Os hinted-call trial and
+    /// the arm64 ccmp trial (a `Tti`-level limit, default off).
+    pub trial_insts_max: Option<usize>,
     /// At `-Os` a constant `rep stos` takes the unit with the fewest bytes
     /// (value setup, count, string op and the inline tail), where the pin's
     /// unit is the destination's alignment: a `rep stosb` is a 2-byte `mov
@@ -390,8 +399,9 @@ pub struct Tuning {
     pub unroll_max_percent_threshold_boost: Option<u32>,
     /// `Threshold` of the full unroll at `-O3` alone (the pin's is 300): a
     /// loop of 32 trips and a dozen operations is unrolled where the pin
-    /// keeps it, as gcc and clang 20 do. DEVIATE UNROLL-O3 (owner
-    /// llrm-target-x86-m64-b, exit 2026-11-30); none: the pass's own.
+    /// keeps it, as gcc and clang 20 do. No target sets it: x86_64's 400
+    /// grew spill_store_order -O3's compile 15x (row X64-UNROLL-O3); none:
+    /// the pass's own.
     pub unroll_threshold_at_o3: Option<u32>,
     /// The code-size cost of a scalar divide or remainder by a constant
     /// (`X86TTIImpl::getArithmeticInstrCost`: 5 or 6, and 2 more for size, in
@@ -861,8 +871,8 @@ pub struct Tuning {
     /// `pass_tail_recursion` runs early, `passes.def` before
     /// `pass_ipa_inline`), not after (D10).
     pub recursive_tre_first: (bool, bool),
-    /// DEVIATE IPACP-O3 (owner x86-m32-c, exit 2026-12-20): ipa-cp clones at
-    /// -O3, as gcc's `-fipa-cp-clone` is on there; the pin makes none
+    /// DEVIATE IPACP-O3 (m64 only, owner x86-m32-c, exit 2026-12-20): ipa-cp
+    /// clones at -O3, as gcc's `-fipa-cp-clone` is on there; the pin makes none
     /// (`Tti::ipa_cp_clones_at_speed`). At -O2 neither gcc nor the pin clones
     /// (`Tti::ipa_cp_clones_at_o2`; IPACP-O2 ended 2026-11-18).
     pub ipa_cp_clones_at_speed: bool,
@@ -1023,6 +1033,7 @@ impl Tuning {
         mul_chains_hot_at_size: false,
         rep_stos_at_size: false,
         rep_stos_at_size_max: 128,
+        trial_insts_max: None,
         rep_stos_priced_unit: false,
         rep_movs_at_size: false,
         rep_movs_at_size_max: 128,

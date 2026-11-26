@@ -301,13 +301,8 @@ fn the_pass_does_not_rescan_the_function_for_each_question() {
     assert!(took.as_secs() < 5, "3000 unrelated blocks took {took:?}");
 }
 
-/// Every branch edit of a join's predecessors dropped the block positions, and
-/// the next question walked the whole function again: exec.c's `exec_loop` (a
-/// switch of 100s of blocks) spent 40 % of its compile there. The walks must
-/// not grow with the edits.
-#[test]
-fn branch_edits_do_not_rescan_the_function_for_block_positions() {
-    // 60 joins; each has a predecessor that jumps and one that falls through
+/// 60 joins; each has a predecessor that jumps and one that falls through.
+fn chained_joins() -> Vec<Vec<Inst>> {
     let mut blocks = vec![vec![branch(1)]];
     for join in 0..60u32 {
         let base = 1 + 3 * join;
@@ -315,10 +310,31 @@ fn branch_edits_do_not_rescan_the_function_for_block_positions() {
         blocks.push(vec![work("b"), work("c")]);
         blocks.push(vec![work("d"), if join == 59 { ret() } else { branch(base + 3) }]);
     }
-    let mut function = layout(blocks);
+    blocks
+}
+
+/// Every branch edit of a join's predecessors dropped the block positions, and
+/// the next question walked the whole function again: exec.c's `exec_loop` (a
+/// switch of 100s of blocks) spent 40 % of its compile there. The walks must
+/// not grow with the edits.
+#[test]
+fn branch_edits_do_not_rescan_the_function_for_block_positions() {
+    let mut function = layout(chained_joins());
     let blocks_before = function.blocks.len();
     let before = llrm_spike_mf::tailmerge::layout_scans();
     branch_fold::<Two>(&mut function);
     let scans = llrm_spike_mf::tailmerge::layout_scans() - before;
     assert!(scans <= blocks_before / 2, "{scans} walks for {blocks_before} blocks");
+}
+
+/// Every edit dropped the edges and the next predecessor question read every
+/// block's jumps again: 863 rebuilds, 3.3 M edge reads for synth.c's 3900-block
+/// function (m68k -O2). The edges are built once and follow the edits.
+#[test]
+fn branch_edits_keep_the_edges_instead_of_reading_every_block_again() {
+    let mut function = layout(chained_joins());
+    let before = llrm_spike_mf::tailmerge::layout_scans();
+    branch_fold::<Two>(&mut function);
+    let scans = llrm_spike_mf::tailmerge::layout_scans() - before;
+    assert!(scans <= 8, "{scans} whole-function walks for 60 joins");
 }

@@ -35,11 +35,19 @@ loop:\n  %i = phi i32 [ 0, %entry ], [ %i1, %loop ]\n  %acc = phi i32 [ 0, %entr
   %v = call i32 @pick(i32 %i, i32 9)\n  %acc2 = add i32 %acc, %v\n  %i1 = add i32 %i, 1\n  %c = icmp ult i32 %i1, %n\n  br i1 %c, label %loop, label %done\n\
 done:\n  ret i32 %acc2\n}\n";
 
+/// M68K-INLINE-O1: the callee costs more than the -O1 bar (112,
+/// `Tuning::inline_threshold_o1`) and less than the pin's 225, so it is a call
+/// at -O1 and inlined at -O2. Before the bar it was inlined at -O1 for its
+/// clocks (2026-11-14); the clock trial does not reach it
+/// (M68K-O1-INLINE-CLOCK-TRIAL).
 #[test]
-fn an_external_callee_with_a_switch_is_inlined_at_o1_for_its_clocks() {
+fn an_external_callee_with_a_switch_is_a_call_at_o1_and_inlined_at_o2() {
     for cpu in ["68000", "68020"] {
-        let out = assembly(PICK, cpu_of(cpu).unwrap(), Level::O1).expect("compiles");
-        let main = out.split("main:").nth(1).expect("main");
-        assert!(!main.contains("jsr") && !main.contains("bsr"), "{cpu}: `pick` stayed a call at -O1:\n{out}");
+        for (level, inlined) in [(Level::O1, false), (Level::O2, true)] {
+            let out = assembly(PICK, cpu_of(cpu).unwrap(), level).expect("compiles");
+            let main = out.split("main:").nth(1).expect("main");
+            let called = main.contains("jsr") || main.contains("bsr");
+            assert_eq!(called, !inlined, "{cpu} {level:?}: `pick` is {}:\n{out}", if called { "a call" } else { "inlined" });
+        }
     }
 }
