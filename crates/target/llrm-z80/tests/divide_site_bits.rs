@@ -45,14 +45,16 @@ entry:
 loop:
   %i = phi i16 [ 0, %entry ], [ %i.next, %loop ]
   %s = phi i32 [ %start, %entry ], [ %n, %loop ]
+  %total = phi i32 [ 0, %entry ], [ %sum, %loop ]
   %a = {step}
   %n = {state_op} i32 %a, {modulus}
   %d = {digit_op} i32 %n, 10
+  %sum = add i32 %total, %d
   %i.next = add nuw i16 %i, 1
   %c = icmp ne i16 %i.next, 100
   br i1 %c, label %loop, label %exit
 exit:
-  ret i32 %d
+  ret i32 %sum
 }}
 "
     ));
@@ -68,7 +70,7 @@ fn a_remainder_of_a_state_the_loop_keeps_under_65537_is_the_speed_routine() {
     assert!(out.contains("call __umodsi3") && !out.contains("__s_"), "{out}");
 }
 
-/// The same loop over a state of 31 bits: each remainder is 27 steps, 10k T
+/// The same loop over a state of 31 bits: its digit is 27 steps, 10k T a trip
 /// against the size routine's 6.3k, and the size routine stays.
 #[test]
 fn a_remainder_of_a_state_that_needs_the_whole_word_stays_the_size_routine() {

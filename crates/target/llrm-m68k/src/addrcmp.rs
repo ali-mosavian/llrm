@@ -24,6 +24,7 @@ use llrm_spike_mf::livephys::PhysLiveness;
 use llrm_spike_mf::{Kind, Operand, Reg};
 
 use crate::dagisel::{cmpa, local};
+use crate::expand::is_address;
 use crate::mfunc::{Class, MFunction, op_inst, operand_class};
 use crate::regalloc::{Assignment, M68kRegisters};
 use crate::{REGISTER_INFO, reg};
@@ -76,7 +77,6 @@ pub fn compare_in_address_register(
     function: &mut MFunction,
     assignment: &Assignment,
 ) {
-    let address = [reg::A0, reg::A1, reg::A2, reg::A3, reg::A4, reg::A5];
     for inst in function.blocks.iter_mut().flat_map(|block| &mut block.insts) {
         let Kind::Op(name) = inst.kind else { continue };
         let (Some(sibling), Some(dest_at)) = (cmpa::sibling(name), cmpa::dest_of(name)) else { continue };
@@ -85,7 +85,7 @@ pub fn compare_in_address_register(
             Reg::Virt(v) => assignment.0[v as usize],
             Reg::Phys(p) => p,
         };
-        if !address.contains(&REGISTER_INFO.root(physical)) {
+        if !is_address(physical) {
             continue;
         }
         let Some(desc) = local::code_of(sibling).and_then(local::desc) else { continue };
@@ -121,7 +121,6 @@ pub fn compare_address_registers(
         return;
     }
     let data = [reg::D0, reg::D1, reg::D2, reg::D3, reg::D4, reg::D5, reg::D6, reg::D7];
-    let address = [reg::A0, reg::A1, reg::A2, reg::A3, reg::A4, reg::A5];
     let root = |register: Reg| match register {
         Reg::Virt(v) => REGISTER_INFO.root(assignment.0[v as usize]),
         Reg::Phys(p) => REGISTER_INFO.root(p),
@@ -159,7 +158,7 @@ pub fn compare_address_registers(
                 if let (Kind::Copy, [Operand::Def(to), Operand::Use(from)]) = (candidate.kind, &candidate.operands[..])
                     && root(*to) == root(dest)
                 {
-                    if address.contains(&root(*from)) {
+                    if is_address(root(*from)) {
                         found = Some((earlier, *from));
                     }
                     break;

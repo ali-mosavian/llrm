@@ -24,7 +24,7 @@ use llrm_object::{
 use llrm_support::hash::HashMap;
 
 use crate::compile::Item;
-use crate::encode::encode;
+use crate::encode::encode_final;
 use crate::object::{absolute_twin, far_branch, relax_step, relaxed_long};
 
 const R_68K_32: u32 = 1;
@@ -211,7 +211,7 @@ fn place(
             }
             Item::Loc(_) => {}
             Item::Inst(one) => {
-                let encoded = encode(one)?;
+                let encoded = encode_final(one)?;
                 pending.push((code.len(), index, encoded.fixups.clone()));
                 code.extend_from_slice(&encoded.bytes);
             }
