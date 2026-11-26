@@ -30,6 +30,7 @@ use std::hash::Hash;
 use llrm_support::hash::{HashMap, HashSet};
 
 use crate::fold::{self, Branches};
+use crate::graph::{Graph, Layout};
 use crate::mfunc::{Block, Inst, MFunction, Operand};
 use crate::regalloc::Assignment;
 use crate::sink::Jump;
@@ -660,24 +661,12 @@ struct Mf<'a, C, J> {
     graph: std::cell::RefCell<Option<Graph>>,
     /// Block id to its place in the layout: rebuilt only when a block is
     /// inserted.
-    positions: std::cell::RefCell<Option<Vec<usize>>>,
+    positions: std::cell::RefCell<Layout>,
     /// Whether a tail stops short of a call area it did not open
     /// ([`Jump::call_area`]).
     keep_areas: bool,
     jump: std::marker::PhantomData<J>,
 }
-
-/// The edges of every block by block id: `addSuccessor` / `removeSuccessor`
-/// keep both ends in step as a block's jumps change.
-struct Graph {
-    /// Sorted, without repeats ([`Mf::edges`]).
-    successors: Vec<Vec<u32>>,
-    /// The blocks that name or fall into the block, in no order; the layout
-    /// order is put on them when they are asked for.
-    predecessors: Vec<Vec<u32>>,
-}
-
-const ABSENT: usize = usize::MAX;
 
 thread_local! {
     /// Walks over every block of a function made to answer a position or
@@ -725,21 +714,7 @@ impl<C, J> Mf<'_, C, J> {
 
     fn build_graph(&self) -> Graph {
         scanned();
-        let blocks = &self.function.blocks;
-        let size = blocks.iter().map(|block| block.id as usize + 1).max().unwrap_or(0);
-        let mut graph = Graph { successors: vec![Vec::new(); size], predecessors: vec![Vec::new(); size] };
-        let mut out = Vec::new();
-        for (at, block) in blocks.iter().enumerate() {
-            self.edges(at, &mut out);
-            for &to in &out {
-                // a jump to a block that is not there reaches no one
-                if let Some(into) = graph.predecessors.get_mut(to as usize) {
-                    into.push(block.id);
-                }
-            }
-            graph.successors[block.id as usize] = out.clone();
-        }
-        graph
+        Graph::build(&self.function.blocks, |at, out| self.edges(at, out))
     }
 
     /// The jumps of these blocks changed: their edges are read again, both
@@ -749,25 +724,7 @@ impl<C, J> Mf<'_, C, J> {
         ids: &[u32],
     ) {
         let Some(mut graph) = self.graph.get_mut().take() else { return };
-        let size = ids.iter().map(|&id| id as usize + 1).fold(graph.successors.len(), usize::max);
-        graph.successors.resize(size, Vec::new());
-        graph.predecessors.resize(size, Vec::new());
-        let mut out = Vec::new();
-        for &id in ids {
-            self.edges(self.at(id), &mut out);
-            let old = std::mem::take(&mut graph.successors[id as usize]);
-            for &to in old.iter().filter(|to| !out.contains(to)) {
-                if let Some(into) = graph.predecessors.get_mut(to as usize) {
-                    into.retain(|&from| from != id);
-                }
-            }
-            for &to in out.iter().filter(|to| !old.contains(to)) {
-                if let Some(into) = graph.predecessors.get_mut(to as usize) {
-                    into.push(id);
-                }
-            }
-            graph.successors[id as usize] = out.clone();
-        }
+        graph.relink(ids, |id| self.at(id), |at, out| self.edges(at, out));
         *self.graph.get_mut() = Some(graph);
     }
 
@@ -777,7 +734,7 @@ impl<C, J> Mf<'_, C, J> {
         &mut self,
         ids: &[u32],
     ) {
-        *self.positions.get_mut() = None;
+        self.positions.get_mut().invalidate();
         self.relink(ids);
     }
 
@@ -785,18 +742,7 @@ impl<C, J> Mf<'_, C, J> {
         &self,
         id: u32,
     ) -> usize {
-        let mut cached = self.positions.borrow_mut();
-        let positions = cached.get_or_insert_with(|| {
-            scanned();
-            let blocks = &self.function.blocks;
-            let size = blocks.iter().map(|block| block.id as usize + 1).max().unwrap_or(0);
-            let mut position = vec![ABSENT; size];
-            for (at, block) in blocks.iter().enumerate() {
-                position[block.id as usize] = at;
-            }
-            position
-        });
-        positions.get(id as usize).copied().filter(|&at| at != ABSENT).expect("a block that exists")
+        self.positions.borrow_mut().at(&self.function.blocks, id, scanned)
     }
 }
 
@@ -862,7 +808,7 @@ impl<C, J: Jump> TailMergeFunction for Mf<'_, C, J> {
         &self,
         block: u32,
     ) -> Vec<u32> {
-        let kept = self.with_graph(|graph| graph.successors.get(block as usize).cloned().unwrap_or_default());
+        let kept = self.with_graph(|graph| graph.successors(block).to_vec());
         #[cfg(debug_assertions)]
         {
             let mut scanned = Vec::new();
@@ -876,7 +822,7 @@ impl<C, J: Jump> TailMergeFunction for Mf<'_, C, J> {
         &self,
         block: u32,
     ) -> Vec<u32> {
-        let mut kept = self.with_graph(|graph| graph.predecessors.get(block as usize).cloned().unwrap_or_default());
+        let mut kept = self.with_graph(|graph| graph.predecessors(block).to_vec());
         kept.sort_unstable_by_key(|&from| self.at(from));
         #[cfg(debug_assertions)]
         {
@@ -1192,7 +1138,7 @@ pub fn merge_tails_crossing<J: Jump, C>(
             _ => None,
         },
         graph: std::cell::RefCell::new(None),
-        positions: std::cell::RefCell::new(None),
+        positions: std::cell::RefCell::new(Layout::default()),
         keep_areas,
         jump: std::marker::PhantomData,
     };
