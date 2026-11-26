@@ -139,7 +139,7 @@ def bytes_of(mapfile, objs=()):
     for l in open(mapfile).read().split("Segment list:")[0].splitlines():
         if l.endswith(":") and not l.startswith(" "):
             cur = l[:-1]
-        elif cur and re.match(r"\s+(CODE|RODATA|DATA)\s", l) and (cur in ("f.o", *objs) or (RTLIB and cur.startswith(RTLIB + "("))):
+        elif cur and re.match(r"\s+(CODE|RODATA|DATA|ALIGNED|ALIGNEDRO)\s", l) and (cur in ("f.o", *objs) or (RTLIB and cur.startswith(RTLIB + "("))):
             tot += int(re.search(r"Size=([0-9A-F]+)", l).group(1), 16)
     return tot
 def bss_bytes(mapfile):
