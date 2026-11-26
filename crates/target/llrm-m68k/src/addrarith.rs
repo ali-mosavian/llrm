@@ -649,7 +649,7 @@ fn is_address(register: llrm_lir::registers::RegId) -> bool {
     [reg::A0, reg::A1, reg::A2, reg::A3, reg::A4, reg::A5].contains(&register)
 }
 
-fn is_data(register: llrm_lir::registers::RegId) -> bool {
+pub(crate) fn is_data(register: llrm_lir::registers::RegId) -> bool {
     [reg::D0, reg::D1, reg::D2, reg::D3, reg::D4, reg::D5, reg::D6, reg::D7].contains(&register)
 }
 
