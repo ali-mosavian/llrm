@@ -18,6 +18,38 @@ fn the_table_parses_and_names_each_field() {
     assert!(target_named(&table, "x86_64-unknown-linux-gnu").is_ok());
 }
 
+/// An empty file's compile spent 10 M of its 30 M instructions parsing and
+/// resolving the 23 rows to read one: the row alone is made, equal to the
+/// whole table's.
+#[test]
+fn one_row_made_alone_is_the_row_of_the_whole_table() {
+    let whole = targets(TARGETS).unwrap();
+    let names = whole.keys().cloned().chain(whole.values().map(|row| row.triple.clone()));
+    for wanted in names {
+        let alone = targets_for(TARGETS, &wanted).unwrap();
+        let row = target_named(&whole, &wanted).unwrap();
+        assert_eq!(alone.len(), 1, "{wanted}");
+        assert_eq!(format!("{:?}", target_named(&alone, &wanted).unwrap()), format!("{row:?}"), "{wanted}");
+    }
+}
+
+/// A row the compile does not read is not read: a broken row elsewhere failed
+/// every compile before.
+#[test]
+fn a_broken_row_elsewhere_does_not_fail_another_targets_compile() {
+    let broken = format!("{TARGETS}\n[broken]\ntriple = 7\n");
+    assert!(targets(&broken).is_err(), "premise: the whole table refuses it");
+    assert!(targets_for(&broken, "arm64-glibc").is_ok());
+}
+
+/// A name no row has is told the table's names, as before.
+#[test]
+fn an_unknown_target_is_refused_with_the_table_of_names() {
+    let table = targets_for(TARGETS, "no-such-target").unwrap();
+    let why = target_named(&table, "no-such-target").unwrap_err();
+    assert!(why.contains("arm64-glibc") && why.contains("x86_64-linux"), "{why}");
+}
+
 #[test]
 fn phase_flags_set_the_stop_and_the_output() {
     let one = built("-O2 -c -o x.o x.c");

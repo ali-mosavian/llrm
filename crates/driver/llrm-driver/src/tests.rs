@@ -442,10 +442,12 @@ fn a_zero_test_of_a_negated_value_reads_the_negs_carry() {
     assert_eq!(tests, 0, "the carry of `neg` answers `n == 0`\n{listing}");
 }
 
-/// A copy or fill of a length known at run time is the `memcpy`/`memset` call at every level and
-/// in or out of a loop, as the pin has it (`X86SelectionDAGInfo::EmitTargetCodeForMemcpy` and `...Memset`
-/// return no node for a non-constant size). m32 -Os had it as `rep movsb`/`stosb` outside loops
-/// (MEM-OS-REP): QB `arry_fill` ran 65.2M cycles against the call's 47.3M.
+/// A copy or fill of a length known at run time is the `memcpy`/`memset` call
+/// at every level and in or out of a loop, as the pin has it
+/// (`X86SelectionDAGInfo::EmitTargetCodeForMemcpy` and `...Memset`
+/// return no node for a non-constant size). m32 -Os had it as `rep
+/// movsb`/`stosb` outside loops (MEM-OS-REP): QB `arry_fill` ran 65.2M cycles
+/// against the call's 47.3M.
 #[test]
 fn a_variable_copy_or_fill_at_m32_os_is_a_call_in_a_loop_or_not() {
     let ir = |target: &str, ty: &str, body: &str, attrs: &str| {
@@ -5021,11 +5023,12 @@ fn a_clear_of_an_align_16_local_never_movaps_a_misaligned_address_at_m64() {
 }
 
 /// Tuned for size, a 128-byte clear is `rep stosd` (9 B, a byte under `stosq`),
-/// not `xorps` and eight `movaps` (up to 72 B); a 32-byte clear stays two
-/// stores. The pin's store count made it eight `movaps`: pattern_fill -Os +50
-/// B, huffman_decode +12 B over the `rep stos` the port had.
+/// not `xorps` and eight `movaps` (up to 72 B); the choice is priced by the
+/// encodings, so it flips between 16 B (`xorps` and one `movaps`) and 24 B
+/// (`rep stosd`). The pin's store count made it eight `movaps`: pattern_fill
+/// -Os +50 B, huffman_decode +12 B over the `rep stos` the port had.
 #[test]
-fn a_128_byte_clear_at_m64_os_is_rep_stosd_and_a_32_byte_one_is_stores() {
+fn a_128_byte_clear_at_m64_os_is_rep_stosd_and_a_16_byte_one_is_stores() {
     let ir = |size: u32| {
         format!(
             "target datalayout = \"@m64-datalayout@\"\n\
@@ -5041,7 +5044,9 @@ fn a_128_byte_clear_at_m64_os_is_rep_stosd_and_a_32_byte_one_is_stores() {
     };
     let large = listing(128);
     assert!(large.contains("rep stosd") && !large.contains("movaps"), "{large}");
-    let small = listing(32);
+    let past = listing(24);
+    assert!(past.contains("rep stosd") && !past.contains("movaps"), "{past}");
+    let small = listing(16);
     assert!(small.contains("xorps") && !small.contains("rep stos"), "{small}");
 }
 
@@ -5290,10 +5295,11 @@ fn a_constant_fill_at_m64_is_a_pool_splat_and_16_byte_stores() {
 
 /// Tuned for size, a 128-byte constant fill (not zero) is a `rep stosb` of
 /// `mov al, imm` (9 B; `stosq` needs a 7-10 B value) (idioms Os: eight
-/// RIP-relative `movaps` and the pool load were +41 B over it); a 32-byte one
-/// stays a pool splat and two `movaps`.
+/// RIP-relative `movaps` and the pool load were +41 B over it); the choice is
+/// priced by the encodings: a 16-byte one stays a pool splat and a `movaps`,
+/// a 24-byte one is the `rep stosb`.
 #[test]
-fn a_128_byte_constant_fill_at_m64_os_is_rep_stosb_and_a_32_byte_one_is_stores() {
+fn a_128_byte_constant_fill_at_m64_os_is_rep_stosb_and_a_16_byte_one_is_stores() {
     let ir = |size: u32| {
         format!(
             "target datalayout = \"@m64-datalayout@\"\n\
@@ -5307,8 +5313,9 @@ fn a_128_byte_constant_fill_at_m64_os_is_rep_stosb_and_a_32_byte_one_is_stores()
         let (built, _) = compiled(&flags(&["-m64", "-Os", "--isel=dag"]), &ir(size), "f").unwrap();
         llrm_codegen::backend::masm::text(&built).unwrap()
     };
-    let (large, small) = (listing(128), listing(32));
+    let (large, past, small) = (listing(128), listing(24), listing(16));
     assert!(large.contains("rep stosb") && !large.contains("movaps"), "{large}");
+    assert!(past.contains("rep stosb") && !past.contains("movaps"), "{past}");
     assert!(small.contains("movaps") && !small.contains("rep stos"), "{small}");
 }
 
@@ -5512,11 +5519,12 @@ fn a_product_summed_into_an_add_keeps_the_lea_chain_at_m64() {
     assert!(listing.contains("lea") && !listing.contains("imul"), "{listing}");
 }
 
-/// The Os fill rule flips at a length that depends on the byte: the value the
-/// string fill needs in `rax` costs 2 B (`xor`) for 0, 7 for 255 (`mov rax,
-/// -1`) and 10 (`movabs`) otherwise, and the splat's load 3, 7 and 7. Each
-/// byte is stores one step below the boundary and `rep stos` at it, of the unit
-/// with the fewest bytes: `stosd` for zero, `stosb` (`mov al, imm`) otherwise.
+/// The Os fill rule is priced by the encodings of both forms (the value the
+/// string fill needs in a register, the splat's load, the stores), so it flips
+/// where the bytes do: at 16 B and 24 B for a zero, 255 and another byte alike
+/// (the unit with the fewest bytes: `stosd` for zero, `stosb` (`mov al, imm`)
+/// otherwise). Each byte is stores one step below the boundary and `rep stos`
+/// at it.
 #[test]
 fn the_os_fill_rule_flips_at_a_length_that_depends_on_the_byte_at_m64() {
     let listing = |byte: u32, size: u32| {
@@ -5532,7 +5540,7 @@ fn the_os_fill_rule_flips_at_a_length_that_depends_on_the_byte_at_m64() {
     };
     // (byte, the longest fill that stays stores, the shortest that is `rep
     // stos`, its unit)
-    for (byte, stores, rep, unit) in [(0, 32, 48, "stosd"), (255, 32, 48, "stosb"), (65, 48, 64, "stosb")] {
+    for (byte, stores, rep, unit) in [(0, 16, 24, "stosd"), (255, 16, 24, "stosb"), (65, 16, 24, "stosb")] {
         let (inline, string) = (listing(byte, stores), listing(byte, rep));
         assert!(inline.contains("movaps") && !inline.contains("rep stos"), "byte {byte}, {stores} B: {inline}");
         assert!(
@@ -6584,6 +6592,31 @@ fn the_os_trials_compile_each_dimension_against_the_base_once() {
     compiled(&flags(&["-m32", "-Os", "-march=i486"]), text, "bench_recchop").unwrap();
     let selections = llrm_mir::counts::get(llrm_mir::counts::Event::Selections) - before;
     assert!(selections <= 6, "{selections} selections of two functions: more than three compiles");
+}
+
+/// TRIAL-CAP-M32: -Os on a module with a 2,000+ instruction function beside a rotated loop
+/// ran the -Os trials, each a mid-end over the whole module: 4.3x the
+/// compile time of the one build. A module with a function over
+/// `TRIAL_INSTS_MAX` is built once: fewer selections than the same module with
+/// a small second function.
+#[test]
+fn a_module_with_a_function_over_the_trial_cap_takes_no_os_trial() {
+    let one = include_str!("tests_data/prefix_sums.ll");
+    let chain = |links: usize| {
+        let body: String = (0..links).map(|i| format!("  %v{} = add i32 %v{}, {}\n", i + 1, i, i + 1)).collect();
+        format!("define dso_local i32 @other(i32 %v0) {{\n{body}  ret i32 %v{links}\n}}\n")
+    };
+    let selections = |text: String| {
+        let before = llrm_mir::counts::get(llrm_mir::counts::Event::Selections);
+        compiled(&flags(&["-m32", "-Os", "-march=i486"]), &text, "bench_prefix").unwrap();
+        llrm_mir::counts::get(llrm_mir::counts::Event::Selections) - before
+    };
+    let with_trials = selections(format!("{one}\n{}", chain(10)));
+    let over_cap = selections(format!("{one}\n{}", chain(llrm_x86_m32::TRIAL_INSTS_MAX + 100)));
+    assert!(
+        over_cap < with_trials,
+        "a module over the cap ran its trials: {over_cap} selections against {with_trials} for the same loop beside a small function"
+    );
 }
 
 /// x86-m32 x_bubble -Os: the unrotated trial module was 16 B shorter as an

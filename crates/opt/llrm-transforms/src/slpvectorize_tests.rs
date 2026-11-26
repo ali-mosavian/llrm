@@ -189,6 +189,34 @@ fn loop_carried_doubles_become_vector_phis() {
     assert_eq!(text.matches("phi <2 x double>").count(), 4, "{text}");
 }
 
+/// `NBODY_PHIS` with `pad` instructions no tree reads between its phis and its
+/// first lane.
+fn nbody_phis_padded(pad: usize) -> String {
+    let mut lines: Vec<String> = NBODY_PHIS.lines().map(str::to_owned).collect();
+    let at = lines.iter().rposition(|line| line.contains("= phi i16")).expect("the loop's last phi") + 1;
+    let padding = (0..pad).map(|k| format!("  %pad{k} = add i16 %.042, {}", k + 1));
+    lines.splice(at..at, padding);
+    lines.join("\n")
+}
+
+/// fcmp_all -O2 (x86_64): every phi tree was checked for a cycle of bundles
+/// over the whole block, 84 checks of a 1,032-instruction block for the 12
+/// grids, 5,691 M instructions of `slp` for the 48 (clang's whole compile 1,540
+/// M), four times the cost for twice the block. `BlockScheduling` only
+/// schedules the region the bundles span.
+#[test]
+fn a_phi_trees_cycle_check_looks_at_the_region_of_its_bundles_not_the_block() {
+    let nodes = |text: &str| {
+        crate::slpschedule::REGION_NODES.with(|count| count.set(0));
+        let out = run(text);
+        assert_eq!(out.matches("phi <2 x double>").count(), 4, "premise: the phis are vectorized\n{out}");
+        crate::slpschedule::REGION_NODES.with(std::cell::Cell::get)
+    };
+    let (bare, padded) = (nodes(NBODY_PHIS), nodes(&nbody_phis_padded(400)));
+    assert!(bare > 0, "premise: the check ran");
+    assert_eq!(padded, bare, "400 instructions before the first lane are not in the region");
+}
+
 /// `fmul a[i], k` in one lane and `fmul k, a[i+1]` in the next kept two
 /// gathers (the operands stood as written): `VLOperands::reorder` puts the
 /// loads in one column and the splat `k` in the other.

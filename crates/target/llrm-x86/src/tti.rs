@@ -1366,6 +1366,10 @@ impl Tti for X86 {
         self.tuning.rep_stos_at_size_max
     }
 
+    fn trial_insts_max(&self) -> Option<usize> {
+        self.tuning.trial_insts_max
+    }
+
     fn rep_stos_priced_unit(&self) -> bool {
         self.tuning.rep_stos_priced_unit
     }
