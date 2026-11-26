@@ -456,8 +456,8 @@ mod tests {
         println!("{} phases: {}", names.len(), names.join(" "));
         // A shared phase added to the registry runs here until it is omitted above: name it, or this fails.
         let kept = "EarlyTailDuplicate OptimizePHIs DeadMachineInstructionElim SharedConstants ProcessImplicitDefs MachineCombiner \
-            MachineLICM IvShare IvZero MachineCSE MachineSink PeepholeOptimizer LiveRangeShrink PhiElimination TwoAddress \
-            JoinStackPointer Coalescer MachineScheduler RegAlloc ParallelCopy ReserveCallFrame Prologue LateCleanup Peephole \
+            MachineLICM IvShare IvZero MachineCSE MachineSink PeepholeOptimizer DeadMachineInstructionElim \
+            LiveRangeShrink PhiElimination TwoAddress JoinStackPointer Coalescer MachineScheduler RegAlloc ParallelCopy ReserveCallFrame Prologue LateCleanup Peephole \
             LoopSlots PostRaLicm Scheduler BranchFolder ControlFlow CopyPropagation";
         assert_eq!(names, kept.split_whitespace().collect::<Vec<_>>(), "the phases arm64 runs");
         assert_eq!(names.len(), build(&[]).len() - omitted.len(), "an omitted phase is one the registry has");

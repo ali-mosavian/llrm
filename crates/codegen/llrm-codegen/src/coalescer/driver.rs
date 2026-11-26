@@ -373,6 +373,10 @@ impl Coalescer<'_> {
     }
 
     /// `coalesceLocals`.
+    fn late_live_interval_update(&mut self) {
+        super::register_coalescer::late_live_interval_update(self.lis, &mut self.state);
+    }
+
     fn coalesce_locals(&mut self) {
         self.copy_coalesce_work_list(List::Local, 0);
         let local = std::mem::take(&mut self.local);
@@ -423,10 +427,12 @@ pub fn run(
         }
         coalescer.copy_coalesce_in_mbb(info.block);
     }
+    coalescer.late_live_interval_update();
     coalescer.coalesce_locals();
     // Joining intervals can allow other intervals to be joined. Iteratively
     // join until we make no progress.
     while coalescer.copy_coalesce_work_list(List::Work, 0) {}
+    coalescer.late_live_interval_update();
     let left = coalescer.work.iter().flatten().count();
     Stats { joined: coalescer.joined, left, renames: coalescer.state.renames }
 }
