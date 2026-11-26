@@ -244,7 +244,7 @@ fn dead_returns(module: &Module) -> BTreeSet<GlobalId> {
             let llrm_mir::types::Type::Function { returns, .. } = module.context.types.get(function.ty) else {
                 return false;
             };
-            *returns != void
+            *returns != void && !has_live_returned_argument(module, id)
         })
         .collect();
     // Who a callee's result goes on to: the callers whose own `ret` returns it,
@@ -280,6 +280,22 @@ fn dead_returns(module: &Module) -> BTreeSet<GlobalId> {
         live.insert(id);
     }
     candidates.difference(&live).copied().collect()
+}
+
+/// `HasLiveReturnedArg` (DeadArgumentElimination.cpp, `removeDeadStuffFromFunction`):
+/// a function whose live parameter is `returned` keeps its return value, as
+/// `returned` is meaningless on a function returning void (the pin's verifier
+/// rejects it) and code generation may use it across calls.
+fn has_live_returned_argument(
+    module: &Module,
+    id: GlobalId,
+) -> bool {
+    let function = module.global(id).function().expect("a function");
+    let unread = dead(module, id);
+    function.parameter_attrs.iter().enumerate().any(|(index, attrs)| {
+        !unread.contains(&index)
+            && attrs.iter().any(|attr| matches!(attr, llrm_mir::opcode::Attribute::Flag(name) if name == "returned"))
+    })
 }
 
 /// The parameters of `id` nothing reads but its own calls to itself, each as

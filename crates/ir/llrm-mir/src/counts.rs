@@ -61,9 +61,8 @@ pub enum Event {
     /// An exit test or integer-to-float conversion LSR prepared before
     /// planning (`lsr_prepared`).
     LsrPrepared,
-    /// A register whose setup cost LSR worked out, not found again
-    /// (`ScalarEvolution::memoized_setup_cost`).
-    LsrSetupCosts,
+    /// A node `setup_cost` visited while working out a register's setup cost.
+    LsrSetupVisits,
     /// A loop LSR chose a solution for (`lsr_solutions`).
     LsrSolutions,
     /// A loop whose solution changed the IR (`lsr_rewritten`).
@@ -152,7 +151,7 @@ const NAMES: [&str; 48] = [
     "fingerprints",
     "lsr_loops",
     "lsr_prepared",
-    "lsr_setup_costs",
+    "lsr_setup_visits",
     "lsr_solutions",
     "lsr_rewritten",
     "lir_rename_asks",

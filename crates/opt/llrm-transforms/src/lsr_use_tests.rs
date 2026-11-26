@@ -151,22 +151,26 @@ fn a_use_after_the_loop_runs_its_adds_once_where_the_target_says_so() {
 }
 
 /// A register's setup cost was walked again for every formula that holds it:
-/// a byte-divide loop at -O3 spent 13 M `setup_cost` visits (15% of its
-/// compile) on a few hundred registers. It is worked out once per register and
-/// target; the cost is the same.
+/// a byte-divide loop at -O3 spent 13 M node visits (15% of its compile) on a
+/// few hundred registers. Rating one formula five times visits the nodes of
+/// its registers once; the cost is the same each time.
 #[test]
-fn a_registers_setup_cost_is_worked_out_once() {
+fn a_registers_setup_cost_is_walked_once_however_often_it_is_rated() {
     use llrm_mir::counts::{Event, get};
     with_loop(|cx, se, a, b, header, _| {
         let tti = X86::of_cpu("core2").unwrap();
         let mut f = Formula { base_regs: vec![a, b], has_base_reg: true, ..Formula::default() };
         f.canonicalize(se, header);
         let lu = basic_use(&[0]);
-        let before = get(Event::LsrSetupCosts);
+        se.reset_setup_costs();
+        let before = get(Event::LsrSetupVisits);
         let first = rated_by(&tti, cx, se, header, &lu, &f, &HashSet::default());
-        let second = rated_by(&tti, cx, se, header, &lu, &f, &HashSet::default());
-        assert_eq!(first.c.setup_cost, second.c.setup_cost);
-        assert_eq!(get(Event::LsrSetupCosts) - before, 2, "two registers, each worked out once for two ratings");
+        let one_rating = get(Event::LsrSetupVisits) - before;
+        assert!(one_rating > 0, "the registers' trees are walked");
+        for _ in 0..4 {
+            assert_eq!(rated_by(&tti, cx, se, header, &lu, &f, &HashSet::default()).c.setup_cost, first.c.setup_cost);
+        }
+        assert_eq!(get(Event::LsrSetupVisits) - before, one_rating, "five ratings walk what one does");
     });
 }
 
