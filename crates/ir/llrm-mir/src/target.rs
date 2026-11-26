@@ -564,12 +564,17 @@ pub struct Tuning {
     pub inline_threshold_o1: Option<i64>,
     pub inline_threshold_o2: Option<i64>,
     pub inline_threshold_o3: Option<i64>,
-    /// DEVIATE BFS-1 (owner x86-m16-b, exit 2026-11-25): the inliner's
+    /// DEVIATE BFS-1 (owner x86-m16, exit 2026-12-31): the inliner's
     /// cold-call-site test reads the site's frequency from a flow in which
     /// edges into `unreachable`-ended failure blocks carry no mass, where the
     /// block has another successor. The pin reads the full flow, in which
     /// checks (`!prof` 2^-20 failure edges) in deep loop nests leak most of
     /// the mass and make the code after them cold (threshold 45, no bonuses).
+    ///
+    /// Measured 2026-11-26 on the m16 corpus (C, Nib, BASIC at -O1..-Os, 776
+    /// cells): 8 differ. With the pin's rule jpeg_fixed and jpeg_single grow
+    /// 5..199 B at every level (-Os +23 and +19 B) for -0.15%..+0.07% clocks,
+    /// so the deviation stays.
     /// false: the pin's.
     pub cold_site_ignores_sinks: bool,
     /// DEVIATE LASTCALL-COLD (owner x87-cordic-2, exit 2026-12-05): a local

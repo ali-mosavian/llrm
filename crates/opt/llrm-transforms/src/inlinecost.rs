@@ -230,7 +230,7 @@ pub struct InlineParams {
     /// The `LastCallToStatic` bonus applies. The pin's always does;
     /// `-fno-inline-functions-called-once` turns it off.
     pub last_call_to_static: bool,
-    /// DEVIATE BFS-1 (owner x86-m16-b, exit: A/B, then land or drop): the
+    /// DEVIATE BFS-1 (see `Tuning::cold_site_ignores_sinks`): the
     /// cold-site test reads the frequency in which failure sinks carry no mass.
     /// Off: the pin's.
     pub cold_site_ignores_sinks: bool,
