@@ -215,8 +215,8 @@ impl BlockFrequencies {
 
     /// [`Self::relative_to_entry`] in the flow where a failure sink (a block
     /// ending in `unreachable`) takes no mass from a block that has another way
-    /// on. DEVIATE BFS-1 (owner x86-m16-b, exit: A/B on the corpus, then land
-    /// or drop): the pin's `BlockFrequencyInfo` lets a bounds check's
+    /// on. DEVIATE BFS-1 (see `Tuning::cold_site_ignores_sinks`):
+    /// the pin's `BlockFrequencyInfo` lets a bounds check's
     /// `{2^20 - 1, 1}` failure edge take its share of every pass, and over a
     /// nest of 32^5 passes that is all of it, so the code after the nest reads
     /// cold. The same as `relative_to_entry` where there is no such edge.
