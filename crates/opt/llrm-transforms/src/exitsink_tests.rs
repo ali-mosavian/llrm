@@ -181,3 +181,34 @@ fn the_exits_are_found_by_the_layout_index_not_by_walking_the_layout() {
     assert!(sunk(function), "premise: the add sinks");
     assert!(llrm_mir::module::block_places_built() > before, "the exits were put in order by the index");
 }
+
+/// `sunk` found every loop's exits again for each value it sank (619 scans,
+/// 3.7 M Ir inside IndVars on d_faces -O2; the pin reads the exiting blocks
+/// once). Blocks and edges do not change while it sinks: one scan per loop.
+#[test]
+fn a_loops_exits_are_scanned_once_however_many_values_sink() {
+    use llrm_mir::counts::{Event, get};
+    let mut text = String::from(
+        "define i16 @f(i16 %n) {
+b0:
+  br label %b1
+
+b1:
+  %i = phi i16 [ 0, %b0 ], [ %i.next, %b1 ]
+  %i.next = add i16 %i, 1
+",
+    );
+    for at in 0..4 {
+        text += &format!("  %l{at} = add i16 %i, {}\n", at + 7);
+    }
+    text += "  %more = icmp ult i16 %i.next, %n\n  br i1 %more, label %b1, label %b2\n\nb2:\n";
+    for at in 0..4 {
+        text += &format!("  %e{at} = phi i16 [ %l{at}, %b1 ]\n");
+    }
+    text += "  %s = add i16 %e0, %e1\n  %t = add i16 %e2, %e3\n  %r = add i16 %s, %t\n  ret i16 %r\n}\n";
+    let mut module = parsed(&text);
+    let before = get(Event::LoopExitScans);
+    assert!(sunk(f(&mut module)), "premise: the adds sink");
+    let scans = get(Event::LoopExitScans) - before;
+    assert_eq!(scans, 1, "{scans} exit scans for one loop");
+}
