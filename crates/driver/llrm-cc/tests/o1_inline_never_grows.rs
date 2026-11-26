@@ -1,7 +1,7 @@
-//! m32 -O1 (INL-O1): a growing inline stays only where the call's clocks pay for
-//! its bytes at the O1 rate. The pin's threshold copied every soft-float helper
-//! into each site: sfm16_dbg 24,284 B against 23,372 B priced. Needs the Open
-//! Watcom tree (tools/ow-fetch.sh) and the m16 clang (`LLRM_CLANG_M16`).
+//! m32 -O1 (INL-O1): a growing inline stays only where the call's clocks pay
+//! for its bytes at the O1 rate. The pin's threshold copied every soft-float
+//! helper into each site: sfm16_dbg 24,284 B against 23,372 B priced. Needs the
+//! Open Watcom tree (tools/ow-fetch.sh) and the m16 clang (`LLRM_CLANG_M16`).
 
 #[path = "common/target_dir.rs"]
 mod target_dir;
@@ -14,10 +14,7 @@ fn compile(
     source: &str,
     flags: &[&str],
 ) -> (String, u64) {
-    assert!(
-        llrm_cc::ow_present(),
-        "the Open Watcom tree is missing: run tools/ow-fetch.sh; this test does not skip"
-    );
+    assert!(llrm_cc::ow_present(), "the Open Watcom tree is missing: run tools/ow-fetch.sh; this test does not skip");
     assert!(
         std::env::var_os("LLRM_CLANG_M16").is_some(),
         "LLRM_CLANG_M16 is not set: this test needs it and does not skip"
@@ -44,10 +41,7 @@ fn compile(
     };
     run("-S", "d.s");
     run("-c", "d.o");
-    (
-        std::fs::read_to_string(dir.join("d.s")).unwrap(),
-        std::fs::metadata(dir.join("d.o")).unwrap().len(),
-    )
+    (std::fs::read_to_string(dir.join("d.s")).unwrap(), std::fs::metadata(dir.join("d.o")).unwrap().len())
 }
 
 #[test]
@@ -180,7 +174,10 @@ int main(void)
 }
 "#;
     let (listing, _) = compile("folds", source, &["-O1"]);
-    let calls = listing.lines().filter(|line| line.contains("call") && (line.contains("below") || line.contains("from"))).count();
+    let calls = listing
+        .lines()
+        .filter(|line| line.contains("call") && (line.contains("below") || line.contains("from")))
+        .count();
     assert_eq!(calls, 0, "constant arguments fold the loops: the sites are inlined, not called:\n{listing}");
 }
 
