@@ -722,9 +722,6 @@ impl llrm_target::Target for M64 {
                             // DEVIATE IMM-1 (owner greedy-os-causes, exit
                             // 2026-11-20): see Tuning.
                             immediate_forms_at_size: true,
-                            // DEVIATE IPACP-O3 (owner x86-m32-c, exit
-                            // 2026-12-20): see Tuning; none at -O2.
-                            ipa_cp_clones_at_speed: true,
                             // DEVIATE IPACP-O3-M64 (owner x87-cordic-2, exit
                             // 2026-12-20): gcc clones `place` for each row of
                             // queens; 4 left rows 4.. generic (+4.3% clk). 8
@@ -820,6 +817,31 @@ mod tests {
         let tti = (M64.cost_model())(&prices).tti().expect("m64 states its cost model");
         assert_eq!(tti.unroll_threshold_at_o3(), None);
         assert_eq!(tti.unroll_threshold_overrides(), (None, None));
+    }
+
+    /// m64 -O3 made gcc's ipa-cp clones the pin does not: spill_store_order
+    /// 857 M compile instructions against 323 M (IPACP-O3 ended 2026-11-26).
+    #[test]
+    fn test_m64_makes_no_ipa_cp_clone_by_default() {
+        let layout = M64.layout();
+        let prices = llrm_target::CpuPrices {
+            costs: Vec::new(),
+            prefix: 1,
+            address_stall: 0,
+            registers: 6,
+            call_registers: 3,
+            float_registers: 0,
+            address_forms: Vec::new(),
+            operations: OperationCosts::default(),
+            spaces: layout.spaces.roles,
+            private: None,
+            calling: None,
+            foreign: llrm_target::Foreign::none(),
+            ports: M64.flat_ports(),
+        };
+        let tti = (M64.cost_model())(&prices).tti().expect("m64 states its cost model");
+        assert!(!tti.ipa_cp_clones_at_speed());
+        assert!(!tti.ipa_cp_clones_at_o2());
     }
 
     /// REC-7 at m64: recursion copies went 8 deep (gcc's default), so rectwo
