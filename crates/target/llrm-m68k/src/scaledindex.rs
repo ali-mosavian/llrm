@@ -24,6 +24,15 @@ use crate::mfunc::{Class, MFunction};
 /// The positions of the base and the index in an operand list of row `name`,
 /// when it has exactly one indexed operand.
 pub(crate) fn memory_at(name: &str) -> Option<(usize, usize)> {
+    local::cached(&MEMORY_AT, name, search_memory_at)
+}
+
+thread_local! {
+    static MEMORY_AT: std::cell::RefCell<llrm_support::hash::HashMap<Box<str>, Option<(usize, usize)>>> =
+        Default::default();
+}
+
+fn search_memory_at(name: &str) -> Option<(usize, usize)> {
     // an extending load has no printed operands: `dst, disp, base, index`
     if scaled::base_of(name).is_none() && crate::expand::extension(name).is_some_and(|(_, _, mode, _)| mode == 'f') {
         return Some((2, 3));
@@ -232,5 +241,25 @@ pub fn scale_indexes(function: &mut MFunction) {
     gone.dedup();
     for (b, at) in gone {
         function.blocks[b].insts.remove(at);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Each indexed-operand question and each scaled row's base was asked of
+    /// the tables again for every instruction of every expansion (2.4 % of
+    /// lexer.c's compile).
+    #[test]
+    fn a_row_question_is_answered_once() {
+        let ask = || (memory_at("MOVE32rr"), scaled::base_of("MOVE32rr"));
+        let before = local::table_searches();
+        let first = ask();
+        // `memory_at`, its row's `text` and `base_of`, each searched and kept
+        assert_eq!(local::table_searches() - before, 3, "a question was answered without being kept");
+        let searched = local::table_searches();
+        assert_eq!(ask(), first);
+        assert_eq!(local::table_searches(), searched, "a row already answered was searched for again");
     }
 }
