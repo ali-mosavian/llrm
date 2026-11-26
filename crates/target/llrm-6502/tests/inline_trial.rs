@@ -55,7 +55,8 @@ fn a_copy_the_byte_rate_refuses_is_inlined_at_speed_when_the_backend_writes_it_s
 /// side was selected twice, as the cut chain to price it and again to write it
 /// (and a third time for the unroll trial's price): 13 selections
 /// for 5 functions. It is priced from the assembly the output and the unroll
-/// trial use.
+/// trial use. At -O2 both sides are finished, each rolled and unrolled: four
+/// builds, each selected once (18).
 #[test]
 fn a_trial_that_keeps_nothing_selects_the_kept_side_once() {
     let mut request = Request::new(Level::O2);
@@ -65,7 +66,7 @@ fn a_trial_that_keeps_nothing_selects_the_kept_side_once() {
     let before = driver::selected();
     driver::assembly(&text, &request).unwrap();
     let selected = driver::selected() - before;
-    assert!(selected <= 2 * functions + 1, "{selected} selections for {functions} functions");
+    assert!(selected <= 4 * functions, "{selected} selections for {functions} functions");
 }
 
 /// loop_fusion -O2/-O3: the rate refused `clear` and `total`, and the unroll
