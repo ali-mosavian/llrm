@@ -147,6 +147,11 @@ package = "llrm-support"
 test = "no_uncached_env_checks"
 
 [[scan]]
+file = "crates/opt/llrm-transforms/tests/options_are_read.rs"
+package = "llrm-transforms"
+test = "options_are_read"
+
+[[scan]]
 file = "tests/seeded_maps.rs"
 step = "integration"
 
