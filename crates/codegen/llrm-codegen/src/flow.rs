@@ -264,6 +264,9 @@ pub fn machine_with<'a>(
         // On SSA, after sinking (the pin's PeepholeOptimizer): a subtract
         // nothing reads is a compare (optimizeCompareInstr).
         Box::new(crate::backend::peepholeopt::PeepholeOptimizer { size: target.size }),
+        // The pin's second `DeadMachineInstructionElim`, after sinking and the
+        // peephole, before PHI elimination: what they left unread.
+        Box::new(crate::backend::deadmi::DeadMachineInstructionElim),
         // On SSA, before the pin allocates: two addresses that differ in a
         // displacement are one (X86OptimizeLEAs, pre-RA).
         Box::new(crate::backend::leaopt::OptimizeLeas { size: target.size }),
@@ -907,6 +910,22 @@ mod tests {
             assert!(!names.contains(&gone), "{gone} runs at -O0: {names:?}");
         }
         assert!(names.contains(&"ControlFlow"), "the jump to the next block is dropped at -O0: {names:?}");
+    }
+
+    /// The pin runs `DeadMachineInstructionElim` twice, the second after
+    /// `PeepholeOptimizer` and before PHI elimination; ours ran it once, so what
+    /// sinking and the peephole left unread reached the coalescer.
+    #[test]
+    fn test_dead_instruction_elimination_runs_again_after_the_peephole() {
+        let o2 = crate::backend::cpu::named("486").unwrap().clone();
+        let phases = machine(&IndexMap::default(), None, None, None, false, &o2, &crate::backend::target::BUILT_IN)
+            .expect("the phases");
+        let names: Vec<&str> = phases.iter().map(|phase| phase.class_name()).collect();
+        let dead: Vec<usize> = (0..names.len()).filter(|&at| names[at] == "DeadMachineInstructionElim").collect();
+        let peephole = names.iter().position(|&one| one == "PeepholeOptimizer").expect("peephole");
+        let phis = names.iter().position(|&one| one == "PhiElimination").expect("phis");
+        assert_eq!(dead.len(), 2, "{names:?}");
+        assert!(peephole < dead[1] && dead[1] < phis, "{names:?}");
     }
 
     /// Every phase `-O0` leaves out is a phase with a slot.
