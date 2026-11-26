@@ -863,10 +863,12 @@ impl Tti for M68k {
 
     /// DEVIATE: the pin's M68k states no preference; `(An)+` steps a pointer
     /// by the access size for free (descriptors in `indexed.rs`), so LSR keeps
-    /// a pointer walk rather than an index beside a counter. Exit: 2026-11-20,
-    /// when LSR rates the indexed formula beside the walk (M68K-COPY-OS).
+    /// a pointer walk rather than an index beside a counter, up to one walk
+    /// for each address register a function always has (`%a6` may hold the
+    /// frame). Exit: 2026-12-17, when LSR rates the indexed formula beside the
+    /// walk (M68K-COPY-OS).
     fn lsr_post_indexed_walk_limit(&self) -> Option<u32> {
-        Some(5)
+        Some(crate::regalloc::ADDRESS.len() as u32)
     }
 
     fn preferred_addressing_mode(&self) -> AddressingMode {

@@ -125,3 +125,39 @@ fn a_result_compared_with_zero_branches_as_the_value_says() {
         }
     }
 }
+
+/// A pointer a call returns in `%a0`, compared with null, was `move.l %a0,
+/// %d0; tst.l %d0`: the copy to a data register sets the codes (102 such
+/// pairs, 204 B, in QuickrBasic -Os on one CPU).
+#[test]
+fn a_returned_pointer_copied_to_a_data_register_is_not_tested_again() {
+    let ir = "define ptr @g(ptr %x) {
+  ret ptr %x
+}
+define i32 @f(i32 %n) {
+  %a = inttoptr i32 %n to ptr
+  %p = call ptr @g(ptr %a)
+  %none = icmp eq ptr %p, null
+  br i1 %none, label %no, label %yes
+yes:
+  %v = ptrtoint ptr %p to i32
+  ret i32 %v
+no:
+  ret i32 9
+}";
+    for cpu in [Cpu::M68000, Cpu::M68020] {
+        let out = text(ir, cpu);
+        assert!(out.contains("move.l\t%a0, %d0") && !out.contains("tst"), "{cpu:?}:\n{out}");
+    }
+    let Some(qemu) = support::qemu() else { return };
+    for (n, want) in [(0, 9), (5, 5)] {
+        let mut all = start("f", &[n]);
+        for name in ["f", "g"] {
+            all.extend(items_with(&module(ir), name, Cpu::M68000, Options::default()).expect("compiles"));
+        }
+        let path = support::unique_path("cmpelim-copy");
+        write_executable(&path, &executable(&all).unwrap()).unwrap();
+        assert_eq!(support::run(&qemu, &["-cpu", "m68000"], &path), Some(want), "f({n})");
+        std::fs::remove_file(&path).ok();
+    }
+}
