@@ -579,6 +579,57 @@ b0:
     assert!(text.contains("getelementptr inbounds i32, ptr @g, i64 %i"), "{text}");
 }
 
+/// QB `ptick.c` `pclk_init`: `const struct itimerval every` went to
+/// `setitimer`, which reads it and keeps no copy, and stayed a 32-byte copy
+/// on the stack that also blocked the tail call: 78 bytes against the pin's
+/// 49. An argument a call neither keeps nor writes through is a read.
+#[test]
+fn an_alloca_passed_to_a_call_that_only_reads_it_is_the_global() {
+    let call = |parameter: &str| {
+        combined(&format!(
+            "@g = private unnamed_addr constant [3 x i32] [i32 1, i32 2, i32 3], align 4
+declare void @llvm.memcpy.p0.p0.i64(ptr, ptr, i64, i1)
+declare void @use({parameter})
+define void @f() {{
+b0:
+  %a = alloca [3 x i32], align 4
+  call void @llvm.memcpy.p0.p0.i64(ptr %a, ptr @g, i64 12, i1 0)
+  call void @use(ptr %a)
+  ret void
+}}
+"
+        ))
+    };
+    let read = call("ptr readonly nocapture");
+    assert!(!read.contains("alloca") && read.contains("call void @use(ptr @g)"), "{read}");
+    // One it may keep, or may write, keeps the copy.
+    for parameter in ["ptr readonly", "ptr nocapture", "ptr"] {
+        let kept = call(parameter);
+        assert!(kept.contains("alloca"), "{parameter}: {kept}");
+    }
+}
+
+/// A call that only reads a local still needs it: without a constant to put
+/// in its place, the alloca and the store it reads stay.
+#[test]
+fn an_alloca_a_call_reads_is_not_a_dead_allocation() {
+    let text = combined(
+        "declare void @use(ptr readonly nocapture)
+define void @f(i32 %v) {
+b0:
+  %a = alloca i32, align 4
+  store i32 %v, ptr %a, align 4
+  call void @use(ptr %a)
+  ret void
+}
+",
+    );
+    assert!(
+        text.contains("alloca") && text.contains("store i32 %v") && text.contains("call void @use(ptr %a)"),
+        "{text}"
+    );
+}
+
 /// A second write to the alloca, or the alloca passed on as a stored value,
 /// keeps the copy.
 #[test]

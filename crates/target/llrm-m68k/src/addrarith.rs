@@ -27,16 +27,17 @@
 //!
 //! A second, wide run ([`address_adds`] with `wide`,
 //! `Options::address_data_uses`) also takes a result that an either-class
-//! operand (a store's source) reads or that is returned in an address register;
-//! the function is built both ways and the cheaper kept ([`crate::trial`]),
-//! since one more address register live can cost a spill.
+//! operand (a store's source) reads, that a compare reads where the value is
+//! also loaded through, or that is returned in an address register; the
+//! function is built both ways and the cheaper kept ([`crate::trial`]), since
+//! one more address register live can cost a spill.
 //!
 //! DEVIATE: the pin keeps the add in a data register and leaves the class to
 //! its selector, which narrows a value's class to its uses and copies for the
 //! use that needs the other (`constrainRegClass`); the allocator splits live
 //! ranges, never classes. Reason: gcc chooses the class of a pointer family by
 //! the cost of its uses (`regclass`), and best of gcc and clang is the goal.
-//! Exit: none.
+//! Owner m68k. Exit: none.
 //!
 //! # See also
 //! `M68kInstrInfo::copyPhysReg`, which is what the copies become; gcc's
@@ -149,13 +150,47 @@ fn uses_by_register(
             }
         }
     }
-    // a compare of a value with a pointer compares pointers: `cmpa.l`
+    // a compare of a value with a pointer compares pointers: `cmpa.l`. In the
+    // wide run a pointer compared with anything takes either class; a counter,
+    // which reaches no address, does not
+    let loaded_through = if wide && !deferred.is_empty() { flows_to_addresses(&all) } else { Vec::new() };
     for (v, slot, others) in deferred {
         if others.iter().any(|w| pointer_like(&all, &copy_of, function, *w, 3)) {
             all[v][slot] = Use::Address;
+        } else if loaded_through.get(v) == Some(&true) {
+            all[v][slot] = Use::Either;
         }
     }
     all
+}
+
+/// For each register, whether copies, phis and pointer steps take its value to
+/// an address operand.
+fn flows_to_addresses(uses: &[Vec<Use>]) -> Vec<bool> {
+    let mut from: Vec<Vec<usize>> = vec![Vec::new(); uses.len()];
+    let mut flows = vec![false; uses.len()];
+    let mut work = Vec::new();
+    for (v, ones) in uses.iter().enumerate() {
+        for one in ones {
+            match one {
+                Use::Copy(to) | Use::Phi(to) | Use::Step(to, _) => from[*to as usize].push(v),
+                Use::Address if !flows[v] => {
+                    flows[v] = true;
+                    work.push(v);
+                }
+                _ => {}
+            }
+        }
+    }
+    while let Some(to) = work.pop() {
+        for &v in &from[to] {
+            if !flows[v] {
+                flows[v] = true;
+                work.push(v);
+            }
+        }
+    }
+    flows
 }
 
 /// Whether `v` is a pointer: it is dereferenced, or copied to or from a

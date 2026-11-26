@@ -226,6 +226,8 @@ pub fn target_lowering(speed_routines: bool) -> TargetLowering {
     }
     // softened floats: compiler-rt's routines
     tl.set_soft_float_libcall_names();
+    // RuntimeLibcalls.def: the C library's `rint`, `sqrt`, ... for every target
+    tl.set_libm_libcall_names();
     tl.set_operation_action(BrCond, MVT::Other, Action::Custom);
     // equality of a long is the bytes' xors or-ed in the accumulator
     tl.set_byte_equality(true);
@@ -650,6 +652,10 @@ impl Hooks for Z80Lowering {
         };
         let symbol = match divide_dividend_range(dag, name) {
             Some((low, high)) => crate::runtime_size::call_with_dividend_range(name, low, high),
+            // the C library's routines are C symbols, SDCC's underscore
+            None if llrm_codegen::backend::selectiondag::actions::is_c_library_routine(name) => {
+                crate::data::symbol(name)
+            }
             None => name.to_owned(),
         };
         let callee = dag.get_target_external_symbol(EVT::I16, &symbol);

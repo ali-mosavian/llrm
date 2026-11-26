@@ -455,3 +455,35 @@ fn a_value_that_only_steps_itself_stays_in_a_data_register() {
         );
     assert_eq!(address_adds(&mut function, Cpu::M68000, true, false, false), 0);
 }
+
+/// `while (c->p < c->end && *c->p == ' ') c->p++;`: the compare with `end` kept
+/// `p` in a data register, copied to an address register for each load, with
+/// `%a2` saved for it (QuickrBasic `indt_blanks`, 30 bytes against gcc's 24).
+#[test]
+fn a_stepped_stored_and_compared_pointer_stays_in_an_address_register() {
+    let ir = "define void @f(ptr %c) {
+entry:
+  %e = getelementptr i8, ptr %c, i32 4
+  %end = load ptr, ptr %e
+  %first = load ptr, ptr %c
+  %any = icmp ult ptr %first, %end
+  br i1 %any, label %loop, label %done
+loop:
+  %p = phi ptr [ %first, %entry ], [ %next, %step ]
+  %v = load i8, ptr %p
+  %space = icmp eq i8 %v, 32
+  br i1 %space, label %step, label %done
+step:
+  %next = getelementptr i8, ptr %p, i32 1
+  store ptr %next, ptr %c
+  %over = icmp eq ptr %next, %end
+  br i1 %over, label %done, label %loop
+done:
+  ret void
+}";
+    for cpu in [Cpu::M68000, Cpu::M68020] {
+        let out = text_with(&module(ir), "f", cpu, Options { size: true, ..Options::default() }).expect("compiles");
+        assert!(!out.contains("-(%sp)"), "{cpu:?}: no register is saved:\n{out}");
+        assert!(!out.contains("move.l\t%d0, %a"), "{cpu:?}: no copy to load through:\n{out}");
+    }
+}
