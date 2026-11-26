@@ -20,7 +20,7 @@ pub type Text = (&'static str, &'static str, &'static [AsmOperand]);
 /// misses it before the next is asked, and the late passes ask again for every
 /// instruction they read (`code_of`, `text` and `bits`: 6 % of lexer.c's
 /// compile). The pin indexes its tables by opcode.
-type Kept<T> = std::thread::LocalKey<std::cell::RefCell<llrm_support::hash::HashMap<Box<str>, Option<T>>>>;
+pub(crate) type Kept<T> = std::thread::LocalKey<std::cell::RefCell<llrm_support::hash::HashMap<Box<str>, Option<T>>>>;
 
 thread_local! {
     static CODES: std::cell::RefCell<llrm_support::hash::HashMap<Box<str>, Option<u16>>> = Default::default();
@@ -30,7 +30,7 @@ thread_local! {
     static SEARCHES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
-fn cached<T: Copy>(
+pub(crate) fn cached<T: Copy>(
     kept: &'static Kept<T>,
     name: &str,
     search: impl FnOnce(&str) -> Option<T>,
