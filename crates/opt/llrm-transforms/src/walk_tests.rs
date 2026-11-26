@@ -4134,19 +4134,21 @@ fn test_a_target_that_prices_bytes_at_o1_still_reads_its_o1_bar_there() {
     assert!(calls(&top_at(crate::pipeline::Options::standard(), [None, low, None])), "-O2's own bar did not apply");
 }
 
-/// m32 -O1 and every m16 level moved when the cut-bar trial took a target's
-/// flat bar, or a level it does not cut, for a cut (`switch_peeled_table` -O1
-/// and six m16 programs came out different). Only a level entry below the
-/// level's own bar is one.
+/// m32 -O1 (a bar of 125 there) and every m16 level moved when the cut-bar
+/// trial took a target's flat bar, or a level it does not cut, for a cut
+/// (`switch_peeled_table` -O1 and six m16 programs came out different). Only a
+/// level entry below the level's own bar is one.
 #[test]
 fn only_a_level_entry_below_the_levels_own_bar_is_a_cut() {
     use llrm_mir::tti::Tti;
     let mut tti = llrm_x86::tti::X86::of_cpu("x86-64").unwrap();
+    tti.tuning.inline_threshold_o1 = Some(112);
     tti.tuning.inline_threshold_o2 = Some(150);
     let levels =
         |tti: &llrm_x86::tti::X86| [1, 2, 3].map(|level| super::cut_from(Some(tti as &dyn Tti), Some(level), 225));
-    assert_eq!(levels(&tti), [None, Some(225), None], "the -O2 entry is the cut");
+    assert_eq!(levels(&tti), [None, Some(225), None], "the -O2 entry is the cut, the -O1 one is not");
     assert_eq!(super::cut_from(Some(&tti), None, 225), None, "a size caller has no level");
+    tti.tuning.inline_threshold_o1 = None;
     tti.tuning.inline_threshold_o2 = Some(300);
     assert_eq!(levels(&tti), [None, None, None], "an entry above the own bar is no cut");
     tti.tuning.inline_threshold_o2 = None;

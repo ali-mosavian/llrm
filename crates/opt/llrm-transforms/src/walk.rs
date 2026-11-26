@@ -1675,7 +1675,10 @@ fn cut_from(
     level: Option<u8>,
     own: i64,
 ) -> Option<i64> {
-    let bar = tti?.inline_threshold_at_level(level?)?;
+    // -O1 prices no byte in clocks: its cut is the bar's verdict, with no
+    // trial.
+    let level = level.filter(|level| *level >= 2)?;
+    let bar = tti?.inline_threshold_at_level(level)?;
     (bar < own).then_some(own)
 }
 
