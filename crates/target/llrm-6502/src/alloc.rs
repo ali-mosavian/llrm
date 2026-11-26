@@ -2273,6 +2273,7 @@ fn pointer_cells(
                     }
                     code if crate::pointer_alu::pointer_alu(code).is_some_and(|fold| at == fold.ptr) => true,
                     op::STZP | op::LEASP16 | op::JSRI => at == 0,
+                    code if code == spill::LEAOLD => at == 0,
                     _ => false,
                 };
             if !pointer_use {
@@ -2314,6 +2315,7 @@ fn pointer_bases(items: &[Item]) -> HashSet<String> {
                 crate::pointer_alu::pointer_alu(code).expect("guarded").ptr
             }
             op::STZP | op::LEASP16 | op::JSRI => 0,
+            code if code == spill::LEAOLD => 0,
             _ => continue,
         };
         if let Some(Machine::Reg(cell)) = operands.get(at)
@@ -3316,6 +3318,44 @@ pub fn build_with_places(
                 let n = immediate(&o[0])? as u16;
                 b.push(Inst::new(Kind::Op("ADJSP"), vec![Operand::Def(Reg::Phys(reg::A)), Operand::Imm(i64::from(n))]));
             }
+            // rs0 := (rs0 - size) & -align, the old rs0 stored at rs0 + slot
+            code if code == spill::ALIGNSP => {
+                let mut align = Inst::new(
+                    Kind::Op("ALIGNSP"),
+                    vec![
+                        Operand::Def(Reg::Phys(reg::A)),
+                        Operand::Def(Reg::Phys(reg::Y)),
+                        Operand::Imm(immediate(&o[0])?),
+                        Operand::Imm(immediate(&o[1])?),
+                        Operand::Imm(immediate(&o[2])?),
+                    ],
+                );
+                align.side_effects = true;
+                b.push(align);
+            }
+            // d := the old rs0 + n
+            code if code == spill::LEAOLD => {
+                let (low, high) = b.write_word(name(&o[0])?)?;
+                let mut lea = Inst::new(
+                    Kind::Op("LEAOLD"),
+                    vec![
+                        Operand::Def(low),
+                        Operand::Def(high),
+                        Operand::Def(Reg::Phys(reg::A)),
+                        Operand::Def(Reg::Phys(reg::Y)),
+                        Operand::Imm(immediate(&o[1])? as u16 as i64),
+                        Operand::Imm(immediate(&o[2])?),
+                    ],
+                );
+                lea.may_load = true;
+                b.push(lea);
+            }
+            // rs0 := the old rs0, after the result copies: `a` is kept
+            code if code == spill::RESTORESP => {
+                let mut restore = Inst::new(Kind::Op("RESTORESP"), vec![Operand::Imm(immediate(&o[0])?)]);
+                restore.side_effects = true;
+                b.push(restore);
+            }
             op::JSR => {
                 let Machine::Label(callee) = &o[0] else { return Err(Unsupported("a call to a non-label".into())) };
                 b.call(callee);
@@ -3442,6 +3482,13 @@ pub fn build_with_places(
             }
             op::RET => {
                 let results = results(&b.function.blocks[b.current].insts);
+                // a realigned frame is released after the result copies, which
+                // may reload spills
+                let insts = &mut b.function.blocks[b.current].insts;
+                if let Some(at) = insts.iter().rposition(|inst| inst.kind == Kind::Op("RESTORESP")) {
+                    let restore = insts.remove(at);
+                    b.push(restore);
+                }
                 let mut ret =
                     Inst::new(Kind::Op("RTS"), results.into_iter().map(|r| Operand::Use(Reg::Phys(r))).collect());
                 ret.terminator = true;
@@ -3497,7 +3544,7 @@ fn results(insts: &[Inst]) -> Vec<RegId> {
     for inst in insts.iter().rev() {
         match (inst.kind, inst.operands.first()) {
             (Kind::Copy, Some(Operand::Def(Reg::Phys(p)))) => out.push(*p),
-            (Kind::Op("ADJSP" | "UNPACK"), _) => {}
+            (Kind::Op("ADJSP" | "UNPACK" | "RESTORESP"), _) => {}
             _ => break,
         }
     }
@@ -4446,7 +4493,12 @@ fn save_preserved<const STACK: bool>(
         let mut out = Vec::with_capacity(block.insts.len());
         for inst in std::mem::take(&mut block.insts) {
             if inst.kind == Kind::Op("RTS") {
+                // soft-stack slots are reloaded from `rs0`, so before a
+                // realigned frame gives it back. The hardware-stack
+                // restore may end in a jump that returns, so it stays after.
+                let release = out.pop_if(|inst: &mut Inst| STACK && inst.kind == Kind::Op("RESTORESP"));
                 out.extend(restores.iter().cloned());
+                out.extend(release);
             }
             out.push(inst);
         }
@@ -4455,7 +4507,7 @@ fn save_preserved<const STACK: bool>(
     // after the frame is allocated: its slots are addressed from the adjusted
     // stack pointer
     let entry = &mut function.blocks[0].insts;
-    let mut at = usize::from(entry.first().is_some_and(|inst| inst.kind == Kind::Op("ADJSP")));
+    let mut at = usize::from(entry.first().is_some_and(|inst| matches!(inst.kind, Kind::Op("ADJSP" | "ALIGNSP"))));
     // an argument that arrives in `a` or `x` is copied out first: a push goes
     // through `a`. Not into a cell the push is about to save: the push would
     // keep the argument, and the caller's value of the cell would be lost.
@@ -4490,7 +4542,7 @@ fn save_preserved<const STACK: bool>(
 /// in `a` on the stack around itself.
 fn open_frame_before_slots(function: &mut MFunction<Class>) {
     let entry = &mut function.blocks[0].insts;
-    let Some(open) = entry.iter().position(|inst| inst.kind == Kind::Op("ADJSP")) else { return };
+    let Some(open) = entry.iter().position(|inst| matches!(inst.kind, Kind::Op("ADJSP" | "ALIGNSP"))) else { return };
     let addresses_slot = |inst: &Inst| {
         matches!(inst.kind, Kind::Op("SPILL" | "RELOAD"))
             || inst.operands.iter().any(|o| matches!(o, Operand::Frame(_)))
@@ -4590,10 +4642,11 @@ fn emit_with<const STACK: bool>(
         .clone()
         .find_map(|i| match (i.kind, &i.operands[..]) {
             (Kind::Op("ADJSP"), [_, Operand::Imm(n)]) if (*n as u16 as i16) < 0 => Some(-i64::from(*n as u16 as i16)),
+            (Kind::Op("ALIGNSP"), [_, _, Operand::Imm(size), ..]) => Some(*size),
             _ => None,
         })
         .unwrap_or(0);
-    let has_frame = all.clone().any(|i| i.kind == Kind::Op("ADJSP"));
+    let has_frame = all.clone().any(|i| matches!(i.kind, Kind::Op("ADJSP" | "ALIGNSP")));
     let slot_offset = |slot: i32| -> i64 {
         old + slots.iter().take_while(|(s, _)| *s != slot).map(|(_, class)| size_of(class) as i64).sum::<i64>()
     };
@@ -5205,6 +5258,51 @@ fn emit_with<const STACK: bool>(
                             out.push_str("  pla\n");
                         }
                     }
+                }
+                (Kind::Op("ALIGNSP"), [_, _, Operand::Imm(size), Operand::Imm(align), Operand::Imm(slot)]) => {
+                    let size = (*size + spilled) as u16;
+                    let mask = (-*align) as u16;
+                    if a_live {
+                        out.push_str("  pha\n");
+                    }
+                    writeln!(out, "  lda rc1\n  pha\n  lda rc0\n  pha").unwrap();
+                    writeln!(out, "  sec\n  lda rc0\n  sbc #{}\n  and #{}\n  sta rc0", size & 0xFF, mask & 0xFF)
+                        .unwrap();
+                    writeln!(out, "  lda rc1\n  sbc #{}", size >> 8).unwrap();
+                    if mask >> 8 != 0xFF {
+                        writeln!(out, "  and #{}", mask >> 8).unwrap();
+                    }
+                    writeln!(out, "  sta rc1\n  ldy #{slot}\n  pla\n  sta (rc0),y\n  iny\n  pla\n  sta (rc0),y")
+                        .unwrap();
+                    if a_live {
+                        out.push_str("  pla\n");
+                    }
+                }
+                (Kind::Op("RESTORESP"), [Operand::Imm(slot)]) => {
+                    if a_live {
+                        out.push_str("  pha\n");
+                    }
+                    writeln!(
+                        out,
+                        "  ldy #{slot}\n  lda (rc0),y\n  pha\n  iny\n  lda (rc0),y\n  sta rc1\n  pla\n  sta rc0"
+                    )
+                    .unwrap();
+                    if a_live {
+                        out.push_str("  pla\n");
+                    }
+                }
+                (Kind::Op("LEAOLD"), [_, _, _, _, Operand::Imm(n), Operand::Imm(slot)]) => {
+                    let n = *n as u16;
+                    writeln!(out, "  ldy #{slot}\n  lda (rc0),y").unwrap();
+                    if n != 0 {
+                        writeln!(out, "  clc\n  adc #{}", n & 0xFF).unwrap();
+                    }
+                    move_byte(&mut out, regs[0], reg::A, false, None, None);
+                    writeln!(out, "  iny\n  lda (rc0),y").unwrap();
+                    if n != 0 {
+                        writeln!(out, "  adc #{}", n >> 8).unwrap();
+                    }
+                    move_byte(&mut out, regs[1], reg::A, false, None, None);
                 }
                 (Kind::Op("LEA"), [_, _, _, Operand::Imm(n)]) => {
                     let n = i64::from(*n as u16);
