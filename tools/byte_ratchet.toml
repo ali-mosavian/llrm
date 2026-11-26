@@ -1,0 +1,27 @@
+# The targets of tools/byte_ratchet.py: a target joins with a table here and a first `--update`.
+# Placeholders: {root} {clang} (the pin's) {compiler} (from LLRM_BIN) {level} {source} (relative to the root) {work}.
+# `bytes_pattern`: every match in the `sized` file is a number of code bytes in base `radix`; they are summed.
+
+[z80]
+compiler = "llrm-z80-llc"
+needs = ["sdasz80", "prlimit"]
+corpus = ["tests/run/c/*.c", "bench/*/*.c"]
+corpus_target = "z80-sdcc"
+levels = { O1 = "1", O2 = "2", O3 = "3", Os = "s" }
+cpu_seconds = 120
+# the object's code area: no runtime members, no link
+sized = "{work}/p.rel"
+bytes_pattern = '^A _CODE size ([0-9A-F]+) '
+radix = 16
+
+[[z80.step]]
+name = "clang"
+command = ["python3", "{root}/crates/target/llrm-z80/tests/programs/run.py", "--clang", "{clang}", "--level", "{level}", "--emit-ir", "{work}/p.ll", "{source}"]
+
+[[z80.step]]
+name = "llc"
+command = ["{compiler}", "-S", "-O{level}", "-o", "{work}/p.s", "{work}/p.ll"]
+
+[[z80.step]]
+name = "asm"
+command = ["sdasz80", "-g", "-o", "{work}/p.rel", "{work}/p.s"]
