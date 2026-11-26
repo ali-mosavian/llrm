@@ -1443,13 +1443,15 @@ fn data_text(
         if crate::select::exported(global.linkage) && label == name {
             out.push_str(&format!(".export {label}\n"));
         }
+        // up to the widest scalar the front end states a type's own alignment,
+        // asked for or not, and nothing is placed for it (row 6502-DATA-ALIGN).
         // `.align` counts from the segment's start, which the linker's cfg
         // must align as far: `machines/*.cfg` align to `MAX_DATA_ALIGN`
         let (align, aligned) = match variable.align {
             Some(align) if align > MAX_DATA_ALIGN => {
                 return Err(format!("{name} is aligned to {align}: past {MAX_DATA_ALIGN}"));
             }
-            Some(align) if align > 1 => (format!(".align {align}\n"), true),
+            Some(align) if align > crate::frame::REALIGN_ABOVE => (format!(".align {align}\n"), true),
             _ => (String::new(), false),
         };
         // a variable of zeros is BSS, which the platform's startup clears: it
