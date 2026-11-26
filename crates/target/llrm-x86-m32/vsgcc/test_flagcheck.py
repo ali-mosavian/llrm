@@ -1,4 +1,5 @@
 """vsgcc flag parity: a flag on one side only is refused, not measured (arm64 shipped 24 of 72 cells off by 4..16 B that way)."""
+import subprocess
 import sys
 from pathlib import Path
 
@@ -45,6 +46,25 @@ def test_a_program_using_wchar_t_is_refused_since_the_columns_disagree_on_its_si
     assert f.uses_wide_chars('const wchar_t *s = L"ab";')
     assert not f.uses_wide_chars('report(bench_open_read("NOSUCH.FIL"));')
     assert not f.uses_wide_chars("int FILL = 1; long BULL(void);")
+
+
+def test_a_column_aligning_its_calls_unlike_ours_is_refused(tmp_path):
+    """The table built the bars at a 16-byte stack beside ours at 4: they stored arguments into a reserved frame where ours
+    pushed, and hundreds of cells read as lost to the compiler."""
+    (tmp_path / "p.c").write_text(f.PROBE)
+    flags = ["gcc", "-m32", "-march=i486", "-fno-pic", "-O2", "-S", "-masm=intel", "-o", "-", str(tmp_path / "p.c")]
+    sixteen = subprocess.run(flags, capture_output=True, text=True, check=True).stdout
+    four = subprocess.run([*flags[:1], "-mpreferred-stack-boundary=2", *flags[1:]], capture_output=True, text=True, check=True).stdout
+    ours = "_f proc near\n    pushd 1\n    call _g\n    pop ecx\n    ret\n_f endp\n"
+    assert f.check_stack(ours, four) == ""
+    assert "4 bytes in ours, 16" in f.check_stack(ours, sixteen)
+
+
+def test_build_sh_refuses_either_external_whose_calls_align_the_stack_unlike_ours():
+    """The check beside the table, not only in the module: a build with a mismatched bar must not produce one."""
+    text = (Path(__file__).parent / "build.sh").read_text()
+    for bar in ("gcc", "clang"):
+        assert f'flagcheck.py" stack stack.$P.llrm.s stack.$P.{bar}.s || fail' in text
 
 
 def _llrm_lines():
