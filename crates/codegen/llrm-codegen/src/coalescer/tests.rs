@@ -1729,7 +1729,7 @@ fn test_a_target_with_no_opinion_on_a_join_is_not_asked_to_build_one() {
 
     use llrm_lir::registers::RegId;
 
-    use super::env::{JOINS_BUILT, TargetEnv};
+    use super::env::{JOINS_BUILT, SIDES_SCANNED, TargetEnv};
     let run = |should_join: Option<Box<dyn Fn(&super::env::Join) -> bool>>, free: bool, narrows: bool| {
         let c = copy(2, 1);
         let was = body(&[(&[constant_named(1, "CONST_I32"), Arc::clone(&c)], &[1]), (&[read(2)], &[])]);
@@ -1759,15 +1759,19 @@ fn test_a_target_with_no_opinion_on_a_join_is_not_asked_to_build_one() {
         };
         let mut lis = LiveIntervals::new(&was);
         let before = JOINS_BUILT.with(std::cell::Cell::get);
+        let scanned = SIDES_SCANNED.with(std::cell::Cell::get);
         let result = join_copy(&mut lis, &env, &mut State::new(), &mut Default::default(), c.id());
         assert_eq!(result, JoinResult::Joined);
-        JOINS_BUILT.with(std::cell::Cell::get) - before
+        (JOINS_BUILT.with(std::cell::Cell::get) - before, SIDES_SCANNED.with(std::cell::Cell::get) - scanned)
     };
     let yes = || Some(Box::new(|_: &super::env::Join| true) as Box<dyn Fn(&super::env::Join) -> bool>);
-    assert_eq!(run(yes(), false, false), 1, "premise: an opinion is built a join for");
-    assert_eq!(run(None, false, false), 0);
-    assert_eq!(run(yes(), true, false), 0, "a join that narrows nothing is priced 0 and taken unbuilt");
-    assert_eq!(run(yes(), true, true), 1, "a join that takes a register away is priced");
+    assert_eq!(run(yes(), false, false).0, 1, "premise: an opinion is built a join for");
+    assert_eq!(run(None, false, false).0, 0);
+    assert_eq!(run(yes(), true, false).0, 0, "a join that narrows nothing is priced 0 and taken unbuilt");
+    assert_eq!(run(yes(), true, true).0, 1, "a join that takes a register away is priced");
+    // One side keeps the registers it had: its uses were read anyway, one in
+    // two of the use scans of a compile's joins.
+    assert_eq!(run(yes(), true, true).1, 1, "only the narrowed side's uses are read");
 }
 
 /// `v := implicit_def`: the value a phi's predecessor gets where the phi's
