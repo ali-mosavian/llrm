@@ -201,6 +201,26 @@ pub fn optimized_dumping(
     level: Level,
     dumped: bool,
 ) -> Result<(), String> {
+    mid_end(program, level, dumped)?;
+    merged_globals(program, level)
+}
+
+thread_local! {
+    static MID_ENDS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many times this thread has run the mid-end.
+pub fn mid_ends() -> usize {
+    MID_ENDS.with(std::cell::Cell::get)
+}
+
+/// The mid-end at `level`, and what it leaves lowered for selection.
+fn mid_end(
+    program: &mut Program,
+    level: Level,
+    dumped: bool,
+) -> Result<(), String> {
+    MID_ENDS.with(|runs| runs.set(runs.get() + 1));
     let dump = std::env::var_os("LLRM_MIR_STAGES").filter(|one| !one.is_empty() && dumped).map(Into::into);
     let mut options = level.options();
     {
@@ -210,7 +230,15 @@ pub fn optimized_dumping(
     }
     options.library = c_library();
     llrm_transforms::pipeline::applied(program, &Applied { dump, options, ..Applied::default() })?;
-    lowered_before_selection(program)?;
+    lowered_before_selection(program)
+}
+
+/// What runs between the mid-end and selection on the whole program
+/// (`addIRPasses`).
+fn merged_globals(
+    program: &mut Program,
+    level: Level,
+) -> Result<(), String> {
     // `addIRPasses`: GlobalMerge, after the mid-end, before selection.
     if let Some(mut merge) = program.target.global_merge(level == Level::O3) {
         // DEVIATE GM-TRIAL (`crate::trial`): the trial compile merges as the
@@ -619,45 +647,73 @@ fn compiled(
     // The sites the compile in force inlines whatever the guard says.
     let forced: std::cell::RefCell<Vec<llrm_transforms::trial::Site>> = std::cell::RefCell::new(Vec::new());
     let dumping = std::cell::Cell::new(true);
-    let once = |(unrotated, more, unmerged, divided, hinted): (bool, bool, bool, bool, u8)| -> Result<Built, String> {
-        let mut program = program(text, platform)?;
-        if refuse_aliases {
-            // The text carries no alias: refuse it rather than drop the symbol.
-            program.modules[0].refuse_aliases("arm64")?;
-        }
-        if debug {
-            llrm_mir::dbgimport::types_and_globals(&mut program.modules[0]);
-        }
-        if level != Level::O0 {
-            let run = |program: &mut Program| {
-                with_aliases(!refuse_aliases, || optimized_dumping(program, level, dumping.get()))
-            };
-            let go = |program: &mut Program| match (unrotated, more) {
-                (true, _) => llrm_transforms::trial::with_unrotated(|| run(program)),
-                (_, true) => llrm_transforms::trial::with_more_rotation(|| run(program)),
-                _ => run(program),
-            };
-            // `hinted`: 1 keeps the hinted calls, 2 those and the negative
-            // ones; bit 4 the calls at a loop site
-            // (INLINEHINT-LOOP-TRIAL).
-            let go = |program: &mut Program| match hinted & 3 {
-                0 => go(program),
-                1 => llrm_transforms::trial::with_kept_hinted_calls(|| go(program)),
-                _ => llrm_transforms::trial::with_kept_hinted_calls(|| {
-                    llrm_transforms::trial::with_kept_negative_calls(|| go(program))
-                }),
-            };
-            let go = |program: &mut Program| {
-                if hinted & 4 != 0 { llrm_transforms::trial::with_kept_loop_calls(|| go(program)) } else { go(program) }
-            };
-            let go = |program: &mut Program| {
+    // The program after each stage before the backend, by what the stage and
+    // those before it were told: a trial that changes only a later stage takes
+    // the earlier ones as they were built. The stages are only read when a
+    // build writes none.
+    let mut after_mid_end = llrm_transforms::trial::Reuse::default();
+    let mut after_merge = llrm_transforms::trial::Reuse::default();
+    let mut once = |(unrotated, more, unmerged, divided, hinted): (bool, bool, bool, bool, u8)| -> Result<Built, String> {
+        let parsed = || -> Result<Program, String> {
+            let mut program = program(text, platform)?;
+            if refuse_aliases {
+                // The text carries no alias: refuse it rather than drop the symbol.
+                program.modules[0].refuse_aliases("arm64")?;
+            }
+            if debug {
+                llrm_mir::dbgimport::types_and_globals(&mut program.modules[0]);
+            }
+            Ok(program)
+        };
+        let program = if level != Level::O0 {
+            let optimized = || -> Result<Program, String> {
+                let mut program = parsed()?;
+                let run = |program: &mut Program| {
+                    with_aliases(!refuse_aliases, || mid_end(program, level, dumping.get()))
+                };
+                let go = |program: &mut Program| match (unrotated, more) {
+                    (true, _) => llrm_transforms::trial::with_unrotated(|| run(program)),
+                    (_, true) => llrm_transforms::trial::with_more_rotation(|| run(program)),
+                    _ => run(program),
+                };
+                // `hinted`: 1 keeps the hinted calls, 2 those and the negative
+                // ones; bit 4 the calls at a loop site
+                // (INLINEHINT-LOOP-TRIAL).
+                let go = |program: &mut Program| match hinted & 3 {
+                    0 => go(program),
+                    1 => llrm_transforms::trial::with_kept_hinted_calls(|| go(program)),
+                    _ => llrm_transforms::trial::with_kept_hinted_calls(|| {
+                        llrm_transforms::trial::with_kept_negative_calls(|| go(program))
+                    }),
+                };
+                let go = |program: &mut Program| {
+                    if hinted & 4 != 0 {
+                        llrm_transforms::trial::with_kept_loop_calls(|| go(program))
+                    } else {
+                        go(program)
+                    }
+                };
                 let sites = forced.borrow().clone();
-                llrm_transforms::trial::with_inlined(&sites, || go(program))
+                llrm_transforms::trial::with_inlined(&sites, || go(&mut program))?;
+                Ok(program)
             };
-            if unmerged { crate::trial::without_merge(|| go(&mut program))? } else { go(&mut program)? }
+            let before = (unrotated, more, hinted, forced.borrow().clone());
+            let merged = || -> Result<Program, String> {
+                let mut program = if dumping.get() {
+                    optimized()?
+                } else {
+                    after_mid_end.get_or(before.clone(), optimized)?
+                };
+                let run = |program: &mut Program| with_aliases(!refuse_aliases, || merged_globals(program, level));
+                if unmerged { crate::trial::without_merge(|| run(&mut program))? } else { run(&mut program)? }
+                Ok(program)
+            };
+            if dumping.get() { merged()? } else { after_merge.get_or((before.clone(), unmerged), merged)? }
         } else {
+            let mut program = parsed()?;
             lowered_before_selection(&mut program)?;
-        }
+            program
+        };
         let mut notes = Notes::default();
         if divide_trial {
             notes.divides = crate::trial::divides_by_constant(&program.modules[0]);
