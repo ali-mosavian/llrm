@@ -184,3 +184,25 @@ fn the_model_can_say_no() {
     let mut f = either(chain);
     assert_eq!(run(&mut f, false, false), 0);
 }
+
+/// Every epoch of the pass modelled every instruction of the body for the trace
+/// metrics (143 of a 4-million-instruction module's 176 M for `ccmp`), though
+/// at minimum size the code size decides a candidate and a body with no
+/// candidate needs no trace. A body is modelled when a candidate needs it.
+#[test]
+fn the_body_is_modelled_only_for_a_candidate_the_size_does_not_decide() {
+    let before = metrics_built();
+    let mut quiet = function(vec![
+        block("head", vec![cmp(v(1), 7), jump("out")]),
+        block("mid", vec![jump("out")]),
+        block("out", vec![Op::Return { uses: vec![], tail: None }]),
+    ]);
+    assert_eq!(run(&mut quiet, false, false), 0);
+    assert_eq!(metrics_built(), before, "a body with no candidate was modelled");
+    let mut sized = either(vec![cmp(v(2), 9)]);
+    assert_eq!(run(&mut sized, true, false), 1, "premise: at minimum size the two compares become a ccmp");
+    assert_eq!(metrics_built(), before, "a candidate the size decides was modelled");
+    let mut timed = either(vec![cmp(v(2), 9)]);
+    run(&mut timed, false, false);
+    assert!(metrics_built() > before, "premise: a candidate the clocks decide is modelled");
+}
