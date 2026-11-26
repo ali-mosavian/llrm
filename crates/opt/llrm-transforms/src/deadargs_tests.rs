@@ -282,7 +282,7 @@ b0:
 
 /// A function whose live parameter is `returned` keeps its return value (the
 /// pin's `HasLiveReturnedArg`). Dropping it left `returned` on a void
-/// function, which the pin's verifier rejects (QB `fpmath` `fmth_check`).
+/// function, which the pin's verifier rejects.
 #[test]
 fn a_return_value_of_a_returned_parameter_is_kept() {
     let after = run(&format!(
