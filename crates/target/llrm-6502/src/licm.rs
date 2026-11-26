@@ -205,8 +205,9 @@ impl Policy<Wrapped> for Mos {
         facts: &Facts<'_, Wrapped>,
     ) {
         self.calls = facts.inside_blocks().any(|block| block.insns.iter().any(|one| one.inst.call));
-        self.moves_sp =
-            facts.inside_blocks().any(|block| block.insns.iter().any(|one| matches!(one.inst.kind, Kind::Op("ADJSP"))));
+        self.moves_sp = facts.inside_blocks().any(|block| {
+            block.insns.iter().any(|one| matches!(one.inst.kind, Kind::Op("ADJSP" | "ALIGNSP" | "RESTORESP")))
+        });
         // `a` read before any write of it in its block comes from before the
         // block: from the preheader or an earlier trip, which the hoisted
         // `LEA` would overwrite.

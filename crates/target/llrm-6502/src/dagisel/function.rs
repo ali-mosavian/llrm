@@ -40,9 +40,9 @@ pub fn builder_target() -> BuilderTarget {
         shift_amount: EVT::I8,
         legal_ints: vec![8, 16],
         soft_float: true,
-        // the builder refuses what the machine refuses (6502-ALLOCA-ALIGN,
-        // driver.rs)
-        max_alloca_align: Some(crate::frame::MAX_ALLOCA_ALIGN),
+        // the frame realigns the stack for an over-aligned object
+        // (6502-REALIGN)
+        max_alloca_align: None,
         jump_tables: false,
         string_instructions: false,
         // the runtime's own routines (runtime/mos_rt.s), called by the name the
@@ -97,14 +97,21 @@ pub struct Edge {
     pub copies: Vec<(u32, u32)>,
 }
 
-/// A selected function: its blocks and the sizes of its local frame objects, by
-/// frame index.
+/// A local frame object: its size and the alignment the frame gives it.
+#[derive(Clone, Copy, Debug)]
+pub struct Local {
+    pub size: i64,
+    pub align: i64,
+}
+
+/// A selected function: its blocks and its local frame objects, by frame
+/// index.
 pub struct Selection {
     /// Which selection this is: unique to the thread, what a cached text of it
     /// is keyed by (a selection is moved, not copied).
     pub id: u64,
     pub blocks: Vec<Selected>,
-    pub locals: Vec<i64>,
+    pub locals: Vec<Local>,
     /// The subtarget it was selected for: emission expands to the same CPU.
     pub cpu: Cpu,
     /// The width in bits of the register of every value that has one: a phi
@@ -301,7 +308,7 @@ pub fn select_function_with(
         selected_block?;
     }
     // The stack objects the builder made follow the static allocas.
-    locals.extend(info.objects.iter().map(|(size, _)| i64::from(*size)));
+    locals.extend(info.objects.iter().map(|(size, _)| Local { size: i64::from(*size), align: 1 }));
     let mut widths: HashMap<u32, u32> = info
         .value_regs
         .iter()
@@ -348,14 +355,14 @@ fn alloca_sizes(
     function: &Function,
     layout: &DataLayout,
     info: &FunctionLoweringInfo,
-) -> Result<Vec<i64>, String> {
-    let mut sizes = vec![0; info.static_allocas.iter().count()];
+) -> Result<Vec<Local>, String> {
+    let mut sizes = vec![Local { size: 0, align: 1 }; info.static_allocas.iter().count()];
     for (value, index) in info.static_allocas.iter() {
         let ValueDef::Instruction(def) = function.value(value).def else {
             return Err("an alloca that is not an instruction".into());
         };
         let instruction = function.instruction(def);
-        let Opcode::Alloca { allocated, .. } = instruction.opcode else {
+        let Opcode::Alloca { allocated, align, .. } = instruction.opcode else {
             return Err("an alloca that is not an alloca".into());
         };
         let count = match instruction.operands.first() {
@@ -366,7 +373,13 @@ fn alloca_sizes(
             },
             Some(_) => return Err("an alloca with a count that is not a constant".into()),
         };
-        sizes[*index as usize] = layout.alloc_size(&module.context.types, allocated) as i64 * count;
+        // what the frame keeps is 1: only an object past `REALIGN_ABOVE` is
+        // aligned
+        let wanted = align.unwrap_or_else(|| layout.align(&module.context.types, allocated));
+        sizes[*index as usize] = Local {
+            size: layout.alloc_size(&module.context.types, allocated) as i64 * count,
+            align: if wanted > crate::frame::REALIGN_ABOVE { wanted as i64 } else { 1 },
+        };
     }
     Ok(sizes)
 }
