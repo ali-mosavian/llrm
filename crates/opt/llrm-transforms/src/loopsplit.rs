@@ -593,8 +593,24 @@ fn plan_for(
             // would pass, so the bound `compute_new_first_bound` makes is in
             // range.
             if !exit_ne {
-                let beg = se.get_minus_scev(cx, Use::of(x_rec.start), Use::of(x_rec.step_scev), 0, 0);
                 let end_scev = se.get_scev(cx, end);
+                // `start - step < end` is `start < end + step` in the integers.
+                // A constant `end + step` that fits the type states it without
+                // the subtraction, which wraps at the type's minimum and so
+                // cannot be proved from `start < k`, whose true first test
+                // passes there too.
+                let shifted = se.as_constant(end_scev).filter(|_| bits <= 64).and_then(|bound| {
+                    let value = if signed { bound.sext_value() } else { bound.zext_value() as i128 };
+                    let moved = value + x_rec.step;
+                    let (low, high) =
+                        if signed { (-(1i128 << (bits - 1)), (1i128 << (bits - 1)) - 1) } else { (0, (1i128 << bits) - 1) };
+                    (low..=high).contains(&moved).then_some(moved)
+                });
+                let shifted = shifted.map(|moved| se.get_constant(llrm_analysis::scev::ap::Ap::from_signed(bits, moved)));
+                let (beg, end_scev) = match shifted {
+                    Some(moved) => (x_rec.start, moved),
+                    None => (se.get_minus_scev(cx, Use::of(x_rec.start), Use::of(x_rec.step_scev), 0, 0), end_scev),
+                };
                 if !se.is_available_at_loop_entry(cx, beg, header)
                     || !se.is_available_at_loop_entry(cx, end_scev, header)
                 {

@@ -453,8 +453,8 @@ fn test_a_range_test_of_the_counter_splits_at_its_borders() {
 /// not exclude, so the new bound was left unproved and the loop whole.
 #[test]
 fn test_a_range_guard_on_a_counter_that_starts_one_below_the_entry_value_splits() {
-    let text = counting("icmp slt i32 %n, 256", "%b", "add nsw", 1, "icmp ult i32 %t, 28", "icmp slt i32 %i.next, 255")
-        .replace("pre:\n  br label %loop", "pre:\n  %b = add i32 %n, -1\n  br label %loop")
+    let text = counting("icmp slt i32 %n, 256", "%first", "add nsw", 1, "icmp ult i32 %t, 28", "icmp slt i32 %i.next, 255")
+        .replace("pre:\n  br label %loop", "pre:\n  %first = add i32 %n, -1\n  br label %loop")
         .replace("  %c = icmp", "  %t = add i32 %i, -191\n  %c = icmp");
     assert_split(&text);
 }
