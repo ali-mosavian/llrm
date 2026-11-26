@@ -37,6 +37,9 @@ use super::generated::ids::reg as pin;
 use super::generated::instrinfo;
 use super::generated::m68k_m68000::MACHINE_OPCODES;
 
+pub(crate) const TABLE: super::local::Table =
+    super::local::Table { code_of, name_of, desc, text: source_asm, bits: source_encoding };
+
 /// Codes of the writeback instructions, above every code of the pin's table.
 const FIRST: u16 = 0xF000;
 

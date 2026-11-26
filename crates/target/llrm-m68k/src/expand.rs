@@ -667,7 +667,7 @@ pub fn finish_with(
     let convert = |inst: &crate::mfunc::Inst, pushed: i64| -> Result<Vec<mc::Operand>, String> {
         let mut converted = Vec::new();
         let indexed_base = match inst.kind {
-            Kind::Op(name) => crate::scaledindex::memory_at(name).map(|(base, _)| base),
+            Kind::Op(name) => crate::dagisel::local::memory_at(name).map(|(base, _)| base),
             Kind::Copy => None,
         };
         let mut it = inst.operands.iter().enumerate().peekable();

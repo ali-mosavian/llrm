@@ -77,3 +77,31 @@ def test_the_level_under_test_replaces_the_perf_builds_own(tmp_path):
     for line in log.read_text().splitlines():
         words = line.split()
         assert "-Os" in words and "-O2" not in words and "-g" not in words, line
+
+
+def test_arm64_columns_use_the_arm64_compilers_flags_and_link_static(tmp_path):
+    """arm64 columns: aarch64 gcc, clang with its own headers and the cross glibc last, no x86 words, PAC/BTI off; the link is static (qemu-user needs no guest sysroot)."""
+    env, log = rig(tmp_path)
+    shutil.copy(tmp_path / "bin" / "gcc-15", tmp_path / "bin" / "aarch64-linux-gnu-gcc-15")
+    env["LLRM_ARM64_SYSROOT"] = "/sys/root"
+    for variant in ("gcc", "clang", "ours"):
+        assert compile_line(env, "arm64", variant).returncode == 0
+    gcc, clang, ours = (log.read_text().splitlines()[i].split() for i in (0, 1, 2))
+    assert "aarch64-linux-gnu-gcc-15" in gcc[0] and "gcc-15" in gcc[0]
+    for words in (gcc, clang, ours):
+        assert "-mbranch-protection=none" in words and "-fPIE" in words, words
+        assert not {"-m64", "-m32", "-fcf-protection=none", "-march=i486"} & set(words), words
+    assert "--target=aarch64-linux-gnu" in clang and "-nostdinc" in clang and clang[clang.index("-idirafter") + 1] == "/sys/root/usr/aarch64-linux-gnu/include"
+    every = tmp_path / "every"
+    (tmp_path / "bin" / "aarch64-linux-gnu-gcc-15").write_text(f'#!/bin/sh\necho "$0 $*" >> {every}\nexit 0\n')
+    link = subprocess.run([QBCC, "a.o", "-lm", "-o", "basic"], env=dict(env, QBA="arm64", QBV="gcc", QBL="Os"), capture_output=True, text=True)
+    assert link.returncode == 0 and "-static" in every.read_text().split(), link.stderr
+
+
+def test_the_guest_instruction_count_is_one_per_translation_block(tmp_path):
+    """count() reads qemu's one-instruction-per-block `Trace 0:` lines, skipping the program's own output: a stub qemu prints 3 of them and noise."""
+    (tmp_path / "qemu-aarch64").write_text('#!/bin/sh\nprintf "Trace 0: a\\nhello\\nTrace 0: b\\nTrace 0: c\\n"\n')
+    (tmp_path / "qemu-aarch64").chmod(0o755)
+    env = dict(os.environ, PATH=f"{tmp_path}:" + os.environ["PATH"])
+    out = subprocess.run(["python3", os.path.join(HERE, "qbclock.py"), "count", "exe", "prog.bas"], env=env, capture_output=True, text=True)
+    assert out.stdout.strip() == "3", out

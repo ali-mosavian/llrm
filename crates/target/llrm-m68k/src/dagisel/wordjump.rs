@@ -17,6 +17,9 @@ use super::asm::AsmOperand;
 use super::enc::{Enc, Piece};
 use super::generated::instrinfo;
 
+pub(crate) const TABLE: super::local::Table =
+    super::local::Table { code_of, name_of, desc, text: wordjump_asm, bits: wordjump_encoding };
+
 /// Code of the row, above the `bfffo` forms.
 pub const FIRST: u16 = 0xF800;
 

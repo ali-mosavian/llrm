@@ -14,17 +14,20 @@
 //! DEVIATE: the pin has no scaled index (its `ARII` operand has none, only
 //! `PCIBD` declares one), so it prints `lsl.l #2, %d1; move.l (0,%a0,%d1), %d0`
 //! for the one `move.l (%a0,%d1.l*4), %d0` gcc -m68020 uses. Reason: best of
-//! gcc and clang is the goal. Exit: review 2026-11-20. Only the 68020 and later select
-//! these rows; the 68000 and 68010 have no scale field.
+//! gcc and clang is the goal. Exit: review 2026-11-20. Only the 68020 and later
+//! select these rows; the 68000 and 68010 have no scale field.
 
 use std::sync::LazyLock;
 
 use llrm_dagisel::instr::InstrDesc;
+use llrm_support::hash::HashMap;
 
 use super::asm::{ASM, AsmOperand};
 use super::enc::{Piece, encoding};
 use super::generated::instrinfo;
-use super::local::cached;
+
+pub(crate) const TABLE: super::local::Table =
+    super::local::Table { code_of, name_of, desc, text: scaled_asm, bits: scaled_encoding };
 
 /// Codes of the scaled rows, in a range of their own: they follow the pin table
 /// (one row per scale of each indexed row), so they outgrew the 256 codes below
@@ -39,6 +42,10 @@ struct Row {
     base: &'static str,
     scale: u8,
 }
+
+/// Where each row of [`ROWS`] is, by name.
+static BY_NAME: LazyLock<HashMap<&'static str, usize>> =
+    LazyLock::new(|| ROWS.iter().enumerate().map(|(at, row)| (row.name, at)).collect());
 
 fn leak(text: String) -> &'static str {
     Box::leak(text.into_boxed_str())
@@ -77,7 +84,7 @@ pub fn names() -> impl Iterator<Item = &'static str> {
 
 /// The machine code of the scaled row `name`.
 pub fn code_of(name: &str) -> Option<u16> {
-    ROWS.iter().position(|one| one.name == name).map(|at| FIRST + at as u16)
+    BY_NAME.get(name).map(|&at| FIRST + at as u16)
 }
 
 /// The name of machine code `code`, when it is a scaled row's.
@@ -88,7 +95,7 @@ pub fn name_of(code: u32) -> Option<&'static str> {
 
 /// The scale of the row `name` (2, 4 or 8), when it is a scaled row's.
 pub fn scale_of(name: &str) -> Option<u8> {
-    ROWS.iter().find(|one| one.name == name).map(|one| one.scale)
+    BY_NAME.get(name).map(|&at| ROWS[at].scale)
 }
 
 /// The scaled sibling of the pin's row `base`.
@@ -101,11 +108,7 @@ pub fn scaled_name(
 
 /// The pin's row a scaled row derives from.
 pub fn base_of(name: &str) -> Option<&'static str> {
-    cached(&BASES, name, |name| ROWS.iter().find(|one| one.name == name).map(|one| one.base))
-}
-
-thread_local! {
-    static BASES: std::cell::RefCell<llrm_support::hash::HashMap<Box<str>, Option<&'static str>>> = Default::default();
+    BY_NAME.get(name).map(|&at| ROWS[at].base)
 }
 
 fn pin_code(name: &str) -> Option<u16> {

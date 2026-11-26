@@ -20,6 +20,9 @@ use super::asm::AsmOperand;
 use super::enc::{Enc, Piece};
 use super::generated::instrinfo;
 
+pub(crate) const TABLE: super::local::Table =
+    super::local::Table { code_of, name_of, desc, text: divrem_asm, bits: divrem_encoding };
+
 /// Codes of the divide-remainder instructions, above the short forms.
 pub const FIRST: u16 = 0xF200;
 
@@ -110,8 +113,8 @@ const fn bits(
     Piece::Const { lo, width, value }
 }
 
-/// `0100 1100 01 mode reg` and the extension word `0 Dq 1 S 0 0 0 0000000 0 Dr`:
-/// `divs.l` / `divu.l` with `Dr` the remainder register.
+/// `0100 1100 01 mode reg` and the extension word `0 Dq 1 S 0 0 0 0000000 0
+/// Dr`: `divs.l` / `divu.l` with `Dr` the remainder register.
 const fn pieces(signed: u64) -> [Piece; 9] {
     [
         field(0, 3, DIVISOR as u8),
