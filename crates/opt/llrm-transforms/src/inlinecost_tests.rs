@@ -1436,6 +1436,17 @@ fn a_site_over_the_cut_bar_and_under_the_levels_own_is_blocked_for_the_trial() {
     assert!(blocked(Some(own), false, CallerSize::Speed), "the cut bar's refusal is not a trial");
     assert!(!blocked(None, false, CallerSize::Speed), "a bar that was not cut made a trial");
     assert!(!blocked(Some(own), true, CallerSize::Speed), "-O1 takes the pin's verdict, no trial");
+    // A trial costs the caller's cleanup list again: a call with an argument
+    // that is not a constant has nothing to fold whole (+4.55% compile at -O2
+    // when every refused site was tried).
+    let unknown = COMPARE_LOOP
+        .replace("define void @f() {", "define void @f(i32 %x) {")
+        .replace("@callee(i32 noundef 1)", "@callee(i32 noundef %x)");
+    let params = InlineParams { default_threshold: cost, cut_from: Some(own), ..InlineParams::from_level(2) };
+    match inline_cost_hot(&unknown, 0, false, CallerSize::Speed, None, params, (2, false), None) {
+        InlineCost::Cost { blocked, .. } => assert!(!blocked, "a call of an unknown argument made a trial"),
+        other => panic!("{other:?}"),
+    }
 }
 
 /// z80 -O1 inlined with the -O2 byte price (1 B = 3 T): 5 cells bigger or

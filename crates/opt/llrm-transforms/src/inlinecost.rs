@@ -3190,6 +3190,16 @@ fn stores_through(
     }
 }
 
+/// Whether the call passes at least one argument and every one is a constant:
+/// the callee's copy may fold whole (a pure function of constants), which the
+/// cost does not follow past a loop. A trial costs the caller's cleanup list
+/// once more, so only such a site earns one.
+fn every_argument_is_constant(site: &Site) -> bool {
+    let operands = &site.caller.instruction(site.call).operands;
+    let arguments = &operands[..operands.len().saturating_sub(1)];
+    !arguments.is_empty() && arguments.iter().all(|one| matches!(one, llrm_mir::module::Operand::Constant(_)))
+}
+
 /// `getInlineCost` (InlineCost.cpp:3265): what the call costs, or why it is
 /// always or never to be inlined.
 pub fn inline_cost(
@@ -3211,6 +3221,7 @@ pub fn inline_cost(
             && !analyzer.blocked_by_bound
             && !params.o1_bound
             && site.caller_size == CallerSize::Speed
+            && every_argument_is_constant(site)
             && params.cut_from.is_some_and(|own| {
                 let mut pin = Analyzer::new(site, InlineParams { default_threshold: own, cut_from: None, ..params });
                 // Inlined at the own bar, or held there by the rate alone.
