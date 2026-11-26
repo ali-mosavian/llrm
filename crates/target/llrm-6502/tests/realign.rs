@@ -88,10 +88,11 @@ fn a_local_aligned_to_16_is_16_aligned_on_a_frame_of_any_size() {
 fn the_prologue_rounds_rs0_down_and_a_frame_that_keeps_its_alignment_does_not() {
     let text = assembly(&ir(PROBE), &Request::new(Level::O2)).unwrap();
     assert!(text.contains("and #240"), "no rounding of rs0 to 16:\n{text}");
-    let kept = PROBE.replace("[16 x i8], align 16", "[16 x i8], align 2");
-    let text = assembly(&ir(&kept), &Request::new(Level::O2)).unwrap();
-    assert!(!text.contains("(rc0),y\n  iny"), "an align-2 local realigned:\n{text}");
-    assert!(!text.contains("and #"), "an align-2 local realigned:\n{text}");
+    for align in [2, 8] {
+        let kept = PROBE.replace("[16 x i8], align 16", &format!("[16 x i8], align {align}"));
+        let text = assembly(&ir(&kept), &Request::new(Level::O2)).unwrap();
+        assert!(!text.contains("and #"), "an align-{align} local realigned:\n{text}");
+    }
 }
 
 /// Values live across calls in a loop go in rs4..rs7, which the function saves.

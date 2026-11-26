@@ -109,11 +109,11 @@ pub fn layout(function: &Function) -> Layout {
     }
 }
 
-/// What clang's msp430 layout (the front end this target runs) gives an `int`
-/// or a `long`. An `alloca` aligned to no more is clamped to what the frame
-/// keeps ([`STACK_ALIGN`]); a larger one realigns the stack
+/// The widest scalar (clang gives a fixed-point `long _Accum` `align 8`). An
+/// `alloca` aligned to no more is clamped to what the frame keeps
+/// ([`STACK_ALIGN`]); a larger one realigns the stack
 /// (`Machine::realigned_above`).
-pub const REALIGN_ABOVE: u64 = 2;
+pub const REALIGN_ABOVE: u64 = 8;
 
 fn adjust(bytes: i64) -> MInst {
     MInst::new(op::ADJSP, vec![Operand::Imm(bytes)])
