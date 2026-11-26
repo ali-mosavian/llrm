@@ -997,3 +997,33 @@ exit:
         assert!(label.is_none_or(|label| label > at), "a backward `bra {target}` ends the loop:\n{text}");
     }
 }
+
+/// The pin's two `DeadMachineInstructionElim` runs are not an improvement over
+/// it: `Options::PINNED` ran neither, behind the unrelated `short`, and kept a
+/// dead select arm (`moveq #0, %d1`, the unused high half of the shift).
+#[test]
+fn the_pinned_options_drop_the_unread_half_of_a_wide_shift() {
+    let ir = "define i32 @f(i32 %a, i32 %n) {
+  %w = zext nneg i32 %a to i64
+  %c = icmp sgt i32 %n, 22
+  br i1 %c, label %l, label %r
+l:
+  %x = add nsw i32 %n, -23
+  %xw = zext nneg i32 %x to i64
+  %s = shl i64 %w, %xw
+  %st = trunc i64 %s to i32
+  br label %j
+r:
+  %y = sub nsw i32 23, %n
+  %yw = zext nneg i32 %y to i64
+  %u = lshr i64 %w, %yw
+  %ut = trunc nuw nsw i64 %u to i32
+  br label %j
+j:
+  %p = phi i32 [ %st, %l ], [ %ut, %r ]
+  ret i32 %p
+}";
+    let module = llrm_mir::parse::module(&format!("target datalayout = \"{DATALAYOUT}\"\n{ir}")).expect("parses");
+    let ours = text_with(&module, "f", Cpu::M68000, Options::PINNED).expect("compiles");
+    assert!(!ours.contains("moveq\t#0, %d1"), "{ours}");
+}
