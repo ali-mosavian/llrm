@@ -193,8 +193,6 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
         self
     }
 
-    /// `makeLibCall` on `chain`: the hooks' call, else (where they ask for it)
-    /// the routine called by the target's native C convention.
     /// `makeLibCall` of a node with no chain: the target's own way, else the
     /// chained call from the entry node (the pin's `InChain` default).
     fn lib_call(
@@ -211,6 +209,8 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
         self.lib_call_chained(name, args, ret, signed, entry).map(|(result, _)| result)
     }
 
+    /// `makeLibCall` on `chain`: the hooks' call, else (where they ask for it)
+    /// the routine called by the target's native C convention.
     fn lib_call_chained(
         &mut self,
         name: &'static str,

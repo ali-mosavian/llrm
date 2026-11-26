@@ -1865,9 +1865,9 @@ define void @f(ptr %p, ptr %q) optsize {
 }
 
 /// `llvm.rint` of an SSE value was selected as the x87's `frndint` and refused
-/// ("floating instruction has no conversion rule", `rint_libcall.c` at every
-/// level). It is the C library's `rint`/`rintf` (the pin without SSE4.1); an
-/// `x86_fp80` keeps `frndint`.
+/// at every level ("floating instruction has no conversion rule"). It is the C
+/// library's `rint`/`rintf` (the pin without SSE4.1); an `x86_fp80` keeps
+/// `frndint`.
 #[test]
 fn an_m64_rint_of_an_sse_value_is_the_library_call() {
     let names = |ty: &str, kind: &str| -> Vec<String> {
