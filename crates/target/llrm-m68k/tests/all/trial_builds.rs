@@ -142,3 +142,20 @@ fn the_expansion_the_call_target_search_priced_is_the_one_the_build_prints() {
     // callee here); the build adds none
     assert!(on <= off + 1, "{on} expansions with the search, {off} without");
 }
+
+/// Every build of a function ran the call-target search, though a trial that
+/// leaves the function as it was asks it the same question: 60-70 % of the
+/// searches of QB's lexer, control and file modules at -Os repeated one made
+/// before, and the search is a fifth to a third of those compiles.
+#[test]
+fn a_build_that_reaches_the_same_function_takes_the_call_targets_chosen_before() {
+    let ir = "target datalayout = \"E-m:e-p:32:16:32-i8:8:8-i16:16:16-i32:16:32-n8:16:32-a:0:16-S16\"\ndeclare i32 @ext(i32)\ndeclare i32 @g(i32, i32)\ndefine i32 @f(i32 %a, i32 %b) {\n  %p = icmp eq i32 %a, 0\n  br i1 %p, label %t, label %e\nt:\n  %x = call i32 @ext(i32 %b)\n  %y = call i32 @ext(i32 %x)\n  br label %m\ne:\n  %u = call i32 @ext(i32 %a)\n  %v = call i32 @ext(i32 %u)\n  br label %m\nm:\n  %r = phi i32 [%y, %t], [%v, %e]\n  %q = call i32 @g(i32 %r, i32 %b)\n  ret i32 %q\n}\n";
+    let module = llrm_mir::parse::module(ir).expect("parses");
+    let options = Options { size: true, mid_end: false, ..Options::default() };
+    let before = runs();
+    items_with(&module, "f", Cpu::M68000, options).expect("compiles");
+    let after = runs();
+    let (allocated, searches) = (after.allocations - before.allocations, after.searches - before.searches);
+    assert!(allocated >= 2, "premise: {allocated} build reached the search");
+    assert!(searches < allocated, "{searches} searches for {allocated} builds");
+}
