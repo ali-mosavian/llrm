@@ -51,11 +51,19 @@ fn pointer(cpu: Cpu) -> MVT {
     }
 }
 
+static BUILT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// How many times the constructor ran in this process.
+pub fn lowerings_built() -> usize {
+    BUILT.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 /// The constructor of `WebAssemblyTargetLowering`, in the pin's order.
 pub fn target_lowering(
     cpu: Cpu,
     features: Features,
 ) -> TargetLowering {
+    BUILT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     use ISD::*;
     let words = [MVT::I32, MVT::I64];
     let mut tl = TargetLowering::empty(
