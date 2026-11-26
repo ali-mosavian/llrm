@@ -9,10 +9,12 @@
 //! ten (`extension_chain_fused`: +96 B, 1,014 clocks estimated, 235 measured).
 
 use llrm_analysis::scev::{Cx, ScalarEvolution};
+use llrm_mir::context::{ConstantId, ConstantKind};
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::domtree::DomTree;
 use llrm_mir::loopinfo::LoopInfo;
-use llrm_mir::module::{Function, Module};
+use llrm_mir::module::{Function, Module, Operand};
+use llrm_mir::opcode::Opcode;
 use llrm_mir::valuetracking::AssumptionCache;
 
 /// The trips a loop weighs when ScalarEvolution does not count it.
@@ -56,6 +58,53 @@ pub fn block_weights(
     weights
 }
 
+/// [`block_weights`] of the module's function `name` with the trips its call
+/// sites' constant arguments give its loops, averaged over its direct call
+/// sites. A site that passes no constant counts the function as written.
+///
+/// DEVIATE INLINE-SITE-TRIPS (beyond the pin, whose `InlineCost` knows no trip
+/// counts; owner w11, exit 2026-12-20): an inlined copy has the constants and
+/// the call did not, so the call was priced at ten trips against the copy's 98
+/// (47,686 against 268,455 clocks; measured 29,272 against 16,429).
+pub fn block_weights_at_sites(
+    module: &Module,
+    name: &str,
+    layout: &DataLayout,
+) -> Vec<u64> {
+    let Some(id) = module.named(name) else { return Vec::new() };
+    let Some(function) = module.global(id).function() else { return Vec::new() };
+    let mut sites: Vec<Vec<Option<ConstantId>>> = Vec::new();
+    for (_, _, caller) in module.functions() {
+        for (_, inst) in caller.walk() {
+            let call = caller.instruction(inst);
+            if !matches!(call.opcode, Opcode::Call(_)) || llrm_mir::memory::callee(&module.context, caller, inst) != Some(id) {
+                continue;
+            }
+            let constant = |one: &Operand| match one {
+                Operand::Constant(id) if matches!(module.context.get(*id).kind, ConstantKind::Int(_)) => Some(*id),
+                _ => None,
+            };
+            sites.push(call.operands.iter().take(function.parameters().len()).map(constant).collect());
+        }
+    }
+    if sites.iter().all(|site| site.iter().all(Option::is_none)) {
+        return block_weights(module, function, layout);
+    }
+    let mut total = vec![0u64; function.block_capacity()];
+    for site in &sites {
+        let mut bound = function.clone();
+        for (&parameter, constant) in function.parameters().iter().zip(site) {
+            if let Some(constant) = constant {
+                bound.replace_all_uses_with(parameter, Operand::Constant(*constant));
+            }
+        }
+        for (sum, one) in total.iter_mut().zip(block_weights(module, &bound, layout)) {
+            *sum += one;
+        }
+    }
+    total.iter().map(|sum| (sum / sites.len() as u64).max(1)).collect()
+}
+
 /// `weights` with each block that one branch with `!prof` weights decides
 /// scaled by its share of the branch: the block a loop's counter wraps into
 /// runs once per page, not once per trip. A block weighs at least one.
@@ -64,8 +113,7 @@ pub fn by_branch_weights(
     function: &Function,
     weights: &mut [u64],
 ) {
-    use llrm_mir::module::{MetadataOperand, Operand};
-    use llrm_mir::opcode::Opcode;
+    use llrm_mir::module::MetadataOperand;
     for block in function.layout() {
         let [from] = function.predecessors(*block)[..] else { continue };
         let Some(jump) = function.terminator(from) else { continue };
