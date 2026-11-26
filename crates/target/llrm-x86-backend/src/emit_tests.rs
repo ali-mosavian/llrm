@@ -402,3 +402,43 @@ fn test_a_constant_read_three_times_is_loaded_once_where_bytes_are_strict() {
     assert!(crate::emit::shared_load_pays(&prices(true), [(1, 16, 14)].into_iter()), "as at -Os");
     assert!(!crate::emit::shared_load_pays(&prices(false), readers()), "at speed the cheaper memory form stays");
 }
+
+/// Every call's argument area rebuilt the block and walked all of it again
+/// looking for immediate pushes: 4.9 G instructions of 6.4 G compiling one
+/// file of 400 calls at -O0.
+#[test]
+fn argument_areas_are_not_rescanned_once_per_call() {
+    use std::sync::Arc;
+
+    use llrm_codegen::backend::selectiondag::emit_api::EmitState;
+    use llrm_codegen::model::ir::{Held, Imm, Mem, Operation, Semantics};
+    use llrm_codegen::model::lir::Insn;
+
+    let sp = RegId::from_index(1);
+    let calls = 200;
+    let mut insns = Vec::new();
+    let mut reads = HashMap::default();
+    let mut at = 0;
+    let mut next = |what: Semantics, defines: Vec<u32>, uses: Vec<u32>| {
+        at += 1;
+        Arc::new(Insn::new(at, Some((at, at)), Some(what), defines, uses))
+    };
+    for call in 0..calls {
+        let value = 100 + call;
+        let held = Held { value, width: 2, offset: 0 };
+        let two = Loc::Imm(Imm { value: 2, width: 2, address: None });
+        insns.push(next(Semantics { name: Some("sub".into()), dests: vec![Loc::Reg(Reg { register: sp, width: 2 })], sources: vec![Loc::Reg(Reg { register: sp, width: 2 }), two], ..Semantics::new(Operation::Binary) }, vec![], vec![]));
+        let seven = Loc::Imm(Imm { value: 7, width: 2, address: None });
+        insns.push(next(Semantics { name: Some("mov".into()), dests: vec![Loc::Held(held)], sources: vec![seven], ..Semantics::new(Operation::Move) }, vec![value], vec![]));
+        let cell = Mem { addr: None, width: 2, through: sp, offset: 0, disp_width: 0, base: None, stack_argument: false, selector: None, index: None, scale: 1, index_through: RegId::None, exact: false };
+        insns.push(next(Semantics { name: Some("mov".into()), dests: vec![Loc::Mem(cell)], sources: vec![Loc::Held(held)], ..Semantics::new(Operation::Move) }, vec![], vec![value]));
+        insns.push(next(Semantics::new(Operation::Call), vec![], vec![]));
+        reads.insert(value, 1);
+    }
+    let before = crate::emit::push_fold_visits();
+    let mut state = EmitState::default();
+    crate::emit::pushed_arguments(&mut insns, sp, &mut state, &mut Vec::new(), &reads, None).unwrap();
+    let visits = crate::emit::push_fold_visits() - before;
+    assert_eq!(insns.len(), 2 * calls as usize, "each area and its mov go: push imm, call");
+    assert!(visits <= 4 * calls as usize, "{visits} instructions visited for {calls} calls");
+}

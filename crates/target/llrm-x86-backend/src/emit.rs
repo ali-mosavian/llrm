@@ -48,6 +48,7 @@
 //! `EmitCopyToRegClassNode`, `EmitCopyFromReg`.
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use llrm_codegen::backend::isel::{_read, _written};
 use llrm_codegen::backend::selectiondag::dag::{NodeData, SDNodeFlags, SDValue, SelectionDAG};
@@ -359,77 +360,76 @@ fn fold_immediate_pushes(
     state: &mut EmitState,
     split_wide: Option<i64>,
 ) {
-    let mut at = 0;
-    while at < insns.len() {
-        let pushed = insns[at]
-            .what
-            .as_ref()
-            .filter(|what| what.op == Operation::Push)
-            .and_then(
-                |what| match what.sources.first() {
-                    Some(Loc::Held(held)) => Some(held.value),
-                    _ => None,
-                },
-            );
-        let Some(value) = pushed else {
-            at += 1;
+    let vregs: llrm_support::hash::HashSet<u32> = state.vregs.values().copied().collect();
+    let mut defined: HashMap<u32, usize> = HashMap::default();
+    for (place, insn) in insns.iter().enumerate() {
+        if let [value] = insn.defines[..] {
+            defined.entry(value).or_insert(place);
+        }
+    }
+    PUSH_FOLD_VISITS.fetch_add(insns.len(), Ordering::Relaxed);
+    let mut gone: llrm_support::hash::HashSet<usize> = Default::default();
+    let mut made: HashMap<usize, Vec<Arc<Insn>>> = HashMap::default();
+    for (at, old) in insns.iter().enumerate() {
+        let Some(&Loc::Held(held)) = old.what.as_ref().filter(|what| what.op == Operation::Push).and_then(|what| what.sources.first())
+        else {
             continue;
         };
-        let reads = if state.vregs.values().any(|v| *v == value) { 0 } else { reads.get(&value).copied().unwrap_or(0) };
-        let made = insns.iter().position(|insn| insn.defines == [value]);
-        let immediate = made.and_then(|place| {
-            let what = insns[place].what.as_ref()?;
-            match (&what.op, &what.dests[..], &what.sources[..]) {
+        let reads = if vregs.contains(&held.value) { 0 } else { reads.get(&held.value).copied().unwrap_or(0) };
+        let Some(&place) = defined.get(&held.value) else { continue };
+        let immediate = insns[place].what.as_ref().and_then(
+            |what| match (&what.op, &what.dests[..], &what.sources[..]) {
                 (Operation::Move, [Loc::Held(_)], [Loc::Imm(imm)]) => Some(imm.clone()),
                 _ => None,
-            }
-        });
-        let (Some(place), Some(imm), 1) = (made, immediate, reads) else {
-            at += 1;
-            continue;
-        };
-        let old = insns[at].clone();
+            },
+        );
+        let (Some(imm), 1) = (immediate, reads) else { continue };
         let mut what = old.what.clone().expect("a push");
         // DEVIATE SD243 (real mode): tuned for size, a dword constant with a
         // byte-sized half is two `pushw` (high, then low), 4 or 5 bytes
         // against `pushd imm32`'s 6; the pin has no 16-bit push. The old
         // selector's pair. Owner w12. Exit: a cost hook on the target.
         let halves = split_wide.and_then(|word| word_halves(&imm, word).map(|halves| (halves, word)));
-        let split_at = place < at;
-        let Some(((high, low), word)) = halves else {
+        gone.insert(place);
+        let pushes = if let Some(((high, low), word)) = halves {
+            let word = |half: i64| Loc::Imm(Imm { value: half, width: word as u32, address: None });
+            let mut first = what.clone();
+            first.sources[0] = word(high);
+            let mut second = what;
+            second.sources[0] = word(low);
+            let next = state.next_address();
+            vec![
+                Arc::new(Insn::new(old.at, old.covers, Some(first), old.defines.clone(), Vec::new())),
+                Arc::new(Insn::new(next, Some((next, next)), Some(second), vec![], Vec::new())),
+            ]
+        } else {
             what.sources[0] = Loc::Imm(imm);
-            insns[at] = Arc::new(Insn::new(old.at, old.covers, Some(what), old.defines.clone(), Vec::new()));
-            insns.remove(place);
-            if split_at {
-                at -= 1;
-            }
-            at += 1;
-            continue;
+            vec![Arc::new(Insn::new(old.at, old.covers, Some(what), old.defines.clone(), Vec::new()))]
         };
-        let word = |half: i64| Loc::Imm(Imm { value: half, width: word as u32, address: None });
-        let mut first = what.clone();
-        first.sources[0] = word(high);
-        let mut second = what;
-        second.sources[0] = word(low);
-        let made = state.next_address();
-        insns[at] = Arc::new(Insn::new(old.at, old.covers, Some(first), old.defines.clone(), Vec::new()));
-        insns.insert(at + 1, Arc::new(Insn::new(made, Some((made, made)), Some(second), vec![], Vec::new())));
-        insns.remove(place);
-        if split_at {
-            at -= 1;
-        }
-        at += 2;
+        made.insert(at, pushes);
     }
+    if made.is_empty() {
+        return;
+    }
+    let mut rebuilt = Vec::with_capacity(insns.len());
+    for (place, insn) in insns.drain(..).enumerate() {
+        match made.remove(&place) {
+            Some(pushes) => rebuilt.extend(pushes),
+            None if !gone.contains(&place) => rebuilt.push(insn),
+            None => {}
+        }
+    }
+    *insns = rebuilt;
 }
 
-/// Real-mode addressing has no `[sp+k]`: the arguments a call takes on the
-/// stack are pushed, last first, where the lowering stored them into the area
-/// it made (`sub sp, n` and a store to each cell before the call): the
-/// pin's `X86CallFrameOptimization`, which also turns those stores into
-/// pushes. The stores must cover the area; one left over is refused, as an
-/// address no instruction encodes (`mov [sp+2], ax` stopped 32 QCport modules
-/// from assembling).
-///
+/// Instructions `fold_immediate_pushes` has looked at in this process.
+static PUSH_FOLD_VISITS: AtomicUsize = AtomicUsize::new(0);
+
+/// Instructions `fold_immediate_pushes` has looked at in this process.
+pub fn push_fold_visits() -> usize {
+    PUSH_FOLD_VISITS.load(Ordering::Relaxed)
+}
+
 /// The constant a store of the minsize patterns writes: `and [m], 0` stores 0,
 /// `or [m], -1` stores -1 (the pin's `classifyInstruction` converts both).
 fn constant_store(what: &Semantics) -> Option<i64> {
@@ -442,10 +442,18 @@ fn constant_store(what: &Semantics) -> Option<i64> {
     }
 }
 
+/// Real-mode addressing has no `[sp+k]`: the arguments a call takes on the
+/// stack are pushed, last first, where the lowering stored them into the area
+/// it made (`sub sp, n` and a store to each cell before the call): the
+/// pin's `X86CallFrameOptimization`, which also turns those stores into
+/// pushes. The stores must cover the area; one left over is refused, as an
+/// address no instruction encodes (`mov [sp+2], ax` stopped 32 QCport modules
+/// from assembling).
+///
 /// A floating argument cannot be pushed (`fstp` stores to memory): an area with
 /// one is stored through a register that holds the stack pointer, `mov bx, sp`
 /// and `fstp [bx+k]`, as the old selector does.
-fn pushed_arguments(
+pub(crate) fn pushed_arguments(
     insns: &mut Vec<Arc<Insn>>,
     sp: llrm_lir::registers::RegId,
     state: &mut EmitState,
@@ -469,6 +477,7 @@ fn pushed_arguments(
             )
     };
     let mut at = 0;
+    let mut pushed = false;
     let mut refused = false;
     // The areas stored through a register already.
     let mut based: Vec<i64> = Vec::new();
@@ -671,22 +680,25 @@ fn pushed_arguments(
             pushes.push(Arc::new(Insn::new(made, Some((made, made)), Some(pusher(word(low))), vec![], vec![])));
         }
         let gone: std::collections::BTreeSet<usize> = stores.iter().map(|&(place, _, _)| place).chain([at]).collect();
-        let mut rebuilt = Vec::with_capacity(insns.len());
-        for (place, insn) in insns.drain(..).enumerate() {
+        // Only what lies from the area to the last store changes.
+        let to = last.max(at);
+        let mut rebuilt = Vec::with_capacity(to + 1 - at + pushes.len());
+        for (place, insn) in (at..).zip(&insns[at..=to]) {
             if place == last {
                 rebuilt.append(&mut pushes);
             } else if !gone.contains(&place) {
-                rebuilt.push(insn);
+                rebuilt.push(insn.clone());
             }
         }
-        *insns = rebuilt;
+        insns.splice(at..=to, rebuilt);
+        pushed = true;
+        // What lies before `at` cannot change again, past the first call:
+        // up to it there may be pushes made here to look at.
+        let first_call = insns.iter().position(|insn| insn.what.as_ref().is_some_and(|w| w.op == Operation::Call));
+        at = at.max(first_call.map_or(insns.len(), |call| call + 1));
+    }
+    if pushed {
         fold_immediate_pushes(insns, reads, state, split_wide);
-        // Back to the start: indices moved.
-        at = 0;
-        while at < insns.len() && !insns[at].what.as_ref().is_some_and(|w| w.op == Operation::Call) {
-            at += 1;
-        }
-        at += 1;
     }
     if insns.iter().any(|insn| is_store(insn)) {
         return Err(EmitError::Unsupported("a store through the stack pointer at m16".to_owned()));
