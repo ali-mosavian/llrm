@@ -1305,7 +1305,7 @@ thread_local! {
 }
 
 /// What `Ahead::renames` found, by block.
-type Renamed = RefCell<HashMap<i64, Option<Vec<(u32, u32)>>>>;
+type Renamed = RefCell<HashMap<i64, Option<std::rc::Rc<Vec<(u32, u32)>>>>>;
 
 /// DEVIATE 6: the order a bundle still to be fixed should take.
 /// `finishBlockStack` lets the first exit to reach a bundle choose its order.
@@ -1330,11 +1330,11 @@ impl Ahead<'_> {
     fn renames(
         &self,
         block: &Block,
-    ) -> Option<Vec<(u32, u32)>> {
+    ) -> Option<std::rc::Rc<Vec<(u32, u32)>>> {
         if let Some(found) = self.renamed.borrow().get(&block.at) {
             return found.clone();
         }
-        let found = self.scanned(block);
+        let found = self.scanned(block).map(std::rc::Rc::new);
         self.renamed.borrow_mut().insert(block.at, found.clone());
         found
     }
@@ -1558,6 +1558,9 @@ pub(super) fn converted_with(
         return Ok(best);
     }
     let (live_in, _) = live_among(&current, |value| floating.contains(&value));
+    // Only the orders differ from one trial to the next: the body is prepared
+    // once.
+    let Some(prepared) = prepared(&current) else { return Ok(best) };
     for one in found {
         let values: Vec<u32> = live_in[&one.header].iter().filter(|value| floating.contains(value)).collect();
         if !(2..=3).contains(&values.len()) {
@@ -1570,7 +1573,7 @@ pub(super) fn converted_with(
             }
             let mut trial = orders.clone();
             trial.insert(one.header, order);
-            let Ok(done) = converted_valued(&current, classes, cpu, constants, &trial) else { continue };
+            let Ok(done) = converted_prepared(&prepared, classes, cpu, constants, &trial) else { continue };
             let length = weighted_len(&done, &weight);
             if length < score {
                 score = length;
@@ -1734,6 +1737,26 @@ fn chain_orders(
         .collect()
 }
 
+/// What converting a body takes of the body alone: the floating values, what
+/// is live of them at each block's ends, the blocks' bundles and the body with
+/// the blocks DEVIATE 7 adds. `converted_with` tries many orders of one body
+/// (DEVIATE 11): none of this depends on the order, so it is made once.
+struct Prepared<'a> {
+    body: std::borrow::Cow<'a, LirBody>,
+    floating: HashSet<u32>,
+    live_in: crate::backend::liverows::Live,
+    live_out: crate::backend::liverows::Live,
+    bundles: spillplacement::Bundles,
+}
+
+thread_local! {
+    /// The bodies `prepared` has worked on and the conversions made of them,
+    /// counted for the test that fixes it at one preparation for all the
+    /// orders of a loop's header.
+    pub(super) static PREPARED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    pub(super) static CONVERTED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 fn converted_valued(
     body: &LirBody,
     classes: &RegisterClasses,
@@ -1741,10 +1764,15 @@ fn converted_valued(
     constants: &HashMap<i64, &'static str>,
     orders: &HashMap<i64, Vec<u32>>,
 ) -> Result<LirBody, Raised> {
-    let regs = body.regs();
+    let Some(prepared) = prepared(body) else { return Ok(body.clone()) };
+    converted_prepared(&prepared, classes, cpu, constants, orders)
+}
+
+fn prepared(body: &LirBody) -> Option<Prepared<'_>> {
+    PREPARED.with(|count| count.set(count.get() + 1));
     let floating = floatassign::_floating_values(body);
     if floating.is_empty() {
-        return Ok(body.clone());
+        return None;
     }
     let (live_in, live_out) = live_among(body, |value| floating.contains(&value));
     let bundles = spillplacement::bundles(body);
@@ -1773,7 +1801,20 @@ fn converted_valued(
         }
         None => (std::borrow::Cow::Borrowed(body), live_in, live_out, bundles),
     };
-    let body = &*body;
+    Some(Prepared { body, floating, live_in, live_out, bundles })
+}
+
+fn converted_prepared(
+    prepared: &Prepared<'_>,
+    classes: &RegisterClasses,
+    cpu: Option<&Profile>,
+    constants: &HashMap<i64, &'static str>,
+    orders: &HashMap<i64, Vec<u32>>,
+) -> Result<LirBody, Raised> {
+    CONVERTED.with(|count| count.set(count.get() + 1));
+    let Prepared { body, floating, live_in, live_out, bundles } = prepared;
+    let body = &**body;
+    let regs = body.regs();
     let floats = |set: &llrm_mir::dense::IdSet<u32>| -> BTreeSet<u32> {
         set.iter().filter(|value| floating.contains(value)).collect()
     };

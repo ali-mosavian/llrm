@@ -4,7 +4,7 @@
 
 use std::sync::Arc;
 
-use super::{converted, converted_with};
+use super::{CONVERTED, PREPARED, converted, converted_with};
 use crate::backend::classes::RegisterClasses;
 use crate::backend::floatalloc::_truncating;
 use crate::backend::floatalloc::tests::{
@@ -392,6 +392,20 @@ fn test_the_order_a_header_wants_is_taken_through_any_number_of_renaming_blocks(
         costs.iter().all(|cost| *cost == (2, 2)),
         "exchanges on the two latches' paths, by chain 2, 3, 6, 9: {costs:?}"
     );
+}
+
+/// DEVIATE 11 converted the body again for each order of a loop header's
+/// carried values, working out its liveness, bundles and split blocks each time
+/// (d_faces -O2: 14 M instructions of 132 M in `converted_valued`). Counted,
+/// not timed: the orders of one body share one preparation of it.
+#[test]
+fn test_the_orders_of_a_loop_header_share_one_preparation_of_the_body() {
+    let count = |cell: &'static std::thread::LocalKey<std::cell::Cell<usize>>| cell.with(std::cell::Cell::get);
+    let (prepared_before, converted_before) = (count(&PREPARED), count(&CONVERTED));
+    latch_paths(2);
+    let (prepared, converted) = (count(&PREPARED) - prepared_before, count(&CONVERTED) - converted_before);
+    assert!(converted >= 3, "premise: the header's two orders are tried beside the base ({converted} conversions)");
+    assert!(prepared < converted, "{prepared} preparations for {converted} conversions");
 }
 
 /// `t += (float)v` below two constants: `fadd [m]` needs `t` on top, so the
