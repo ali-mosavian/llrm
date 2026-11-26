@@ -70,3 +70,26 @@ fn test_what_nothing_names_goes_with_the_next_global_dce() {
     assert!(!text.contains("@orphan") && !text.contains("@unused"), "{text}");
     assert!(text.contains("@helper") && text.contains("@table"), "{text}");
 }
+
+/// A whole program that defines a routine code generation calls (`rint` is a
+/// call only after the DAG) lost it to GlobalDCE as unreferenced, and the link
+/// failed: a preserved name stays external while another orphan goes.
+#[test]
+fn test_a_definition_named_like_a_preserved_libcall_stays_external() {
+    let mut program = Program::new(
+        vec![parsed(
+            "define double @rint(double %x) {\nb:\n  ret double %x\n}\n\
+             define double @orphan(double %x) {\nb:\n  ret double %x\n}\n\
+             define i16 @main() {\nb:\n  ret i16 0\n}\n",
+        )],
+        std::rc::Rc::new(llrm_mir::target::Neutral),
+    )
+    .unwrap();
+    let mut manager = PassManager::default();
+    manager.add_program(Internalize::new(["main".to_owned(), "rint".to_owned()]));
+    manager.add_program(GlobalDce);
+    manager.run(&mut program).unwrap();
+    let text = printed(&program.modules[0]);
+    assert!(text.contains("define double @rint("), "{text}");
+    assert!(!text.contains("@orphan"), "{text}");
+}

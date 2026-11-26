@@ -38,6 +38,7 @@
 
 use llrm_spike_mf::{Inst, Kind, Operand, Reg};
 
+use crate::addrarith::is_data;
 use crate::ccr;
 use crate::dagisel::local;
 use crate::mfunc::MFunction;
@@ -151,6 +152,14 @@ fn is_frame_load(inst: &Inst) -> bool {
     matches!(inst.kind, Kind::Op("MOV32rp")) && inst.operands.iter().any(|one| matches!(one, Operand::Frame(_)))
 }
 
+/// The source of `inst`, when it copies one register to another.
+fn copied_from(inst: &Inst) -> Option<Reg> {
+    match (&inst.kind, &inst.operands[..]) {
+        (Kind::Copy, [Operand::Def(_), Operand::Use(source)]) => Some(*source),
+        _ => None,
+    }
+}
+
 /// After allocation: a `tst` right after the instruction that set the codes
 /// for its register goes. The allocator makes a frame load again where its
 /// register is read, so the load now stands beside the `tst`
@@ -178,13 +187,23 @@ pub fn eliminate_adjacent_tests(
                     before.operands.first(),
                     Some(Operand::Def(def)) if physical(*def) == physical(tested)
                 );
-                // a load of a frame slot the allocator made again is a `move`,
-                // which sets the codes in hardware though the
-                // allocator does not count it as the setter
+                // a load of a frame slot the allocator made again and a copy
+                // into a data register are each a `move`, which sets the codes
+                // in hardware though the allocator does not count it as the
+                // setter. Identity copies are gone by now
+                let moved = result
+                    && size == Some('l')
+                    && is_data(physical(tested))
+                    && copied_from(before).is_some_and(|source| physical(source) != physical(tested));
                 mnemonic == "tst"
-                    && (before.sets_flags() || is_frame_load(before))
-                    && flags_read_after(&block.insts, at)
-                        .is_some_and(|needed| leaves_codes(before, result, size, needed, false))
+                    && (before.sets_flags() || is_frame_load(before) || moved)
+                    && flags_read_after(&block.insts, at).is_some_and(|needed| {
+                        if moved {
+                            ccr::like_test("move").is_some_and(|same| needed & !same == 0)
+                        } else {
+                            leaves_codes(before, result, size, needed, false)
+                        }
+                    })
             })();
             if drop {
                 // the reader now reads the load's codes: it is the setter

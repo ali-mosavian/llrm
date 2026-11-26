@@ -189,14 +189,18 @@ fn whole_program(request: &Request) -> bool {
 }
 
 /// What LTO does to a whole program before its optimizer runs:
-/// everything but `main` becomes internal (`Internalize`), so `GlobalOpt` can
-/// make a global nothing stores to a constant and fold its loads.
+/// everything but `main` and the routines code generation may call
+/// (`isLibcall`: `rint` is a call only after the DAG) becomes internal
+/// (`Internalize`), so `GlobalOpt` can make a global nothing stores to a
+/// constant and fold its loads.
 fn whole_program_internalized(
     program: &mut Program,
     main: &str,
 ) -> Result<(), String> {
+    let libcalls = program.target.lowering().map(|lowering| lowering.libcall_routines()).unwrap_or_default();
+    let preserved = std::iter::once(main.to_owned()).chain(libcalls.into_iter().map(crate::abi::c_symbol));
     let mut manager = llrm_mir::passes::PassManager::default();
-    manager.add_program(llrm_transforms::internalize::Internalize::new([main.to_owned()]));
+    manager.add_program(llrm_transforms::internalize::Internalize::new(preserved));
     manager.run(program).map(|_| ())
 }
 
@@ -216,6 +220,7 @@ fn program(
     // a private function takes arguments in rc16..rc25 (`calling.toml`
     // `[mos_private]`), where the platform has them
     crate::abi::allow_private_row(request.platform.zero_page >= crate::alloc::MOST_CELLS);
+    crate::abi::set_c_symbol_prefix(&request.platform.c_symbol_prefix);
     MID_ENDS.with(|count| count.set(count.get() + 1));
     let mut module =
         llrm_mir::parse::module(&without_reserved_symbols(&without_triple(text), &request.platform.c_symbol_prefix))
@@ -1232,18 +1237,18 @@ struct Mos6502Machine;
 
 impl llrm_mir::target::Machine for Mos6502Machine {
     /// DEVIATE 6502-ALLOCA-ALIGN (owner llrm-target-6502, exit 2026-12-15): the
-    /// soft stack is not realigned and the frame keeps `STACK_ALIGN` (1);
-    /// an `align 2` local from the front end is clamped to it at pipeline
-    /// entry, so `ptr & 1` is no longer folded to 0 for an object on an odd
-    /// frame. The pin states what a frame keeps the same
-    /// way (`TargetFrameLowering::getStackAlignment`). Exit: even frames and
-    /// argument areas, then 2.
+    /// frame keeps `STACK_ALIGN` (1); an `align 2` local from the front end is
+    /// clamped to it at pipeline entry, so `ptr & 1` is no longer folded to 0
+    /// for an object on an odd frame. The pin states what a frame keeps the
+    /// same way (`TargetFrameLowering::getStackAlignment`). Exit: even frames
+    /// and argument areas, then 2.
     fn kept_stack_align(&self) -> Option<u64> {
         Some(crate::frame::STACK_ALIGN as u64)
     }
 
-    fn max_alloca_align(&self) -> Option<u64> {
-        Some(crate::frame::MAX_ALLOCA_ALIGN)
+    /// An `alloca` aligned past this realigns the stack.
+    fn realigned_above(&self) -> Option<u64> {
+        Some(crate::frame::REALIGN_ABOVE)
     }
 
     /// `lda (zp),y`: the index is `y`.

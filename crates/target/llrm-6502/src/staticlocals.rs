@@ -15,7 +15,8 @@
 //! the function left from an earlier call.
 //!
 //! A function with an `alloca` outside the entry block, a counted `alloca`,
-//! or a stack save keeps its stack. The objects of a module together stay
+//! or a stack save keeps its stack. An object aligned past `REALIGN_ABOVE`
+//! stays on it. The objects of a module together stay
 //! under [`BUDGET`] bytes of RAM.
 //!
 //! # Price
@@ -133,6 +134,13 @@ fn objects_of(
                 Opcode::Alloca { allocated, align, address_space } => {
                     if *block != entry || address_space != 0 || !instruction.operands.is_empty() {
                         return None;
+                    }
+                    // global storage is not aligned: an over-aligned object
+                    // stays in the frame, which realigns
+                    if align.unwrap_or_else(|| layout.align(&module.context.types, allocated))
+                        > crate::frame::REALIGN_ABOVE
+                    {
+                        continue;
                     }
                     let result = instruction.result?;
                     let mut markers = Vec::new();
