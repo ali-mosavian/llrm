@@ -1,6 +1,7 @@
-//! A local aligned past what the 6502 keeps is refused by name. It got an
-//! object at a stack address with no such alignment, and the mid-end folded
-//! `ptr & 63` to 0 from the alloca's `align 64`.
+//! A local aligned past what the 6502 keeps realigns the stack. It was refused
+//! by name; before that it got an object at a stack address with no such
+//! alignment, and the mid-end folded `ptr & 63` to 0 from the alloca's `align
+//! 64`.
 
 use llrm_6502::driver::{Level, Request, assembly};
 
@@ -19,10 +20,10 @@ entry:
 ";
 
 #[test]
-fn a_local_aligned_past_what_the_stack_keeps_is_refused_at_every_level() {
+fn a_local_aligned_past_what_the_stack_keeps_realigns_it_at_every_level() {
     for level in [Level::O0, Level::O1, Level::O2, Level::Os] {
-        let error = assembly(OVER_ALIGNED, &Request::new(level)).unwrap_err();
-        assert!(error.contains("aligned to 64"), "{level:?}: {error}");
+        let text = assembly(OVER_ALIGNED, &Request::new(level)).unwrap_or_else(|error| panic!("{level:?}: {error}"));
+        assert!(text.contains("and #192"), "{level:?}: no rounding of rs0 to 64:\n{text}");
     }
 }
 
