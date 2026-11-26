@@ -652,6 +652,10 @@ impl Hooks for Z80Lowering {
         };
         let symbol = match divide_dividend_range(dag, name) {
             Some((low, high)) => crate::runtime_size::call_with_dividend_range(name, low, high),
+            // the C library's routines are C symbols, SDCC's underscore
+            None if llrm_codegen::backend::selectiondag::actions::is_c_library_routine(name) => {
+                crate::data::symbol(name)
+            }
             None => name.to_owned(),
         };
         let callee = dag.get_target_external_symbol(EVT::I16, &symbol);

@@ -111,6 +111,13 @@ pub enum CgpStep {
 
 /// `TargetLowering`'s hooks. Each default is the base class's.
 pub trait Lowering {
+    /// The routines the target's code generator may call (its libcall
+    /// tables), by the undecorated names it states: a whole-program link keeps
+    /// a definition of one (`InputFile::Symbol::isLibcall`).
+    fn libcall_routines(&self) -> Vec<&'static str> {
+        Vec::new()
+    }
+
     /// Whether `step` runs on this target. The pin runs every step; a target
     /// that answers no is a staged enablement (a DEVIATE at its `impl`).
     fn runs_cgp_step(

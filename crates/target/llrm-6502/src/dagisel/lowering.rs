@@ -317,7 +317,13 @@ impl Hooks for MosLowering {
             };
             count as usize
         ];
-        let callee = dag.get_target_external_symbol(EVT::I16, name);
+        // the C library's routines are C symbols; the runtime's are as named
+        let symbol = if llrm_codegen::backend::selectiondag::actions::is_c_library_routine(name) {
+            crate::abi::c_symbol(name)
+        } else {
+            name.to_owned()
+        };
+        let callee = dag.get_target_external_symbol(EVT::I16, &symbol);
         let root = dag.entry_node();
         let (_chain, values) = lower_call(dag, root, callee, &outs, &ins).ok()?;
         join_words(dag, &values, ret)
