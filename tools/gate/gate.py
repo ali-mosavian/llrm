@@ -249,7 +249,7 @@ def smoked(sha: str) -> bool:
 
 # The check of tests/tracked_build_products.rs without a build, for smoke (a test ties the lists).
 PRODUCTS = ("obj", "exe", "o", "map", "lst")
-FIXTURES = ("tests/inputs/", "tests/fixtures/")
+FIXTURES = ("tests/inputs/", "tests/fixtures/", "tools/testdata/")
 
 
 def strays(names: list[str]) -> list[str]:
