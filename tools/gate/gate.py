@@ -397,7 +397,7 @@ def step_of_source(path: str, cfg: dict) -> str | None:
     if path.startswith("crates/") and path.endswith(".rs"):
         return "lib"
     if path.endswith(".py") and (path.startswith("tests/") or Path(path).name.startswith("test_")):
-        return "pytest-programs" if name in ("test_programs_compile", "test_loops", "test_innerloops") else "pytest-perf" if path in perf_files() else "pytest"
+        return "pytest-programs" if name in ("test_programs_compile", "test_loops", "test_innerloops", "test_byte_ceilings") else "pytest-perf" if path in perf_files() else "pytest"
     return None
 
 
@@ -559,7 +559,7 @@ def commands(p: Plan, cfg: dict, pkgs: dict[str, dict], skip_bins: frozenset[str
     def cfg_pytest(skipped: tuple[str, ...], durations: str = "pytest-durations") -> str:
         # pytest-programs' two files are named out of the list: an explicit file argument runs though --ignore names it (the step ran them
         # twice, 160 s of a loaded host)
-        own = {"tests/test_programs_compile.py", "tests/test_loops.py"}
+        own = {"tests/test_programs_compile.py", "tests/test_loops.py", "tests/test_byte_ceilings.py"}
         tests = " ".join(sorted(f"tests/{one.name}" for one in (ROOT / "tests").glob("*.py") if f"tests/{one.name}" not in own | set(skipped)))
         return f"PYTHONPATH=tools/gate${{PYTHONPATH:+:$PYTHONPATH}} uv run -q --project tools python tools/gate/pytest_shards.py --durations ${{CARGO_TARGET_DIR:-target}}/{durations}.json tools crates {tests}" + "".join(f" --ignore={f}" for f in skipped) + " -- -q -p no:cacheprovider -p pytest_cpulimit -p pytest_qcport -p pytest_strict_bins"
 
@@ -614,7 +614,7 @@ def commands(p: Plan, cfg: dict, pkgs: dict[str, dict], skip_bins: frozenset[str
         # What the full tier's pytest step runs but for its slow files: #1765 and #1766 were smoke-green and failed tools/test_identical.py
         # and tests/test_readme.py in the train.
         "pytest-quick": cfg_pytest(skip_py + tuple(cfg["smoke"]["slow_pytest"]), "pytest-quick-durations"),
-        "pytest-programs": "uv run -q --project tools python -m pytest tests/test_programs_compile.py tests/test_loops.py -q -p no:cacheprovider",
+        "pytest-programs": "uv run -q --project tools python -m pytest tests/test_programs_compile.py tests/test_loops.py tests/test_byte_ceilings.py -q -p no:cacheprovider",
         "qcport": '[ -f ~/scratch/qcport-env.sh ] && . ~/scratch/qcport-env.sh; : "${QCPORT:?QCPORT is not set}" "${QCPORT_INC:?QCPORT_INC is not set}" "${QCPORT_BORLAND:?QCPORT_BORLAND is not set}"; export JWLINK="${JWLINK:-$LLRM_BIN/jwlink}"; uv run -q --project tools python tools/qcport-run-cc.py',
         "oracle-qcport": '[ -f ~/scratch/qcport-env.sh ] && . ~/scratch/qcport-env.sh; : "${QCPORT:?QCPORT is not set}" "${QCPORT_INC:?QCPORT_INC is not set}" "${QCPORT_BORLAND:?QCPORT_BORLAND is not set}"; export JWLINK="${JWLINK:-$LLRM_BIN/jwlink}"; uv run -q --project tools python tools/oracle_qcport.py --jobs ${JOBS:-8}',
         "objsweep": "python3 tools/pairs/objsweep_gate.py",

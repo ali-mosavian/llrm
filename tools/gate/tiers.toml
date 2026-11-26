@@ -78,8 +78,8 @@ owners = ["tests/toolchain.rs", "tools/identity.sh", "tools/g-identical.sh", "to
 
 [[heavy]]
 step = "pytest-programs"
-why = "compiles every program, and the loop cross-cases: 60 s"
-owners = ["tests/test_programs_compile.py", "tests/test_loops.py", "tests/test_innerloops.py", "tools/sizes*", "tools/loops/**", "tools/innerloops.py", "examples/**", "bench/**", "tests/run/**", "crates/frontends/**", "crates/driver/llrm-cc/**", "crates/backend/**", "crates/codegen/**", "crates/driver/llrm-driver/**", "crates/opt/**"]
+why = "compiles every program, the loop cross-cases and the code byte ceilings: minutes"
+owners = ["tests/test_programs_compile.py", "tests/test_loops.py", "tests/test_innerloops.py", "tests/test_byte_ceilings.py", "tools/byte_ratchet*", "tools/corpus_targets.py", "tools/external_flags.py", "toolchain/clang/pin", "crates/target/llrm-z80/**", "tools/sizes*", "tools/loops/**", "tools/innerloops.py", "examples/**", "bench/**", "tests/run/**", "crates/frontends/**", "crates/driver/llrm-cc/**", "crates/backend/**", "crates/codegen/**", "crates/driver/llrm-driver/**", "crates/opt/**"]
 
 [[heavy]]
 step = "dos-slow"
