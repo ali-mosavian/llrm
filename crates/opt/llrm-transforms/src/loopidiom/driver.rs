@@ -98,15 +98,17 @@ impl LoopIdiomRecognize {
         self.has_memcpy = self.libcall(self.library.memcpy);
         // `Tti::memory_idioms_at_optsize`: a function built for size may keep
         // its store and copy loops.
-        let header = run.cur_loop.get_header();
-        let constant_length = run.se.get_small_constant_trip_count(&cx!(run), header) != 0;
         if (self.for_size || self.apply_code_size_heuristics_attr(run))
-            && run.tti.is_some_and(|tti| !tti.memory_idioms_at_optsize(constant_length))
+            && let Some(tti) = run.tti
         {
-            self.has_memset = false;
-            self.has_memset_pattern = false;
-            self.has_memcpy = false;
-            self.options.force_memset_pattern_intrinsic = false;
+            let header = run.cur_loop.get_header();
+            let constant_length = run.se.get_small_constant_trip_count(&cx!(run), header) != 0;
+            if !tti.memory_idioms_at_optsize(constant_length) {
+                self.has_memset = false;
+                self.has_memset_pattern = false;
+                self.has_memcpy = false;
+                self.options.force_memset_pattern_intrinsic = false;
+            }
         }
 
         if self.has_memset

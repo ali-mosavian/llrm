@@ -1,8 +1,7 @@
-//! A store loop of unknown length became a `memset` call at `-Os`: three
-//! pushes, `jsr` and `lea` (bench/library/memset 60 B against gcc's 44 B loop,
-//! memcpy 46 against 38). A size build keeps such a loop, and still calls for
-//! a constant length, as gcc does: kept, bench/scroll -Os ran 11.1M clocks at
-//! 68000 against gcc's 6.0M. Speed builds call either way.
+//! `Tti::memory_idioms_at_optsize`: a size build keeps a store or copy loop
+//! of unknown length, since the call is more bytes than the loop, and calls
+//! the library for a constant length, where the loop ran many times the
+//! clocks. Speed builds call either way.
 
 use llrm_m68k::driver::{Level, assembly, cpu_of};
 
