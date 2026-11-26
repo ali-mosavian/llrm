@@ -396,3 +396,36 @@ fn an_address_taken_block_that_only_jumps_is_kept() {
     branch_fold::<Two>(&mut function);
     assert!(ids(&function).contains(&2), "{:?}", shape(&function));
 }
+
+/// `blocks` blocks that each test and fall into the next, all branching to one
+/// sink after a return: nothing to fold.
+fn fixed_chain(blocks: u32) -> MFunction<()> {
+    let mut all = Vec::new();
+    for at in 0..blocks {
+        all.push(vec![op("work", vec![Operand::Block(at)]), terminator("branch", false, Some(blocks + 1))]);
+    }
+    all.push(vec![ret()]);
+    all.push(vec![halt()]);
+    layout(all)
+}
+
+/// Every query for a block's predecessors scanned the terminators of all
+/// blocks, so a function of many blocks that folded nothing took time in
+/// proportion to blocks x blocks (a very large function: 6% of its compile
+/// instructions). The predecessors are kept until the function changes.
+#[test]
+fn a_function_that_folds_nothing_scans_each_blocks_terminators_a_few_times() {
+    let scans = |groups: u32| {
+        let mut function = fixed_chain(groups);
+        let before = shape(&function);
+        llrm_spike_mf::fold::take_scanned();
+        let folded = branch_fold::<Two>(&mut function);
+        assert!(!folded, "premise: the layout folded");
+        assert_eq!(shape(&function), before, "premise: the layout changed");
+        llrm_spike_mf::fold::take_scanned()
+    };
+    let (small, large) = (scans(20), scans(80));
+    assert!(small > 0, "premise: no predecessor was asked for");
+    // 4x the blocks: 4x the work if linear, 16x if each query scans every block
+    assert!(large <= 6 * small, "{small} instructions scanned for 20 blocks, {large} for 80");
+}
