@@ -64,6 +64,11 @@ pub(super) fn full_unroll_pays(
     // (`-fno-inline-functions` with called-once off, or `noinline`) there is
     // no late pass for it: the loop is priced here (huffman_decode -O3: 17
     // calls of getbit unrolled unpriced, +915 B over gcc).
+    // DEVIATE UNROLL-MUL-LIBCALL: a loop whose rolled form strength-reduces a
+    // multiply into an add is priced on the clocks its copies lose, at every
+    // rate and past the bypasses below.
+    let lost = reduced_multiply_clocks(run, analyzed, lp, trips, None) > 0;
+    let rate = if lost { rate.max(1) } else { rate };
     let inlinable = !no_grow
         && !run.options.target_unrolling
         && run.options.inliner_follows
@@ -101,7 +106,7 @@ pub(super) fn full_unroll_pays(
     let prices_nest_here =
         no_grow || (run.tti.unroll_prices_nest_loops_without_outer_counter() && run.options.opt_level < 3);
     let carried = run.decided.contains(&lp.get_header()) && prices_nest_here;
-    if !run.first.contains(&lp.get_header()) || carried {
+    if (!run.first.contains(&lp.get_header()) || carried) && !lost {
         why(run, lp, "unpriced unroll: a copy of this run");
         return true;
     }
@@ -125,7 +130,8 @@ pub(super) fn full_unroll_pays(
     // loop around it was unrolled, and its copies were then unrolled unpriced
     // ("a copy of this run"): fpbench -O3 grew 2,300 B (the pin's order leaves
     // the outer loop rolled around inner loops it unrolled: 1,412 B).
-    if run.tti.unroll_pin_decides_inner_of_known_trips()
+    if !lost
+        && run.tti.unroll_pin_decides_inner_of_known_trips()
         && run.options.opt_level >= 3
         && lp.is_innermost()
         && lp.get_parent_loop().is_some_and(|parent| {
@@ -146,7 +152,8 @@ pub(super) fn full_unroll_pays(
         why(run, lp, "unpriced unroll: inside a loop of known trips");
         return true;
     }
-    if encloses_known_trips(run, se, analyzed, lp, up.full_unroll_max_count)
+    if !lost
+        && encloses_known_trips(run, se, analyzed, lp, up.full_unroll_max_count)
         && (!prices_nest || reads_outer_counter(run, se, analyzed, lp, up))
     {
         why(run, lp, "unpriced unroll: the nest bypass");
@@ -157,12 +164,109 @@ pub(super) fn full_unroll_pays(
     // the arrays they index) is cleaned after it (nbody -O2 triangular nest:
     // +8 B for -23,816 instructions, priced +267 B). The bound is the pin's own
     // for what it analyzes, `-unroll-max-iteration-count-to-analyze`.
-    if bounds_few_trips(run, se, analyzed, lp, up.max_iterations_count_to_analyze) {
+    if !lost && bounds_few_trips(run, se, analyzed, lp, up.max_iterations_count_to_analyze) {
         why(run, lp, "unpriced unroll: inner loops of few trips");
         return true;
     }
     let analysis = analyze_loop_unroll_cost(run, se, analyzed, lp, trips, eph, u32::MAX, trips, None, true);
     priced_verdict(&*run, se, analyzed, lp, up, trips, uce, analysis, None, prices_nest, prices_nest, rate)
+}
+
+/// DEVIATE UNROLL-MUL-CALL: the clocks the copies of `lp` run more than the
+/// rolled loop for each multiply of a counter by an invariant. Rolled, strength
+/// reduction makes it an add; a copy has the counter constant and the product
+/// stays a multiply, priced by the target for that constant
+/// (`Tti::multiply_by_constant_clocks`). 0 for every target that states none.
+fn reduced_multiply_clocks(
+    run: &Run,
+    analyzed: &Analyzed,
+    lp: Loop,
+    trips: u32,
+    projection: Option<&Projection>,
+) -> i64 {
+    if !run.tti.multiply_by_constant_clocks(None).is_positive()
+        && !run.tti.multiply_by_constant_clocks(Some(11)).is_positive()
+    {
+        return 0;
+    }
+    let function = &*run.function;
+    let small = |operand: Operand| -> Option<i64> {
+        let Operand::Constant(id) = operand else { return None };
+        let constant = run.context.get(id);
+        let width = run.context.types.int_bits(constant.ty)?;
+        match constant.kind {
+            llrm_mir::ConstantKind::Int(bits) => {
+                let shift = 128 - width.min(128);
+                Some((((bits << shift) as i128) >> shift) as i64)
+            }
+            llrm_mir::ConstantKind::Zero => Some(0),
+            _ => None,
+        }
+    };
+    // The counter's start (where constant) and step, when `operand` is a
+    // header phi stepped by a constant.
+    let counter_in = |inner: Loop, operand: Operand| -> Option<(Option<i64>, i64)> {
+        let Operand::Value(value) = operand else { return None };
+        let ValueDef::Instruction(phi) = function.value(value).def else { return None };
+        if function.instruction(phi).opcode != Opcode::Phi || function.parent(phi) != Some(inner.get_header()) {
+            return None;
+        }
+        let latch = inner.get_loop_latch(function)?;
+        let incoming = |from: BlockId| {
+            function
+                .instruction(phi)
+                .operands
+                .chunks(2)
+                .find(|pair| pair[1] == Operand::Block(from))
+                .map(|pair| pair[0])
+        };
+        let Some(Operand::Value(next)) = incoming(latch) else { return None };
+        let ValueDef::Instruction(step) = function.value(next).def else { return None };
+        let step = function.instruction(step);
+        if step.opcode != Opcode::Binary(BinaryOp::Add) || !step.operands.contains(&Operand::Value(value)) {
+            return None;
+        }
+        let by = step.operands.iter().find_map(|operand| small(*operand))?;
+        let start = inner.get_loop_preheader(function).and_then(|pre| incoming(pre)).and_then(small);
+        Some((start, by))
+    };
+    let invariant_in = |inner: Loop, operand: Operand| {
+        let Operand::Value(value) = operand else { return false };
+        match function.value(value).def {
+            ValueDef::Instruction(def) => function.parent(def).is_some_and(|home| !inner.get_blocks().contains(&home)),
+            _ => true,
+        }
+    };
+    let add = crate::profit::costs(run.outer).add;
+    let depth = lp.get_loop_depth();
+    let mut clocks = 0i64;
+    for &block in lp.get_blocks().iter() {
+        if projection.is_none() && analyzed.loops.get_loop_depth(block) != depth {
+            continue;
+        }
+        let Some(inner) = analyzed.loops.get_loop_for(block) else { continue };
+        for inst in function.iter_block(block) {
+            let one = function.instruction(inst);
+            if one.opcode != Opcode::Binary(BinaryOp::Mul) || one.operands.len() != 2 {
+                continue;
+            }
+            let (a, b) = (one.operands[0], one.operands[1]);
+            let counter = match (counter_in(inner, a), counter_in(inner, b)) {
+                (Some(counter), _) if invariant_in(inner, b) => counter,
+                (_, Some(counter)) if invariant_in(inner, a) => counter,
+                _ => continue,
+            };
+            let weight = projection.map_or(1, |projection| projection.of(block));
+            let lost: i64 = (0..i64::from(trips))
+                .map(|t| {
+                    let factor = counter.0.map(|start| start + t * counter.1);
+                    (run.tti.multiply_by_constant_clocks(factor) - add).max(0)
+                })
+                .sum();
+            clocks += weight * lost;
+        }
+    }
+    clocks
 }
 
 /// The copies of each block a nest's unroll makes: the product of the trip
@@ -490,7 +594,8 @@ fn priced_verdict(
     // DEVIATE UP2-X87 (owner x87, exit 2026-11-20): an element past the stack
     // is stored and loaded again each run (nbody -O2 m32: the unroll priced
     // to save 44 clocks a run ran 92 more: 14 more stores, 17 more exchanges).
-    let spill_clocks = spilled * (clocks.float_store + clocks.float_load);
+    let spill_clocks = spilled * (clocks.float_store + clocks.float_load)
+        + reduced_multiply_clocks(run, analyzed, lp, trips, projection);
     // DEVIATE THROUGHPUT (owner x86-m64, exit 2026-12-20): see `throughput`. A
     // target with a throughput model prices a trip at the larger of its
     // resource and chain bounds, and the unroll saves the resources it

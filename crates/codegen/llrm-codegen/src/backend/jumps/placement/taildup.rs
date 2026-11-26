@@ -175,7 +175,7 @@ impl Placer {
             if !self.can_tail_duplicate(to, from) {
                 if successors.len() > 1 {
                     let set = successor_set.get_or_insert_with(|| successors.iter().copied().collect());
-                    if set.len() > 1 && self.has_same_successors(from, set) {
+                    if set.len() > 1 && self.has_same_successors(from, successors, set) {
                         continue;
                     }
                 }

@@ -418,16 +418,23 @@ pub fn llvm_names_source(opcodes: &[Opcode]) -> String {
             }
         }
     }
-    let mut code = String::from("pub fn llvm_names(name: &str) -> &'static [&'static str] {\n    match name {\n");
+    // A sorted table searched by bisection: a `match` on a string compares it
+    // with each arm in turn, and a form name is asked of every instruction.
+    let mut code = String::from("pub static FORM_NAMES: &[(&str, &[&str])] = &[\n");
     for (name, llvm) in &by_name {
         let list: Vec<String> = llvm.iter().map(|one| format!("{one:?}")).collect();
-        code.push_str(&format!("        {name:?} => &[{}],\n", list.join(", ")));
+        code.push_str(&format!("    ({name:?}, &[{}]),\n", list.join(", ")));
     }
-    code.push_str("        _ => &[],\n    }\n}\n");
+    code.push_str("];\n\npub fn llvm_names(name: &str) -> &'static [&'static str] {\n");
+    code.push_str(
+        "    FORM_NAMES.binary_search_by(|(known, _)| (*known).cmp(name)).map_or(&[], |at| FORM_NAMES[at].1)\n}\n",
+    );
     let mut every: Vec<&str> = by_name.values().flatten().copied().collect();
     every.sort_unstable();
     every.dedup();
-    code.push_str("\n/// Every LLVM opcode a form name stands for.\n#[allow(dead_code)]\npub const LLVM_OPCODES: &[&str] = &[\n");
+    code.push_str(
+        "\n/// Every LLVM opcode a form name stands for.\n#[allow(dead_code)]\npub const LLVM_OPCODES: &[&str] = &[\n",
+    );
     for name in every {
         code.push_str(&format!("    {name:?},\n"));
     }
