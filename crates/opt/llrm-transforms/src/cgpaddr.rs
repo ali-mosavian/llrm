@@ -133,6 +133,7 @@ use llrm_mir::datalayout::DataLayout;
 use llrm_mir::edit::Position;
 use llrm_mir::facts::Fact;
 use llrm_mir::lowering::CgpStep;
+use llrm_mir::dense::IdSet;
 use llrm_mir::module::{BlockId, Function, GlobalValue, InstId, Operand, ValueDef, ValueId};
 use llrm_mir::opcode::{BinaryOp, CastOp, Flags, IntPredicate, Opcode};
 use llrm_mir::passes::{self, Analyses, Dominators, FunctionPass, Loops, PreservedAnalyses};
@@ -553,7 +554,7 @@ fn address_of(
 
 /// The calls stated `cold`, at the site or on the callee, of a function not
 /// optimized for size (`shouldOptimizeForSize`).
-type Cold = std::collections::BTreeSet<InstId>;
+type Cold = IdSet<InstId>;
 
 fn cold_calls(
     context: &Context,
