@@ -699,6 +699,7 @@ fn try_tree(
     tti: &dyn Tti,
     block: BlockId,
     chain: &Chain,
+    facts: &mut Option<crate::slptree::BlockFacts>,
 ) -> bool {
     let groups = {
         let mut groups: Vec<Vec<Operand>> = Vec::new();
@@ -725,6 +726,7 @@ fn try_tree(
     let lane_bits = int_ty(context, function.instruction(chain.root).ty).expect("an integer chain");
     let tree = {
         let unit = MemUnit::within(context, layout, function, outer);
+        let facts_now = &*facts.get_or_insert_with(|| crate::slptree::BlockFacts::of(&unit, function, block));
         let mut session = llrm_analysis::scev::analysis::ScevSession::of(unit.context, function, outer);
         session.ask_within(unit.context, layout, &outer.globals, &outer.metadata, function, |se, cx| {
             let scaler = crate::slptree::Scaler::new(se, cx);
@@ -738,9 +740,9 @@ fn try_tree(
                 while width >= REDUCTION_LIMIT {
                     while pos + width <= n {
                         let window = &group[pos..pos + width];
-                        if let Some(tree) =
-                            crate::slptree::try_reduction(&unit, function, block, &info, window, tti, &scaler)
-                        {
+                        if let Some(tree) = crate::slptree::try_reduction(
+                            &unit, function, block, &info, window, facts_now, tti, &scaler,
+                        ) {
                             let mut info = info.clone();
                             // The values left out: the chain's order, the last
                             // operand first.
@@ -784,6 +786,8 @@ pub fn run_function(
         // visits the roots that are not operands of another chain's link.
         let candidates: Vec<InstId> = function.iter_block(block).collect();
         let mut taken: Vec<InstId> = Vec::new();
+        // Read by every window tried, until a tree changes the function.
+        let mut facts: Option<crate::slptree::BlockFacts> = None;
         for root in candidates.into_iter().rev() {
             if function.is_erased(root) || taken.contains(&root) {
                 continue;
@@ -821,15 +825,17 @@ pub fn run_function(
             };
             let Some((slice, parts)) = plan else {
                 // Not consecutive loads: the tree of the reduced values.
-                if try_tree(context, layout, function, declared, outer, tti, block, &chain) {
+                if try_tree(context, layout, function, declared, outer, tti, block, &chain, &mut facts) {
                     taken.extend(chain.links.iter().copied());
                     changed = true;
+                    facts = None;
                 }
                 continue;
             };
             taken.extend(chain.links.iter().copied());
             rewrite(context, declared, function, block, &chain, &slice, &parts);
             changed = true;
+            facts = None;
         }
     }
     changed
