@@ -55,6 +55,15 @@ pub mod spill {
     /// them runs after the compare, as a phi copy does in the pin. Prints
     /// nothing.
     pub const COMPARE: u16 = 0xF005;
+    /// A realigned frame's prologue: operands the frame size, the alignment and
+    /// the slot's offset. `old := rs0`, `rs0 := (rs0 - size) & -align`, the old
+    /// stored at `rs0 + slot`.
+    pub const ALIGNSP: u16 = 0xF006;
+    /// `d := old rs0 + n` (operands `d`, `n`, the slot's offset): the address
+    /// of a stack argument in a realigned frame.
+    pub const LEAOLD: u16 = 0xF007;
+    /// A realigned frame's epilogue: `rs0` is the old one at `rs0 + slot`.
+    pub const RESTORESP: u16 = 0xF008;
 }
 
 #[derive(Clone, Debug)]
