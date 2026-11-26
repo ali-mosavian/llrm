@@ -230,10 +230,10 @@ impl Tti for Mos6502 {
         true
     }
 
-    /// DEVIATE OS-INLINE-TRIAL (speed; owner 6502, exit 2026-11-24, row
+    /// DEVIATE OS-INLINE-TRIAL (speed; owner w11, exit 2026-12-20, row
     /// 6502-INLINE-RATE): a copy the rate refused is built inlined as well
-    /// and kept where the backend writes the chain smaller (memcpy_libcall
-    /// -O2: `same` folded into `main`, 100 B).
+    /// and kept where the finished program wins in clocks at 3 a byte
+    /// (`driver::inline_pays`).
     fn speed_inline_finished_trial(&self) -> bool {
         true
     }
@@ -256,12 +256,13 @@ impl Tti for Mos6502 {
         true
     }
 
-    /// An inline at -O2/-O3 that grows the code is refused: bytes first at
-    /// every level (user ruling 2026-11-14), at the rate no clocks can
-    /// repay. DEVIATE 6502-RATE (owner llrm-target-6502, exit 2026-11-24,
-    /// row 6502-INLINE-RATE): the pin's threshold alone priced 6.8 KB for 4.05M
-    /// clocks (div_constants_long) and tail_calls +12.6k clocks for 944 B;
-    /// a price by clocks a byte weighs a loop at about 32 trips.
+    /// The inliner itself refuses every copy that grows the code at -O2/-O3,
+    /// at a rate no clocks repay; the refused copies it notes are judged on
+    /// finished programs at 3 clocks a byte (`driver::inline_pays`, user
+    /// ruling 2026-11-26). DEVIATE 6502-RATE (owner w11, exit 2026-12-20,
+    /// row 6502-INLINE-RATE): a price in the inliner weighs a loop at about 32
+    /// trips and sees neither the outliner nor what the copy folds; the pin's
+    /// threshold alone priced 6.8 KB for 4.05M clocks.
     fn speed_inline_milliclocks_per_byte(&self) -> i64 {
         1 << 40
     }

@@ -236,6 +236,7 @@ struct Piece {
     name: String,
     role: Role,
     image: Vec<u8>,
+    align: usize,
     relocs: Vec<(usize, FixupKind, String, i64)>,
 }
 
@@ -253,14 +254,14 @@ pub fn object(
     let section_of = |sections: &mut Vec<Piece>, segment: &str| -> usize {
         let (spelled, role) = match segment {
             "CODE" => (".text", Role::Text),
-            "RODATA" => (".rodata", Role::ROData),
+            "RODATA" | "ALIGNEDRO" => (".rodata", Role::ROData),
             "BSS" => (".bss", Role::Bss),
             _ => (".data", Role::Data),
         };
         if let Some(at) = sections.iter().position(|one| one.name == spelled) {
             return at;
         }
-        sections.push(Piece { name: spelled.to_owned(), role, image: Vec::new(), relocs: Vec::new() });
+        sections.push(Piece { name: spelled.to_owned(), role, image: Vec::new(), relocs: Vec::new(), align: 1 });
         sections.len() - 1
     };
 
@@ -308,6 +309,16 @@ pub fn object(
             match word {
                 "segment" => current = Some(section_of(&mut sections, args.trim_matches('"'))),
                 "export" | "globl" | "global" => exported.extend(args.split(',').map(|one| one.trim().to_owned())),
+                "align" => {
+                    let at = current.ok_or_else(|| fail("an alignment outside a segment".into()))?;
+                    let align = expr(args, &equates).map_err(&fail)?.addend as usize;
+                    if !align.is_power_of_two() {
+                        return Err(fail("an alignment that is not a power of two".into()));
+                    }
+                    sections[at].align = sections[at].align.max(align);
+                    let fill = sections[at].image.len().next_multiple_of(align);
+                    sections[at].image.resize(fill, 0);
+                }
                 "import" => {}
                 "res" => {
                     let at = current.ok_or_else(|| fail("data outside a segment".into()))?;
@@ -486,7 +497,7 @@ pub fn object(
             name: part.name.clone(),
             role: part.role,
             near: true,
-            align: 1,
+            align: part.align,
             spans: vec![[0, image.len()]],
             image,
             relocs,

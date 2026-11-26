@@ -455,7 +455,8 @@ fn image_bytes_of(
     Ok(code + data_bytes(assembly) + crate::mulimage::image_bytes(&routines))
 }
 
-/// DEVIATE OS-INLINE-TRIAL (owner 6502-c, exit 2026-12-05): the copies the -Os
+/// DEVIATE OS-INLINE-TRIAL (owner 6502-c, exit 2026-12-05), at -O1 and -Os,
+/// strict on bytes (-O2 and -O3: `judged_inlines`): the copies the -Os
 /// byte model refused within its error, inlined in a second compile and kept
 /// per chain (caller and callees) if the backend writes those functions in
 /// fewer bytes. The model is within 25% of the written bytes for two functions
@@ -1195,10 +1196,9 @@ fn instructions(program: &Program) -> usize {
 const TRIAL_GROWTH_LIMIT: i64 = 16 * 1024;
 
 /// Thousandths of a clock a byte at -O2 and -O3: the judge of those levels
-/// (clocks + 3 * bytes). DEVIATE 6502-UNROLL-RATE (owner x87, exit 2026-12-15;
-/// oversight ruling 2026-11-24, not yet confirmed by the user): the rate was
-/// infinite there, bytes first (ruling 2026-11-14), which kept `dirty`'s
-/// 96-trip store loop (long_double_constant_store -O3 2,490 clk against 979).
+/// (clocks + 3 * bytes, user ruling 2026-11-26). DEVIATE 6502-UNROLL-RATE
+/// (owner x87, exit 2026-12-15): the rate was infinite there, which kept
+/// `dirty`'s 96-trip store loop (long_double_constant_store -O3 2,490 clk against 979).
 const TRIAL_MILLICLOCKS_PER_BYTE: i64 = 3000;
 
 /// The most a priced trial may add for each function it unrolls in: the pin's
@@ -1418,6 +1418,10 @@ impl llrm_mir::target::Machine for Mos6502Machine {
 /// initializer is refused. Reason: the corpus has none. Exit: floats, with the
 /// softfloat path. A word holding the address of a global (plus a constant
 /// offset) is a `.word` for ca65 to relocate.
+/// The largest alignment of a global: the one the linker cfgs give their
+/// aligned segments.
+const MAX_DATA_ALIGN: u64 = 256;
+
 fn data_text(
     module: &llrm_mir::module::Module,
     layout: &llrm_mir::datalayout::DataLayout,
@@ -1439,13 +1443,33 @@ fn data_text(
         if crate::select::exported(global.linkage) && label == name {
             out.push_str(&format!(".export {label}\n"));
         }
+        // `.align` counts from the segment's start, which the linker's cfg
+        // must align as far: `machines/*.cfg` align to `MAX_DATA_ALIGN`
+        let (align, aligned) = match variable.align {
+            Some(align) if align > MAX_DATA_ALIGN => {
+                return Err(format!("{name} is aligned to {align}: past {MAX_DATA_ALIGN}"));
+            }
+            Some(align) if align > 1 => (format!(".align {align}\n"), true),
+            _ => (String::new(), false),
+        };
         // a variable of zeros is BSS, which the platform's startup clears: it
         // costs no bytes in the image
         if !variable.constant && words.is_empty() && bytes.iter().all(|&b| b == 0) {
-            out.push_str(&format!(".segment \"BSS\"\n{label}: .res {}\n.segment \"CODE\"\n", bytes.len().max(1)));
+            out.push_str(&format!(
+                ".segment \"BSS\"\n{align}{label}: .res {}\n.segment \"CODE\"\n",
+                bytes.len().max(1)
+            ));
             continue;
         }
-        out.push_str(&format!(".segment \"{}\"\n{label}:\n", if variable.constant { "RODATA" } else { "DATA" }));
+        // aligned data has segments of its own: a program without it is not
+        // padded, and a cfg without them is refused by ld65
+        let segment = match (variable.constant, aligned) {
+            (true, false) => "RODATA",
+            (false, false) => "DATA",
+            (true, true) => "ALIGNEDRO",
+            (false, true) => "ALIGNED",
+        };
+        out.push_str(&format!(".segment \"{segment}\"\n{align}{label}:\n"));
         let mut at = 0;
         for (word_at, symbol, addend) in words {
             for chunk in bytes[at..word_at].chunks(16) {
