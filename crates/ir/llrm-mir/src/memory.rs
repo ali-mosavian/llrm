@@ -212,11 +212,55 @@ pub fn noretain(
     inst: InstId,
     index: usize,
 ) -> bool {
-    let (Opcode::Call(info) | Opcode::Invoke(info)) = &function.instruction(inst).opcode else { return false };
-    let declared =
-        callee(context, function, inst).and_then(|one| globals.get(one.0 as usize)).and_then(|one| one.function());
-    info.argument_attrs.get(index).is_some_and(|attrs| Fact::NoRetain.stated_by(attrs))
-        || declared.and_then(|one| one.parameter_attrs.get(index)).is_some_and(|attrs| Fact::NoRetain.stated_by(attrs))
+    argument_attrs(context, globals, function, inst, index).any(|attrs| Fact::NoRetain.stated_by(attrs))
+}
+
+/// `doesNotCapture(i) && (onlyReadsMemory() || onlyReadsMemory(i))` of the
+/// call `inst` and its argument `index`, at the site or on the callee among
+/// `globals`; never an `inalloca` argument, which the call clobbers.
+pub fn only_reads_argument(
+    context: &Context,
+    globals: &[GlobalValue],
+    function: &Function,
+    inst: InstId,
+    index: usize,
+) -> bool {
+    let Opcode::Call(info) = &function.instruction(inst).opcode else { return false };
+    let attrs = || argument_attrs(context, globals, function, inst, index);
+    let states = |fact: Fact| attrs().any(|one| fact.stated_by(one));
+    let in_alloca = attrs().flatten().any(|one| matches!(one, Attribute::Type(name, _) if name == "inalloca"));
+    let reads_only = !stated(&info.attrs).writes
+        || declared(context, globals, function, inst).is_some_and(|one| !stated(&one.attrs).writes);
+    !in_alloca && states(Fact::NoCapture) && (reads_only || states(Fact::ReadOnly) || states(Fact::ReadNone))
+}
+
+/// The declaration among `globals` of the function `inst` calls.
+fn declared<'a>(
+    context: &Context,
+    globals: &'a [GlobalValue],
+    function: &Function,
+    inst: InstId,
+) -> Option<&'a Function> {
+    callee(context, function, inst).and_then(|one| globals.get(one.0 as usize)).and_then(|one| one.function())
+}
+
+/// The attribute lists of argument `index` of the call or invoke `inst`: the
+/// site's, and the callee's parameter's.
+fn argument_attrs<'a>(
+    context: &Context,
+    globals: &'a [GlobalValue],
+    function: &'a Function,
+    inst: InstId,
+    index: usize,
+) -> impl Iterator<Item = &'a Vec<Attribute>> {
+    let (site, parameter) = match &function.instruction(inst).opcode {
+        Opcode::Call(info) | Opcode::Invoke(info) => (
+            info.argument_attrs.get(index),
+            declared(context, globals, function, inst).and_then(|one| one.parameter_attrs.get(index)),
+        ),
+        _ => (None, None),
+    };
+    site.into_iter().chain(parameter)
 }
 
 /// Whether `attrs` confine every access to memory the pointer arguments

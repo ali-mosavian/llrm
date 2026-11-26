@@ -22,6 +22,9 @@ use super::asm::AsmOperand;
 use super::enc::{Enc, Piece};
 use super::generated::instrinfo;
 
+pub(crate) const TABLE: super::local::Table =
+    super::local::Table { code_of, name_of, desc, text: dbf_asm, bits: dbf_encoding };
+
 /// Code of the row, above the `bfextu` forms.
 pub const FIRST: u16 = 0xFA00;
 
@@ -44,7 +47,8 @@ static DESC: LazyLock<&'static InstrDesc> = LazyLock::new(|| {
         let code = super::opcodes::code_of(name).expect("a pin row");
         instrinfo::desc(code).expect("a described row")
     };
-    // the counter operands of `addq.w` (a short row of this target), the branch effects of `bra`
+    // the counter operands of `addq.w` (a short row of this target), the branch
+    // effects of `bra`
     let step = super::short::code_of("ADDQ16di").and_then(super::short::desc).expect("the short word addq");
     let branch = find("BRA8");
     let operands: Vec<_> = step.operands[..2].iter().copied().chain(branch.operands[..1].iter().copied()).collect();

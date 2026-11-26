@@ -93,7 +93,8 @@ pub enum Event {
     SinkAssumeLookups,
     /// An instruction `hoist_min_max` built a pattern query for.
     HoistMinMaxQueries,
-    /// A lookup of where a simulated move put an instruction (`LoopCtx::contains`).
+    /// A lookup of where a simulated move put an instruction
+    /// (`LoopCtx::contains`).
     LoopCtxMovedLookups,
     /// A list of a block's predecessors LVI built (`predecessors`).
     LviPredecessorLists,
@@ -110,7 +111,8 @@ pub enum Event {
     CombineDrains,
     /// An instruction `combine` visited.
     CombineVisits,
-    /// An instruction the combine worklist was first filled with (`prepareWorklist`).
+    /// An instruction the combine worklist was first filled with
+    /// (`prepareWorklist`).
     CombineInitial,
     /// An instruction put on the combine worklist that was not already on it.
     CombineInserts,
@@ -119,7 +121,8 @@ pub enum Event {
     /// A constant visited for the globals it holds the address of
     /// (`globalsaa::embedded_once`).
     ConstantsEmbedded,
-    /// A cost model built from a `Profile` (`Profile::target`): it clones the price tables.
+    /// A cost model built from a `Profile` (`Profile::target`): it clones the
+    /// price tables.
     MachineModels,
     /// A list of attributes scanned for the fact one flag states
     /// (`Fact::stated_by`).
@@ -133,11 +136,16 @@ pub enum Event {
     LoopAnalyses,
     /// A top-level `computeKnownBits` of a value (`compute_known_bits`).
     KnownBitsComputed,
+    /// A body `FunctionUses` walked for the globals it names.
+    UseBodies,
+    /// An instruction x86's immediate push fold looked at
+    /// (`fold_immediate_pushes`).
+    PushFoldVisits,
 }
 
 const SLOTS: usize = 64;
 
-const NAMES: [&str; 50] = [
+const NAMES: [&str; 52] = [
     "function_clones",
     "function_forks",
     "machinings",
@@ -185,10 +193,11 @@ const NAMES: [&str; 50] = [
     "machine_models",
     "attribute_scans",
     "flag_names_resolved",
-
     "fact_sets",
     "loop_analyses",
     "known_bits_computed",
+    "use_bodies",
+    "push_fold_visits",
 ];
 
 /// A pass's runs and the instructions of the functions it ran over.
@@ -205,7 +214,7 @@ thread_local! {
     static PASSES: RefCell<Vec<PassRow>> = const { RefCell::new(Vec::new()) };
     /// (pass, analysis, misses): the analyses a pass made the manager compute.
     static ASKS: RefCell<Vec<(&'static str, &'static str, u64)>> = const { RefCell::new(Vec::new()) };
-    static EVENTS: [Cell<u64>; 50] = const { [const { Cell::new(0) }; 50] };
+    static EVENTS: [Cell<u64>; NAMES.len()] = const { [const { Cell::new(0) }; NAMES.len()] };
     /// (name, hits, misses) by the address of the name, which is a literal.
     static FOUND: [Cell<usize>; SLOTS] = const { [const { Cell::new(0) }; SLOTS] };
     static ANALYSES: RefCell<Vec<(&'static str, u64, u64)>> = const { RefCell::new(Vec::new()) };
@@ -293,7 +302,10 @@ fn asked(analysis: &'static str) {
 }
 
 /// `n` events at once: a loop counts locally and adds when it ends.
-pub fn add(event: Event, n: u64) {
+pub fn add(
+    event: Event,
+    n: u64,
+) {
     EVENTS.with(|events| {
         let one = &events[event as usize];
         one.set(one.get() + n);

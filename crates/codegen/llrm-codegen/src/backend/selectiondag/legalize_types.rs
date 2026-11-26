@@ -595,8 +595,10 @@ impl<'a> TypeLegalizer<'a> {
                     let (EVT::Simple(from), EVT::Simple(to)) = (from, vt) else {
                         return Err(unsupported("soften a conversion between these floats"));
                     };
+                    // a legal operand is the routine's argument as it is
+                    let softened = self.action(EVT::Simple(from)) == TypeAction::SoftenFloat;
                     (
-                        self.softened_float(operand),
+                        if softened { self.softened_float(operand) } else { operand },
                         if op == ISD::FpExtend { Libcall::FpExt(from, to) } else { Libcall::FpRound(from, to) },
                     )
                 } else {
@@ -677,6 +679,18 @@ impl<'a> TypeLegalizer<'a> {
                 self.dag.get_store(chain, bits, ptr, super::dag::MemInfo { mem_vt: int, ..info })
             }
             ISD::BitCast => self.softened_float(self.dag.operand(node, 0)),
+            op @ ISD::FpRound => {
+                // `SoftenFloatOp_FP_ROUND`: the routine over the integer, its
+                // result the legal float.
+                let to = self.dag.value_type(node);
+                let operand = self.dag.operand(node, 0);
+                let from = self.dag.value_type(operand);
+                let unsupported = || LegalizeError::Unsupported { op, ty: from, what: "soften a rounding" };
+                let (EVT::Simple(from), EVT::Simple(narrow)) = (from, to) else { return Err(unsupported()) };
+                let name = libcalls::name(Libcall::FpRound(from, narrow)).ok_or_else(unsupported)?;
+                let arg = self.softened_float(operand);
+                self.soft_c_call(name, &[arg], to, op, to)?
+            }
             ISD::SetCC if at < 2 => self.soften_setcc(node)?,
             op @ (ISD::FpToSInt | ISD::FpToUInt) => {
                 // `SoftenFloatOp_FP_TO_XINT`: the routine over the integer

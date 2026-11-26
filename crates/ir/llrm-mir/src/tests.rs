@@ -859,6 +859,30 @@ fn noretain_is_a_parameter_attribute_that_round_trips() {
     assert_eq!(round(&once), once);
 }
 
+/// A call a pass made carries no argument attribute lists (`ehprepare`,
+/// `inlinealias`, `vastart`), so the callee's parameter is the only word on the
+/// argument: read as "may write", a local such a call only reads was kept. One
+/// the callee may keep is still refused.
+#[test]
+fn a_callees_parameter_attributes_say_an_argument_is_only_read_without_site_lists() {
+    let only_read = |parameter: &str| {
+        let text = format!(
+            "{DATALAYOUT}\ndeclare void @use({parameter})\n\ndefine void @f(ptr %p) {{\nb0:\n  call void @use(ptr %p)\n  ret void\n}}\n"
+        );
+        let mut module = crate::parse::module(&text).expect("parses");
+        let (_, function) = module.function_mut("f").expect("@f");
+        let call = function.iter_block(function.layout()[0]).next().expect("the call");
+        let crate::opcode::Opcode::Call(info) = function.instruction(call).opcode.clone() else { panic!("a call") };
+        function.set_call_attributes(call, info.attrs, info.return_attrs, Vec::new());
+        let (_, _, function) =
+            module.functions().find(|(_, global, _)| global.name.as_deref() == Some("f")).expect("@f");
+        crate::memory::only_reads_argument(&module.context, &module.globals, function, call, 0)
+    };
+    assert!(only_read("ptr readonly nocapture"));
+    assert!(!only_read("ptr readonly"), "the callee may keep it");
+    assert!(!only_read("ptr nocapture"), "the callee may write it");
+}
+
 /// `noipa` is a function attribute (GCC's: no interprocedural pass uses the
 /// body for anyone else); it is read, written back and found by `opaque`.
 #[test]

@@ -31,6 +31,9 @@ use super::asm::{AsmOperand, asm};
 use super::enc::{Enc, Piece, encoding};
 use super::generated::instrinfo;
 
+pub(crate) const TABLE: super::local::Table =
+    super::local::Table { code_of, name_of, desc, text: short_asm, bits: short_encoding };
+
 /// Codes of the short instructions, above those of the writebacks.
 pub const FIRST: u16 = 0xF100;
 
