@@ -79,10 +79,11 @@ pub fn layout(function: &Function) -> Layout {
     Layout { stack_size, objects, saved: function.saved.clone(), first_save, reserved_call_frame }
 }
 
-/// The largest `alloca` alignment accepted: what clang's msp430 layout (the front end this target runs) gives an `int`
-/// or a `long`. One past [`STACK_ALIGN`]: such an object is clamped to what the frame keeps, a larger one is refused
-/// by name (`Machine::max_alloca_align`).
-pub const MAX_ALLOCA_ALIGN: u64 = 2;
+/// The largest `alloca` alignment accepted: the widest scalar (clang gives a fixed-point `long _Accum` `align 8`). Such
+/// an object is clamped to what the frame keeps ([`STACK_ALIGN`]), as the pin clamps on a frame that cannot be
+/// realigned (`MachineFrameInfo::CreateStackObject`, `clampStackAlignment`); a larger one is refused by name
+/// (`Machine::max_alloca_align`).
+pub const MAX_ALLOCA_ALIGN: u64 = 8;
 
 fn adjust(bytes: i64) -> MInst {
     MInst::new(op::ADJSP, vec![Operand::Imm(bytes)])
