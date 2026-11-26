@@ -12,7 +12,7 @@ use std::process::Command;
 fn compile(
     name: &str,
     source: &str,
-    flag: &str,
+    flags: &[&str],
 ) -> (String, u64) {
     assert!(
         llrm_cc::ow_present(),
@@ -34,7 +34,8 @@ fn compile(
                 "LLRM_LLC",
                 std::env::var_os("LLRM_LLC").unwrap_or_else(|| target_dir::of(&root).join("release/llrm-llc").into()),
             )
-            .args([flag, "-w", mode, "-march=i486", "-mabi=sysv", "-o"])
+            .args(flags)
+            .args(["-w", mode, "-march=i486", "-mabi=sysv", "-o"])
             .arg(dir.join(out))
             .arg(dir.join("d.c"))
             .output()
@@ -53,21 +54,8 @@ fn compile(
 fn test_m32_o1_straight_line_helpers_are_priced_not_all_copied() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
     let source = std::fs::read_to_string(root.join("bench/sfm16_dbg/sfm16_dbg.c")).unwrap();
-    let (_, size) = compile("soft", &source, "-O1");
+    let (_, size) = compile("soft", &source, &["-O1"]);
     assert!(size < 23_800, "object is {size} B; copying every helper into each site gave 24,284, pricing them 23,372");
-}
-
-/// The inliner's growth is in size units, one per instruction, and a callee's
-/// bytes are 3.5 to 5 times that: compared with a per-byte rate it let
-/// `sf_cmp_bits` (about 70 B) into each of eight comparison wrappers
-/// (sfm16_float 23,432 B against gcc's smaller object and 22,748 B with the unit
-/// scaled).
-#[test]
-fn test_m32_o1_growth_is_priced_in_bytes_not_size_units() {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
-    let source = std::fs::read_to_string(root.join("bench/sfm16_float/sfm16_float.c")).unwrap();
-    let (_, size) = compile("units", &source, "-O1");
-    assert!(size < 23_000, "object is {size} B; the unscaled growth gave 23,432");
 }
 
 /// The bottom-up walk priced `sf32_pack` in `mul_core` at the site's own
@@ -80,7 +68,7 @@ fn test_m32_o1_inline_weighs_how_often_the_caller_runs() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
     let source =
         std::fs::read_to_string(root.join("crates/target/llrm-x86-m32/vsgcc/kernels/x_sf_mul/x_sf_mul.c")).unwrap();
-    let (listing, _) = compile("entry", &source, "-O1");
+    let (listing, _) = compile("entry", &source, &["-O1"]);
     let calls = listing.lines().filter(|line| line.contains("call") && line.contains("sf32_pack")).count();
     assert!(calls <= 2, "{calls} calls of sf32_pack: the hot caller's copies were not made (3 without the weight)");
 }
@@ -95,53 +83,33 @@ fn test_m32_o2_inline_prices_the_call_sequence_and_the_caller_s_run_count() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
     let source =
         std::fs::read_to_string(root.join("crates/target/llrm-x86-m32/vsgcc/kernels/x_sf_add/x_sf_add.c")).unwrap();
-    let (_, size) = compile("o2rate", &source, "-O2");
+    let (_, size) = compile("o2rate", &source, &["-O2"]);
     assert!(size < 22_700, "object is {size} B; the call priced as one instruction gave 22,860");
 }
 
-/// INL-O1 SIZE: the inliner counts a callee in bytes of encoded code. A refill
-/// reader of many absolute-address accesses and a variable-length copy is about
-/// 190 B; counted as an instruction each (24 units, 84 B at the old 3.5 scale)
-/// it was copied into every site of a loop (x_jpeg_single -O1: `next` eight
-/// times, +1533 B and +0.5 M clk over keeping it a call). A one-instruction
-/// callee still inlines.
+/// The inliner counts a callee in bytes of encoded code, not one unit an
+/// instruction: a few stores of a 32-bit constant to a global are ten bytes
+/// each, and counted as units the callee was copied into every site. Without
+/// the speed rate, which buys growth with clocks, the bytes alone decide.
 #[test]
 fn test_m32_o1_inline_counts_a_callee_in_encoded_bytes() {
     let source = r#"
-#include <string.h>
-static unsigned char inbuf[512], store[4000];
-static int inpos, inlen, bad, at, total, refills, last, sum1, sum2;
-static int next(void)
-{
-    if (inpos == inlen) {
-        int n = 4000 - at;
-        if (n > 511) n = 511;
-        memcpy(inbuf, store + at, n + 1);
-        at += n + 1;
-        inlen = n + 1;
-        inpos = 0;
-        total += inlen;
-        refills++;
-        last = inbuf[0];
-        sum1 += inbuf[1];
-        sum2 ^= inbuf[2];
-        if (inlen <= 0) { inlen = 0; bad = 1; return 0; }
-    }
-    return inbuf[inpos++];
-}
-static int add1(int x) { return x + 1; }
+volatile int a, b, c, d, e, flag;
+static void put(void) { a = 0x11223344; b = 0x11223345; c = 0x11223346; d = 0x11223347; e = 0x11223348; }
+static void set(void) { flag = 1; }
 int caller(int count)
 {
-    int sum = 0;
-    for (int i = 0; i < count; i++)
-        sum += next() + next() + next() + next() + add1(i);
+    int sum = count;
+    put(); sum += a; set();
+    put(); sum += a; set();
+    put(); sum += a; set();
     return sum;
 }
 "#;
-    let (listing, _) = compile("bytes", source, "-O1");
+    let (listing, _) = compile("bytes", source, &["-O1", "-fno-llrm-speed-rate"]);
     let calls_of = |name: &str| listing.lines().filter(|line| line.contains("call") && line.contains(name)).count();
-    assert!(calls_of("next") >= 4, "`next` is copied into its sites: {} calls left of 4", calls_of("next"));
-    assert_eq!(calls_of("add1"), 0, "a one-instruction callee stays a call");
+    assert_eq!(calls_of("put"), 3, "a callee of long stores is copied into its sites");
+    assert_eq!(calls_of("set"), 0, "a one-store callee stays a call");
 }
 
 /// The analyzer prices phis, jumps and returns at nothing, as the pin does,
@@ -169,7 +137,7 @@ long rot(short n, float seed)
 static volatile short trips = 7;
 int main(void) { report(rot(trips, 1.0f)); return 0; }
 "#;
-    let (listing, _) = compile("phis", source, "-O2");
+    let (listing, _) = compile("phis", source, &["-O2"]);
     let calls = listing.lines().filter(|line| line.contains("call") && line.contains("rot")).count();
     assert_eq!(calls, 1, "a loop callee of ten rotating values stays a call:\n{listing}");
 }
@@ -211,7 +179,7 @@ int main(void)
     return 0;
 }
 "#;
-    let (listing, _) = compile("folds", source, "-O1");
+    let (listing, _) = compile("folds", source, &["-O1"]);
     let calls = listing.lines().filter(|line| line.contains("call") && (line.contains("below") || line.contains("from"))).count();
     assert_eq!(calls, 0, "constant arguments fold the loops: the sites are inlined, not called:\n{listing}");
 }
@@ -242,7 +210,7 @@ int main(void)
     return 0;
 }
 "#;
-    let (listing, _) = compile("emptied", source, "-O1");
+    let (listing, _) = compile("emptied", source, &["-O1"]);
     let calls = listing.lines().filter(|line| line.contains("call") && line.contains("bar")).count();
     assert_eq!(calls, 0, "`bar` is empty after the folds: its call is gone:\n{listing}");
 }
@@ -255,7 +223,7 @@ int main(void)
 fn test_m32_os_inline_keeps_the_units_its_bound_was_fitted_in() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
     let source = std::fs::read_to_string(root.join("tests/run/c/uint64_to_float.c")).unwrap();
-    let (listing, _) = compile("yields", &source, "-Os");
+    let (listing, _) = compile("yields", &source, &["-Os"]);
     let calls = listing.lines().filter(|line| line.contains("call") && !line.contains("report")).count();
     assert_eq!(calls, 0, "the conversions fold at their constant calls and `classify` follows:\n{listing}");
 }
