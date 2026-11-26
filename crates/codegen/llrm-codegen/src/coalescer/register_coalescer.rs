@@ -81,6 +81,17 @@ fn eliminate_dead_defs(
     }
 }
 
+thread_local! {
+    static DEAD_COPIES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// Copies this thread's coalescer found unread and erased: copies that reached
+/// it with nothing reading them, which `DeadMachineInstructionElim` should
+/// have removed before it.
+pub fn dead_copies_erased() -> usize {
+    DEAD_COPIES.with(std::cell::Cell::get)
+}
+
 /// `RegisterCoalescer::JoinResult`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum JoinResult {
@@ -89,6 +100,11 @@ pub enum JoinResult {
     /// May be possible to coalesce later.
     Deferred,
 }
+
+/// `LateRematUpdateThreshold` (RegisterCoalescer.cpp#L102): a value with this
+/// many copy uses left to rematerialize has its interval cut back once, after
+/// them all, not after each.
+const LATE_REMAT_UPDATE_THRESHOLD: usize = 100;
 
 /// `LargeIntervalSizeThreshold` and `LargeIntervalFreqThreshold`
 /// (RegisterCoalescer.cpp#L111-L117): an interval with this many values has
@@ -109,6 +125,9 @@ pub struct State {
     moved: HashMap<InstrKey, InstrKey>,
     /// `(absorbed, survivor)` of each join, in order.
     pub renames: Vec<(u32, u32)>,
+    /// `ToBeUpdated`: registers whose interval a rematerialization left too
+    /// long, to be cut back once at the end (`lateLiveIntervalUpdate`).
+    to_be_updated: indexmap::IndexSet<u32>,
 }
 
 impl State {
@@ -193,6 +212,7 @@ pub fn join_copy(
     // sometimes dead copies slip through, and we can't generate invalid live
     // ranges.
     if lis.all_defs_are_dead(copy) {
+        DEAD_COPIES.with(|n| n.set(n.get() + 1));
         eliminate_dead_defs(lis, state, vec![copy]);
         lis.remove_interval(cp.dst_reg());
         return JoinResult::Joined;
@@ -305,10 +325,31 @@ pub fn join_copy(
     }
     // Rewrite all SrcReg operands to DstReg.
     update_reg_defs_uses(lis, state, cp.src_reg(), cp.dst_reg(), cp.is_partial().then_some(cp.lane_offset()), None, false);
+    // SrcReg's interval is not up to date where it is in `to_be_updated`, and
+    // it has been merged into DstReg's: cut the merged one back here.
+    if state.to_be_updated.contains(&cp.src_reg()) {
+        let dead = lis.shrink_to_uses(cp.dst_reg()).1;
+        eliminate_dead_defs(lis, state, dead);
+    }
     // SrcReg is guaranteed to be the register whose live interval that is
     // being merged.
     lis.remove_interval(cp.src_reg());
     JoinResult::Joined
+}
+
+/// `lateLiveIntervalUpdate`: the intervals `to_be_updated` named are cut back
+/// to their uses, once.
+pub fn late_live_interval_update(
+    lis: &mut LiveIntervals,
+    state: &mut State,
+) {
+    for reg in std::mem::take(&mut state.to_be_updated) {
+        if !lis.has_interval(reg) {
+            continue;
+        }
+        let dead = lis.shrink_to_uses(reg).1;
+        eliminate_dead_defs(lis, state, dead);
+    }
 }
 
 /// Whether some def of `value` names the lanes it defines.
@@ -648,9 +689,21 @@ fn re_materialize_def(
     lis.rewrite_instr(block, copy, made);
     state.erased.insert(copy);
     // The source interval can become smaller because we removed a use, and
-    // its definition may now be dead.
-    let dead = lis.shrink_to_uses(src.value).1;
-    eliminate_dead_defs(lis, state, dead);
+    // its definition may now be dead: now, or, where many copies of it are
+    // still to be rematerialized, once after them all.
+    if !state.to_be_updated.contains(&src.value) {
+        let copy_uses = lis
+            .operands(src.value)
+            .iter()
+            .filter(|operand| !operand.is_def && lis.instr(operand.instr).copy_of().is_some())
+            .count();
+        if copy_uses < LATE_REMAT_UPDATE_THRESHOLD {
+            let dead = lis.shrink_to_uses(src.value).1;
+            eliminate_dead_defs(lis, state, dead);
+        } else {
+            state.to_be_updated.insert(src.value);
+        }
+    }
     // The move owns the definition's bytes only where the definition went; else
     // two instructions claim them.
     if !state.erased.contains(&def) {

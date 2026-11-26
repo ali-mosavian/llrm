@@ -1209,6 +1209,11 @@ fn items_once(
             counted(|runs| runs.late += 1);
             let (mut function, mut touched) = (function, touched);
             machine_sink(&mut function);
+            // The pin's second `DeadMachineInstructionElim`, after sinking and
+            // before PHI elimination: what they left unread.
+            if options.short {
+                llrm_spike_mf::dead_machine_instruction_elim(&mut function);
+            }
             if options.short && options.reuse_shift_out_flags {
                 crate::cmpcarry::reuse_shift_out_flags(&mut function);
                 crate::cmpcarry::reuse_borrow_flags(&mut function);
