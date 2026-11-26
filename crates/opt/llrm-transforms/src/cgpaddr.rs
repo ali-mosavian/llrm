@@ -131,8 +131,10 @@ use llrm_analysis::num::Num as BigInt;
 use llrm_mir::context::{ConstantKind, Context, signed};
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::edit::Position;
+use llrm_mir::facts::Fact;
 use llrm_mir::lowering::CgpStep;
-use llrm_mir::module::{BlockId, Function, GlobalValue, InstId, Operand, ValueDef};
+use llrm_mir::dense::IdSet;
+use llrm_mir::module::{BlockId, Function, GlobalValue, InstId, Operand, ValueDef, ValueId};
 use llrm_mir::opcode::{BinaryOp, CastOp, Flags, IntPredicate, Opcode};
 use llrm_mir::passes::{self, Analyses, Dominators, FunctionPass, Loops, PreservedAnalyses};
 use llrm_mir::tti::Tti;
@@ -312,9 +314,11 @@ impl CgpAddr {
             }
             None => false,
         };
+        let cold = cold_calls(unit.context, &analyses.outer().globals, unit.function);
+        let cold = &cold;
         let addresses = match analyses.outer().target().tti() {
-            Some(tti) if tti.scaled_index_insns() == 0 => sunk(unit, &*tti, true),
-            Some(tti) => sunk_priced(unit, analyses, &*tti),
+            Some(tti) if tti.scaled_index_insns() == 0 => sunk(unit, cold, &*tti, true),
+            Some(tti) => sunk_priced(unit, cold, analyses, &*tti),
             None => false,
         };
         // An address sunk into a loop reads the cast from where it was; made
@@ -548,15 +552,70 @@ fn address_of(
     }
 }
 
-/// The bytes a load or store moves: the pin's `AccessTy`, which AArch64's
-/// scaled index depends on.
+/// The calls stated `cold`, at the site or on the callee, of a function not
+/// optimized for size (`shouldOptimizeForSize`).
+type Cold = IdSet<InstId>;
+
+fn cold_calls(
+    context: &Context,
+    globals: &[GlobalValue],
+    function: &Function,
+) -> Cold {
+    if function.optimizes_for_size() {
+        return Cold::new();
+    }
+    function
+        .walk()
+        .filter(|&(_, inst)| {
+            matches!(function.instruction(inst).opcode, Opcode::Call(_))
+                && llrm_analysis::effects::states(context, globals, function, inst, Fact::Cold)
+        })
+        .map(|(_, inst)| inst)
+        .collect()
+}
+
+/// Each use an address is made for: a load's and a store's address, and each
+/// pointer argument of a cold call (`optimizeCallInst` sinks into the cold
+/// path).
+fn accesses(
+    unit: &passes::Unit,
+    cold: &Cold,
+) -> Vec<(BlockId, InstId, usize)> {
+    let mut found = Vec::new();
+    for (block, inst) in unit.function.walk() {
+        if let Some(at) = address_of(unit.function, inst) {
+            found.push((block, inst, at));
+        } else if cold.contains(&inst) {
+            // The callee is the last operand.
+            let arguments = unit.function.instruction(inst).operands.len() - 1;
+            found.extend((0..arguments).map(|at| (block, inst, at)));
+        }
+    }
+    found
+}
+
+/// `FindAllMemoryUses`: `value` is read only where its computation folds or
+/// sinks: as an address, or as an argument of a cold call.
+fn folds_in_every_use(
+    function: &Function,
+    cold: &Cold,
+    value: ValueId,
+    depth: u32,
+) -> bool {
+    crate::spill::address_only_or(function, value, depth, &|user| cold.contains(&user))
+}
+
+/// The bytes an access moves: the pin's `AccessTy`, which AArch64's scaled
+/// index depends on (of a cold call's argument, the pointer's).
 fn access_bytes(
     unit: &passes::Unit,
     access: InstId,
+    at: usize,
 ) -> u64 {
     let inst = unit.function.instruction(access);
     let ty = match inst.opcode {
         Opcode::Store { .. } => unit.function.operand_type(unit.context, inst.operands[0]),
+        Opcode::Call(_) => unit.function.operand_type(unit.context, inst.operands[at]),
         _ => Some(inst.ty),
     };
     ty.map_or(0, |ty| unit.layout.store_size(&unit.context.types, ty))
@@ -567,6 +626,7 @@ fn access_bytes(
 /// `held` is read in `block`, or `address` is read only as memory addresses.
 fn register_free(
     unit: &passes::Unit,
+    cold: &Cold,
     block: BlockId,
     held: Operand,
     address: Operand,
@@ -577,7 +637,7 @@ fn register_free(
     };
     live || matches!(
         address,
-        Operand::Value(v) if crate::spill::address_only(unit.function, v, DEPTH)
+        Operand::Value(v) if folds_in_every_use(unit.function, cold, v, DEPTH)
     )
 }
 
@@ -594,21 +654,28 @@ fn folding_extends_no_live_range(
     block: BlockId,
     after: [Option<Operand>; 3],
 ) -> bool {
-    after.iter().flatten().all(|&held| {
-        let Operand::Value(value) = held else { return true };
-        let ValueDef::Instruction(def) = unit.function.value(value).def else {
-            // An argument is live where it is read in the block; anything else is a constant.
-            return !matches!(unit.function.value(value).def, ValueDef::Argument(_))
-                || unit.function.users(value).iter().any(|one| unit.function.parent(one.user) == Some(block));
-        };
-        // A static alloca is the frame pointer: live for the whole function.
-        if matches!(unit.function.instruction(def).opcode, Opcode::Alloca { .. })
-            && llrm_mir::instructioncost::is_static_alloca(unit.function, def)
-        {
-            return true;
-        }
-        unit.function.users(value).iter().any(|one| unit.function.parent(one.user) == Some(block))
-    })
+    after
+        .iter()
+        .flatten()
+        .all(
+            |&held| {
+                let Operand::Value(value) = held else { return true };
+                let ValueDef::Instruction(def) = unit.function.value(value).def else {
+                    // An argument is live where it is read in the block;
+                    // anything else is a constant.
+                    return !matches!(unit.function.value(value).def, ValueDef::Argument(_))
+                        || unit.function.users(value).iter().any(|one| unit.function.parent(one.user) == Some(block));
+                };
+                // A static alloca is the frame pointer: live for the whole
+                // function.
+                if matches!(unit.function.instruction(def).opcode, Opcode::Alloca { .. })
+                    && llrm_mir::instructioncost::is_static_alloca(unit.function, def)
+                {
+                    return true;
+                }
+                unit.function.users(value).iter().any(|one| unit.function.parent(one.user) == Some(block))
+            },
+        )
 }
 
 fn is_global(
@@ -644,6 +711,7 @@ fn integer(
 /// the longer-lived index).
 fn shifted(
     unit: &passes::Unit,
+    cold: &Cold,
     tti: &dyn Tti,
     retry: bool,
     space: u32,
@@ -683,7 +751,7 @@ fn shifted(
         .function
         .instruction(shl)
         .result
-        .is_some_and(|result| crate::spill::address_only(unit.function, result, DEPTH));
+        .is_some_and(|result| folds_in_every_use(unit.function, cold, result, DEPTH));
     (live || folds).then_some((shl, x, scaled))
 }
 
@@ -711,6 +779,7 @@ fn noop_cast(
 /// `isProfitableToFoldIntoAddressingMode` (read once, or only by addresses).
 fn through_cast(
     unit: &passes::Unit,
+    cold: &Cold,
     tti: &dyn Tti,
     retry: bool,
     space: u32,
@@ -724,10 +793,10 @@ fn through_cast(
     }
     let instruction = unit.function.instruction(cast);
     let result = instruction.result?;
-    if unit.function.users(result).iter().count() != 1 && !crate::spill::address_only(unit.function, result, DEPTH) {
+    if unit.function.users(result).iter().count() != 1 && !folds_in_every_use(unit.function, cold, result, DEPTH) {
         return None;
     }
-    let mut inner = matched(unit, tti, retry, space, block, bytes, instruction.operands[0], depth);
+    let mut inner = matched(unit, cold, tti, retry, space, block, bytes, instruction.operands[0], depth);
     inner.insts.push(cast);
     Some(inner)
 }
@@ -735,6 +804,7 @@ fn through_cast(
 /// `matchAddr`: `address` read as a mode, `depth` more `gep`s allowed.
 fn matched(
     unit: &passes::Unit,
+    cold: &Cold,
     tti: &dyn Tti,
     retry: bool,
     space: u32,
@@ -743,7 +813,7 @@ fn matched(
     address: Operand,
     depth: u32,
 ) -> Mode {
-    matched_over(unit, tti, retry, space, block, bytes, address, depth, false)
+    matched_over(unit, cold, tti, retry, space, block, bytes, address, depth, false)
 }
 
 /// [`matched`]; `opaque` reads the base operand of the `gep` as a register
@@ -752,6 +822,7 @@ fn matched(
 /// [L5408](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/CodeGenPrepare.cpp#L5408)).
 fn matched_over(
     unit: &passes::Unit,
+    cold: &Cold,
     tti: &dyn Tti,
     retry: bool,
     space: u32,
@@ -770,7 +841,7 @@ fn matched_over(
     // a cast between spaces that share their representation is the address
     // of its operand, at the same depth.
     if instruction.opcode == Opcode::Cast(CastOp::AddrSpaceCast) {
-        return through_cast(unit, tti, retry, space, block, bytes, gep, depth).unwrap_or_else(plain);
+        return through_cast(unit, cold, tti, retry, space, block, bytes, gep, depth).unwrap_or_else(plain);
     }
     let Opcode::GetElementPtr { source } = instruction.opcode else { return plain() };
     if depth == 0 {
@@ -796,7 +867,7 @@ fn matched_over(
     let inner = if opaque {
         Mode { base: instruction.operands[0], reg: None, offset: 0, index: None, insts: Vec::new(), in_bounds: true }
     } else {
-        matched(unit, tti, retry, space, block, bytes, instruction.operands[0], depth - 1)
+        matched(unit, cold, tti, retry, space, block, bytes, instruction.operands[0], depth - 1)
     };
     let mut insts = inner.insts;
     let mut in_bounds = inner.in_bounds && instruction.flags.contains(Flags::INBOUNDS);
@@ -810,7 +881,7 @@ fn matched_over(
         (Some(&(at, scale)), Some((held, 1)))
             if reg.is_none()
                 && is_global(unit.context, inner.base)
-                && register_free(unit, block, held, instruction.operands[0]) =>
+                && register_free(unit, cold, block, held, instruction.operands[0]) =>
         {
             reg = Some(held);
             Some((instruction.operands[1 + at], scale))
@@ -820,7 +891,7 @@ fn matched_over(
         // DEVIATE CGP2: in real mode the retry is a candidate
         // that `sunk_priced` weighs against register pressure, not a rule.
         (Some(_), Some(_)) if !opaque && (retry || tti.scaled_index_insns() == 0) => {
-            return matched_over(unit, tti, retry, space, block, bytes, address, depth, true);
+            return matched_over(unit, cold, tti, retry, space, block, bytes, address, depth, true);
         }
         (Some(_), Some(_)) => {
             RETRY_REACHED.set(true);
@@ -839,6 +910,7 @@ fn matched_over(
                 && is_global(unit.context, inner.base)
                 && shifted(
                     unit,
+                    cold,
                     tti,
                     retry,
                     space,
@@ -860,7 +932,7 @@ fn matched_over(
             let operand = instruction.operands[1 + at];
             // `matchScaledValue(index, scale)` of a `shl x, C`: the shift is
             // the scale of the mode (`matchOperationAddr`, `Instruction::Shl`).
-            match shifted(unit, tti, retry, space, block, bytes, operand, scale, offset + inner.offset) {
+            match shifted(unit, cold, tti, retry, space, block, bytes, operand, scale, offset + inner.offset) {
                 Some((shl, folded, scale)) => {
                     insts.push(shl);
                     in_bounds = false;
@@ -884,7 +956,7 @@ fn matched_over(
     if let Some(result) = instruction.result
         && registers
         && unit.function.users(result).iter().count() > 1
-        && !crate::spill::address_only(unit.function, result, DEPTH)
+        && !folds_in_every_use(unit.function, cold, result, DEPTH)
         && !folding_extends_no_live_range(unit, block, [Some(inner.base), reg, index.map(|(held, _)| held)])
     {
         return plain();
@@ -909,26 +981,26 @@ thread_local! {
 /// no such price: its code16 build has 32-bit registers, so it is no oracle.
 fn sunk_priced(
     unit: &mut passes::Unit,
+    cold: &Cold,
     analyses: &Analyses,
     tti: &dyn Tti,
 ) -> bool {
     // Most functions never reach the retry: match without making anything,
     // and clone only for one that does.
     RETRY_REACHED.set(false);
-    for (block, inst) in unit.function.walk().collect::<Vec<_>>() {
-        let Some(at) = address_of(unit.function, inst) else { continue };
+    for (block, inst, at) in accesses(unit, cold) {
         let address = unit.function.instruction(inst).operands[at];
         if let Some(Type::Pointer(space)) =
             unit.function.operand_type(unit.context, address).map(|ty| unit.context.types.get(ty).clone())
         {
-            matched(unit, tti, false, space, block, access_bytes(unit, inst), address, DEPTH);
+            matched(unit, cold, tti, false, space, block, access_bytes(unit, inst, at), address, DEPTH);
         }
     }
     if !RETRY_REACHED.get() {
-        return sunk(unit, tti, false);
+        return sunk(unit, cold, tti, false);
     }
     let mut trial = unit.function.clone();
-    let plain = sunk(unit, tti, false);
+    let plain = sunk(unit, cold, tti, false);
     let retried = {
         let mut other = passes::Unit {
             context: &mut *unit.context,
@@ -938,7 +1010,7 @@ fn sunk_priced(
             metadata: unit.metadata,
             declared: &mut *unit.declared,
         };
-        sunk(&mut other, tti, true)
+        sunk(&mut other, cold, tti, true)
     };
     if !retried || trial == *unit.function {
         return plain;
@@ -961,33 +1033,29 @@ fn sunk_priced(
 
 fn sunk(
     unit: &mut passes::Unit,
+    cold: &Cold,
     tti: &dyn Tti,
     retry: bool,
 ) -> bool {
-    let accesses: Vec<(BlockId, InstId, usize)> = unit
-        .function
-        .walk()
-        .filter_map(|(block, inst)| Some((block, inst, address_of(unit.function, inst)?)))
-        .collect();
     let mut made: BTreeMap<(BlockId, Operand), Operand> = BTreeMap::new();
     let mut touched: Vec<InstId> = Vec::new();
     let mut changed = false;
-    for (block, access, at) in accesses {
+    for (block, access, at) in accesses(unit, cold) {
         let address = unit.function.instruction(access).operands[at];
         let Some(Type::Pointer(space)) =
             unit.function.operand_type(unit.context, address).map(|ty| unit.context.types.get(ty).clone())
         else {
             continue;
         };
-        let bytes = access_bytes(unit, access);
+        let bytes = access_bytes(unit, access, at);
         if let Some(ready) =
-            select_combined(unit, tti, retry, space, block, bytes, access, address, &mut made, &mut touched)
+            select_combined(unit, cold, tti, retry, space, block, bytes, access, address, &mut made, &mut touched)
         {
             unit.function.set_operand(access, at, ready);
             changed = true;
             continue;
         }
-        let mode = matched(unit, tti, retry, space, block, bytes, address, DEPTH);
+        let mode = matched(unit, cold, tti, retry, space, block, bytes, address, DEPTH);
         let local = |inst: &InstId| unit.function.parent(*inst) == Some(block);
         if mode.insts.is_empty() || mode.insts.iter().all(local) {
             continue;
@@ -1027,6 +1095,7 @@ fn sunk(
 /// k1, k2`), made before `access` when either arm is made in another block.
 fn select_combined(
     unit: &mut passes::Unit,
+    cold: &Cold,
     tti: &dyn Tti,
     retry: bool,
     space: u32,
@@ -1048,8 +1117,8 @@ fn select_combined(
     }
     let (condition, first, second) = (chosen.operands[0], chosen.operands[1], chosen.operands[2]);
     let (one, other) = (
-        matched(unit, tti, retry, space, block, bytes, first, DEPTH),
-        matched(unit, tti, retry, space, block, bytes, second, DEPTH),
+        matched(unit, cold, tti, retry, space, block, bytes, first, DEPTH),
+        matched(unit, cold, tti, retry, space, block, bytes, second, DEPTH),
     );
     if one.base != other.base
         || one.reg.is_some()
