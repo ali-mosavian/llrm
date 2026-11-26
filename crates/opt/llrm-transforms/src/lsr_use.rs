@@ -1146,7 +1146,9 @@ impl Cost {
 
         // Favor registers that need no setup in the preheader.
         let prev_setup = self.c.setup_cost;
-        self.c.setup_cost += setup_cost(r.se, r.cx, r.tti, reg, SETUP_COST_DEPTH_LIMIT);
+        let (cx, tti) = (r.cx, r.tti);
+        self.c.setup_cost +=
+            r.se.memoized_setup_cost(reg, |se| setup_cost(se, cx, tti, reg, SETUP_COST_DEPTH_LIMIT));
         // Even with the depth limit, the cost stays valid.
         self.c.setup_cost = self.c.setup_cost.min(1 << 16);
         if r.bytes_counted
@@ -1359,6 +1361,7 @@ pub fn setup_cost(
     reg: Scev,
     depth: u32,
 ) -> u32 {
+    llrm_mir::counts::bump(llrm_mir::counts::Event::LsrSetupVisits);
     match se.scev_type(reg) {
         Type::Unknown => 1,
         Type::Constant => {

@@ -609,6 +609,15 @@ fn analyze_loop_unroll_cost(
 
     let budget = run.tti.unroll_analysis_budget().unwrap_or(ANALYSIS_BUDGET);
     let header = lp.get_header();
+    // Every trip walks the header, so the simulation is over the budget before
+    // it is made when the trips of the header alone are: the same refusal, with
+    // no simulation (a 20000-trip sum took 0.8 G compile instructions to be
+    // refused).
+    let per_trip = run.function.iter_block(header).filter(|inst| !eph.contains(inst)).count() as u64;
+    if u64::from(trip_count) * per_trip > budget {
+        why(run, lp, &format!("cannot analyze: over {budget} simulated instructions"));
+        return None;
+    }
     let latch = lp.get_loop_latch(run.function).expect("a latch");
     let preheader = lp.get_loop_preheader(run.function).expect("a preheader");
     let kind = if run.options.min_size { CostKind::CodeSize } else { CostKind::SizeAndLatency };

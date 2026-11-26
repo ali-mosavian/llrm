@@ -348,6 +348,8 @@ fn plan_loop(
     // The loop's register units do not change between the two builds.
     let units = std::cell::Cell::new(None);
     let build = |se: &mut ScalarEvolution| {
+        // The setup costs held are of one loop's rating on this target.
+        se.reset_setup_costs();
         let mut lsr = Collection::new(&cx, tti, header, &safe_to_expand, false, iv_inc_insert_pos);
         lsr.other_register_units = match units.get() {
             Some(counted) => counted,

@@ -35,7 +35,7 @@
 //! ```
 
 use std::cmp::Reverse;
-use std::collections::{BinaryHeap, HashMap};
+use std::collections::BinaryHeap;
 
 use llrm_mir::dense::{IdMap, IdSet};
 use llrm_mir::edit::Position;
@@ -175,22 +175,28 @@ fn topological(
     edges: &[(usize, usize)],
     priority: &dyn Fn(usize) -> (usize, usize),
 ) -> Option<Vec<usize>> {
-    let mut waiting: HashMap<usize, usize> = nodes.iter().map(|node| (*node, 0)).collect();
-    let mut after: HashMap<usize, Vec<usize>> = HashMap::new();
+    // Node numbers are small and dense (instruction positions, then bundles):
+    // vectors by number, not hash maps, which cost a SipHash per edge.
+    let size = nodes.iter().chain(edges.iter().flat_map(|(from, to)| [from, to])).max().map_or(0, |most| most + 1);
+    let mut waiting: Vec<Option<usize>> = vec![None; size];
+    for node in nodes {
+        waiting[*node] = Some(0);
+    }
+    let mut after: Vec<Vec<usize>> = vec![Vec::new(); size];
     for (from, to) in edges {
         if from == to {
             return None;
         }
-        *waiting.get_mut(to)? += 1;
-        after.entry(*from).or_default().push(*to);
+        *waiting[*to].as_mut()? += 1;
+        after[*from].push(*to);
     }
     let mut ready: BinaryHeap<Reverse<((usize, usize), usize)>> =
-        nodes.iter().filter(|node| waiting[*node] == 0).map(|node| Reverse((priority(*node), *node))).collect();
+        nodes.iter().filter(|node| waiting[**node] == Some(0)).map(|node| Reverse((priority(*node), *node))).collect();
     let mut order = Vec::with_capacity(nodes.len());
     while let Some(Reverse((_, node))) = ready.pop() {
         order.push(node);
-        for next in after.get(&node).into_iter().flatten() {
-            let count = waiting.get_mut(next).expect("a node");
+        for next in &after[node] {
+            let count = waiting[*next].as_mut().expect("a node");
             *count -= 1;
             if *count == 0 {
                 ready.push(Reverse((priority(*next), *next)));
@@ -198,6 +204,12 @@ fn topological(
         }
     }
     (order.len() == nodes.len()).then_some(order)
+}
+
+#[cfg(test)]
+thread_local! {
+    /// The instructions `acyclic` made nodes of, summed over its calls.
+    pub(crate) static REGION_NODES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 /// Whether the instructions of `block`, each bundle (`bundles`: the scalars of
@@ -209,12 +221,33 @@ pub(crate) fn acyclic(
     bundles: &[(Vec<InstId>, Vec<InstId>)],
     pure_calls: &IdSet<InstId>,
 ) -> bool {
-    let insts: Vec<InstId> = function
-        .iter_block(block)
-        .filter(|inst| {
-            function.instruction(*inst).opcode != Opcode::Phi && !function.instruction(*inst).opcode.is_terminator()
-        })
+    // `BlockScheduling` only schedules the region the bundles span
+    // (`ScheduleStart`..`ScheduleEnd`): every edge runs forward in the block,
+    // so a cycle of bundles lies between the first and the last lane, and
+    // what is outside cannot be on one. A gathered value is read by a lane,
+    // so it stands before the last lane.
+    let lanes: IdSet<InstId> = bundles
+        .iter()
+        .flat_map(|(lanes, _)| lanes.iter().copied())
+        .filter(|lane| function.parent(*lane) == Some(block))
         .collect();
+    let mut insts: Vec<InstId> = Vec::new();
+    let mut seen = 0;
+    for inst in function.iter_block(block) {
+        if seen == lanes.len() {
+            break;
+        }
+        let in_region = seen > 0 || lanes.contains(&inst);
+        if lanes.contains(&inst) {
+            seen += 1;
+        }
+        let opcode = &function.instruction(inst).opcode;
+        if in_region && *opcode != Opcode::Phi && !opcode.is_terminator() {
+            insts.push(inst);
+        }
+    }
+    #[cfg(test)]
+    REGION_NODES.with(|nodes| nodes.set(nodes.get() + insts.len()));
     let mut node_of: IdMap<InstId, usize> = IdMap::new();
     for (at, inst) in insts.iter().enumerate() {
         node_of.insert(*inst, at);
@@ -231,7 +264,8 @@ pub(crate) fn acyclic(
     for inst in &insts {
         let to = node_of[inst];
         for def in reads(function, block, *inst) {
-            let from = node_of[&def];
+            // Before the region: it stands ahead of every bundle.
+            let Some(&from) = node_of.get(&def) else { continue };
             if from == to {
                 // Two lanes of one bundle, one reading the other.
                 return false;
@@ -301,4 +335,41 @@ pub(crate) fn schedule(
         function.move_to(insts[node], Position::Before(terminator)).expect("a placed instruction");
     }
     true
+}
+
+#[cfg(test)]
+mod topological_tests {
+    use super::topological;
+
+    fn by_number(node: usize) -> (usize, usize) {
+        (node, 0)
+    }
+
+    /// Of the nodes ready, the one with the lowest priority goes first.
+    #[test]
+    fn the_earliest_ready_node_goes_first() {
+        let order = topological(&[0, 1, 2, 3], &[(2, 0), (1, 3)], &by_number).unwrap();
+        assert_eq!(order, vec![1, 2, 0, 3]);
+    }
+
+    /// Node numbers are positions in a block and bundles after them: a sparse
+    /// set of them, the large ones last, is ordered as the dense one is.
+    #[test]
+    fn sparse_node_numbers_are_ordered_as_dense_ones() {
+        let order = topological(&[5, 90_000, 7], &[(90_000, 7), (7, 5)], &by_number).unwrap();
+        assert_eq!(order, vec![90_000, 7, 5]);
+    }
+
+    #[test]
+    fn nodes_that_wait_on_each_other_have_no_order() {
+        assert_eq!(topological(&[0, 1, 2], &[(0, 1), (1, 2), (2, 0)], &by_number), None);
+        assert_eq!(topological(&[0, 1], &[(1, 1)], &by_number), None);
+    }
+
+    /// An edge to a node that is not listed is no schedule, as it was.
+    #[test]
+    fn an_edge_to_an_unlisted_node_has_no_order() {
+        assert_eq!(topological(&[0, 1], &[(0, 9)], &by_number), None);
+        assert_eq!(topological(&[0, 1], &[(9, 0)], &by_number), None);
+    }
 }

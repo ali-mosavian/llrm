@@ -89,6 +89,7 @@ const SOURCE_ORDER: Options = Options {
     carry_chain: true,
     global_copies: true,
     relax_classes: false,
+    stop_if_unchanged: false,
     remat_constants: false,
     data_constants: false,
     slot_registers: false,

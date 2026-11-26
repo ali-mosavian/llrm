@@ -637,11 +637,11 @@ struct Mf<'a, C, J> {
     /// A loop's header to the header of the loop around it, for the loops that
     /// have one.
     enclosing: HashMap<u32, u32>,
-    /// Positions and edges of the blocks as they are, built on the first ask
-    /// after a change (LLVM keeps these on the block).
+    /// The edges of the blocks, built on the first ask and kept as the pass
+    /// edits (LLVM keeps these on the block).
     graph: std::cell::RefCell<Option<Graph>>,
     /// Block id to its place in the layout: rebuilt only when a block is
-    /// inserted, not after every branch edit that drops [`Mf::graph`].
+    /// inserted.
     positions: std::cell::RefCell<Option<Vec<usize>>>,
     /// Whether a tail stops short of a call area it did not open
     /// ([`Jump::call_area`]).
@@ -649,14 +649,14 @@ struct Mf<'a, C, J> {
     jump: std::marker::PhantomData<J>,
 }
 
-/// Where each block is and which blocks reach it, as flat tables indexed by
-/// block id: a rebuild costs a few allocations, not one per block.
+/// The edges of every block by block id: `addSuccessor` / `removeSuccessor`
+/// keep both ends in step as a block's jumps change.
 struct Graph {
-    position: Vec<usize>,
-    /// The predecessors of block `b` are `from[start[b]..start[b + 1]]`, in
-    /// layout order.
-    start: Vec<u32>,
-    from: Vec<u32>,
+    /// Sorted, without repeats ([`Mf::edges`]).
+    successors: Vec<Vec<u32>>,
+    /// The blocks that name or fall into the block, in no order; the layout
+    /// order is put on them when they are asked for.
+    predecessors: Vec<Vec<u32>>,
 }
 
 const ABSENT: usize = usize::MAX;
@@ -709,43 +709,58 @@ impl<C, J> Mf<'_, C, J> {
         scanned();
         let blocks = &self.function.blocks;
         let size = blocks.iter().map(|block| block.id as usize + 1).max().unwrap_or(0);
-        let mut position = vec![ABSENT; size];
-        for (at, block) in blocks.iter().enumerate() {
-            position[block.id as usize] = at;
-        }
-        let mut edges: Vec<(u32, u32)> = Vec::new();
+        let mut graph = Graph { successors: vec![Vec::new(); size], predecessors: vec![Vec::new(); size] };
         let mut out = Vec::new();
         for (at, block) in blocks.iter().enumerate() {
             self.edges(at, &mut out);
-            // a jump to a block that is not there reaches no one
-            edges.extend(out.iter().filter(|&&to| (to as usize) < size).map(|&to| (to, block.id)));
+            for &to in &out {
+                // a jump to a block that is not there reaches no one
+                if let Some(into) = graph.predecessors.get_mut(to as usize) {
+                    into.push(block.id);
+                }
+            }
+            graph.successors[block.id as usize] = out.clone();
         }
-        let mut start = vec![0u32; size + 1];
-        for &(to, _) in &edges {
-            start[to as usize + 1] += 1;
-        }
-        for b in 0..size {
-            start[b + 1] += start[b];
-        }
-        // filled in edge order, which is layout order of the sources
-        let mut next = start.clone();
-        let mut from = vec![0u32; edges.len()];
-        for &(to, source) in &edges {
-            from[next[to as usize] as usize] = source;
-            next[to as usize] += 1;
-        }
-        Graph { position, start, from }
+        graph
     }
 
-    /// The function changed: the next question rebuilds the graph.
-    fn changed(&mut self) {
-        *self.graph.get_mut() = None;
+    /// The jumps of these blocks changed: their edges are read again, both
+    /// ends. Blocks that were not there are added.
+    fn relink(
+        &mut self,
+        ids: &[u32],
+    ) {
+        let Some(mut graph) = self.graph.get_mut().take() else { return };
+        let size = ids.iter().map(|&id| id as usize + 1).fold(graph.successors.len(), usize::max);
+        graph.successors.resize(size, Vec::new());
+        graph.predecessors.resize(size, Vec::new());
+        let mut out = Vec::new();
+        for &id in ids {
+            self.edges(self.at(id), &mut out);
+            let old = std::mem::take(&mut graph.successors[id as usize]);
+            for &to in old.iter().filter(|to| !out.contains(to)) {
+                if let Some(into) = graph.predecessors.get_mut(to as usize) {
+                    into.retain(|&from| from != id);
+                }
+            }
+            for &to in out.iter().filter(|to| !old.contains(to)) {
+                if let Some(into) = graph.predecessors.get_mut(to as usize) {
+                    into.push(id);
+                }
+            }
+            graph.successors[id as usize] = out.clone();
+        }
+        *self.graph.get_mut() = Some(graph);
     }
 
-    /// A block was inserted: the positions change with the graph.
-    fn layout_changed(&mut self) {
+    /// A block was inserted: the positions change, and the edges of the blocks
+    /// around the cut.
+    fn layout_changed(
+        &mut self,
+        ids: &[u32],
+    ) {
         *self.positions.get_mut() = None;
-        self.changed();
+        self.relink(ids);
     }
 
     fn at(
@@ -796,19 +811,35 @@ impl<C, J: Jump> TailMergeFunction for Mf<'_, C, J> {
         &self,
         block: u32,
     ) -> Vec<u32> {
-        let mut out = Vec::new();
-        self.edges(self.at(block), &mut out);
-        out
+        let kept = self.with_graph(|graph| graph.successors.get(block as usize).cloned().unwrap_or_default());
+        #[cfg(debug_assertions)]
+        {
+            let mut scanned = Vec::new();
+            self.edges(self.at(block), &mut scanned);
+            assert_eq!(kept, scanned, "stale successors of block {block}");
+        }
+        kept
     }
 
     fn predecessors(
         &self,
         block: u32,
     ) -> Vec<u32> {
-        self.with_graph(|graph| match (graph.start.get(block as usize), graph.start.get(block as usize + 1)) {
-            (Some(&from), Some(&to)) => graph.from[from as usize..to as usize].to_vec(),
-            _ => Vec::new(),
-        })
+        let mut kept = self.with_graph(|graph| graph.predecessors.get(block as usize).cloned().unwrap_or_default());
+        kept.sort_unstable_by_key(|&from| self.at(from));
+        #[cfg(debug_assertions)]
+        {
+            let mut out = Vec::new();
+            let scanned: Vec<u32> = (0..self.function.blocks.len())
+                .filter(|&at| {
+                    self.edges(at, &mut out);
+                    out.contains(&block)
+                })
+                .map(|at| self.function.blocks[at].id)
+                .collect();
+            assert_eq!(kept, scanned, "stale predecessors of block {block}");
+        }
+        kept
     }
 
     fn insts(
@@ -949,7 +980,7 @@ impl<C, J: Jump> TailMergeFunction for Mf<'_, C, J> {
             self.removed.insert(block, jump.clone());
         }
         fold::remove_branch(self.function, at);
-        self.changed();
+        self.relink(&[block]);
     }
 
     fn insert_branch(
@@ -969,11 +1000,11 @@ impl<C, J: Jump> TailMergeFunction for Mf<'_, C, J> {
                 }
             }
             self.function.blocks[at].insts.push(jump);
-            self.changed();
+            self.relink(&[block]);
             return;
         }
         fold::insert_branch::<C, J>(self.function, at, taken, other, cond);
-        self.changed();
+        self.relink(&[block]);
     }
 
     fn loop_header(
@@ -1015,7 +1046,7 @@ impl<C, J: Jump> TailMergeFunction for Mf<'_, C, J> {
         }
         let tail = self.function.blocks[position].insts.split_off(at);
         self.function.insert_block(position + 1, Block { id, insts: tail, phis: Vec::new() });
-        self.layout_changed();
+        self.layout_changed(&[block, id]);
         Some(id)
     }
 
@@ -1042,7 +1073,7 @@ impl<C, J: Jump> TailMergeFunction for Mf<'_, C, J> {
         if self.function.blocks.get(position + 1).map(|next| next.id) != Some(dest) {
             fold::insert_branch::<C, J>(self.function, position, dest, None, None);
         }
-        self.changed();
+        self.relink(&[block]);
     }
 }
 
