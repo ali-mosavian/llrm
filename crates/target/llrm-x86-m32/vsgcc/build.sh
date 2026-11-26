@@ -54,6 +54,13 @@ F="$REF_LD -Dfar= -m32 -march=i486 $(python3 "$R/tools/external_flags.py" --relo
 # VSGCC_GCC_EXTRA: one more flag on the externals' lines, spelled out only to test the flag parity refusal below
 # VSGCC_NOVEC=1: the scalar column, both competitors with their vectorizers off (gcc 13 runs its vectorizer at O2/O3 even with no SIMD)
 NV_GCC=; NV_CLANG=; [ -z "${VSGCC_NOVEC:-}" ] || { NV_GCC="-fno-tree-vectorize -fno-tree-slp-vectorize"; NV_CLANG="-fno-vectorize -fno-slp-vectorize"; }
+# Our objects (the x86_32-wat row) keep a 4-byte stack at a call; the externals' default is 16, where they store arguments into a
+# reserved frame instead of pushing them. VSGCC_STACK=default leaves them at theirs, spelled out only to test the refusal below.
+[ "${VSGCC_STACK:-}" = default ] || { NV_GCC="$NV_GCC -mpreferred-stack-boundary=2"; NV_CLANG="$NV_CLANG -mstack-alignment=4"; }
+PYTHONDONTWRITEBYTECODE=1 python3 -c "import sys; sys.path.insert(0, sys.argv[1]); import flagcheck; print(flagcheck.PROBE, end='')" "$K/.." > stack.$P.c
+$LLRM --target=x86_32-wat ${LLRM_FLAGS:-} -mabi=$ABI -march=i486 -O2 -S -o stack.$P.llrm.s stack.$P.c 2>stack.$P.err || fail "FAIL stack probe llrm $P"
+gcc $F $NV_GCC -O2 -S -masm=intel -o stack.$P.gcc.s stack.$P.c && python3 "$K/../flagcheck.py" stack stack.$P.llrm.s stack.$P.gcc.s || fail "FAIL stack parity gcc $P"
+$CLANG $F $NV_CLANG -O2 -S -masm=intel -o stack.$P.clang.s stack.$P.c && python3 "$K/../flagcheck.py" stack stack.$P.llrm.s stack.$P.clang.s || fail "FAIL stack parity clang $P"
 python3 "$(dirname "$0")/flagcheck.py" source $S || fail "FAIL flag parity: $P uses wchar_t"
 for o in O1 O2 O3 Os; do
   # flag parity (flagcheck.py): a flag on one external's line only is refused, not measured (the NV_* switches are on both)

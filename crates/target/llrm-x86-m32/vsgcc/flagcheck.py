@@ -3,6 +3,7 @@
   flagcheck.py externals gcc|clang LEVEL FLAG...   the external's flags against the program's (build.sh calls this per column)
   flagcheck.py ours LEVEL OURS_CLANG_LINE FLAG...   the clang line llrm-cc ran (logged through a wrapper) against an external's
   flagcheck.py source FILE                          refuses a program that uses wchar_t or a wide literal
+  flagcheck.py stack OURS_ASM EXTERNAL_ASM          refuses a column whose calls align the stack unlike ours (the PROBE, compiled)
 
 The external column goes through `external_flags.check_gcc_flags`: the program's tokens (-O level, -march) must be in it, and
 beyond the shared list nothing may be (a distro default on one side moved arm64's cells 4..16 B). The llrm-cc line differs from an
@@ -92,6 +93,32 @@ def check_ours(level, line, tokens):
     return f"floating-point flags {fp}" if fp else ""
 
 
+# Compiled by every column (build.sh): how far each aligns the stack at a call.
+PROBE = "extern void g(int);\nvoid f(void) { g(1); }\n"
+
+
+def call_alignment(asm):
+    """16 or 4: what the stack is aligned to at the first call of the compiled PROBE (Intel syntax; the return address counts)."""
+    depth = 4
+    for line in asm.splitlines():
+        words = line.split(";")[0].split("#")[0].replace(",", " ").split()
+        if not words:
+            continue
+        if words[0] == "call":
+            return 16 if depth % 16 == 0 else 4
+        if words[0] in ("push", "pushd", "pushl"):
+            depth += 4
+        elif words[:2] == ["sub", "esp"]:
+            depth += int(words[2], 0)
+    raise ValueError("no call in the probe")
+
+
+def check_stack(ours, external):
+    """A bar that aligns its calls unlike ours stores arguments where ours pushes them: a convention's cost read as the compiler's."""
+    a, b = call_alignment(ours), call_alignment(external)
+    return "" if a == b else f"calls align the stack to {a} bytes in ours, {b} in the external"
+
+
 if __name__ == "__main__":
     mode = sys.argv[1]
     if mode == "source":
@@ -99,7 +126,12 @@ if __name__ == "__main__":
             print(f"flagcheck: {sys.argv[2]} uses wchar_t or a wide literal: ours is 2 bytes, gcc and clang 4 (cell n/a)", file=sys.stderr)
             sys.exit(2)
         sys.exit(0)
-    why = check_external(sys.argv[2], sys.argv[3], sys.argv[4:]) if mode == "externals" else check_ours(sys.argv[2], sys.argv[3], sys.argv[4:])
+    if mode == "stack":
+        why = check_stack(Path(sys.argv[2]).read_text(), Path(sys.argv[3]).read_text())
+    elif mode == "externals":
+        why = check_external(sys.argv[2], sys.argv[3], sys.argv[4:])
+    else:
+        why = check_ours(sys.argv[2], sys.argv[3], sys.argv[4:])
     if why:
         print(f"flagcheck: {why}", file=sys.stderr)
         sys.exit(2)
