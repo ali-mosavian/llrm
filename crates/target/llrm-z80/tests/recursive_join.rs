@@ -1,6 +1,7 @@
-//! A private recursion whose result joins a phi, one `add` and the `ret` was made an accumulator loop (TCE-ACC-PHI):
-//! with wide arguments the loop copies them through the frame every trip. `recursive_stack_args` -Os was 634 B and
-//! 8,539 T against 374 B and 6,271 T for the recursion (SDCC 331 B and 7,302 T). The pin keeps the call.
+//! A private recursion whose result joins a phi, one `add` and the `ret`, was
+//! made an accumulator loop (TCE-ACC-PHI). With wide stack arguments the loop
+//! copies them through the frame every trip, which is slower and larger than
+//! the call. The pin keeps the call.
 
 use llrm_z80::compile::text;
 use llrm_z80::driver::{Level, Request};

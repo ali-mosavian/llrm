@@ -187,10 +187,9 @@ impl Tti for Z80Tti {
     }
 
     /// The pin keeps a recursion whose result joins a phi before the
-    /// operation; with three register pairs, a loop that carries several wide
+    /// operation. With three register pairs, a loop that carries several wide
     /// arguments copies them through the frame each trip, which costs more
-    /// than the call's pushes (`recursive_stack_args` -Os: loop 634 B / 8,539 T,
-    /// recursion 374 B / 6,271 T, SDCC 331 B / 7,302 T).
+    /// than the call's pushes.
     fn eliminates_accumulator_through_join(&self) -> bool {
         false
     }
