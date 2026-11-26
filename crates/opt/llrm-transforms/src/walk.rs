@@ -111,7 +111,12 @@ impl ProgramPass for ModuleIpo {
         if self.tail_recursion {
             for at in 0..count {
                 for &id in &private[at] {
-                    if crate::tailcallelim::eliminate_linear_recursion(&mut program.modules[at], &program.layout, id) {
+                    if crate::tailcallelim::eliminate_linear_recursion(
+                        &mut program.modules[at],
+                        &program.layout,
+                        std::rc::Rc::clone(&program.target),
+                        id,
+                    ) {
                         modules[at].changed(id);
                         changed = true;
                     }
