@@ -274,8 +274,7 @@ pub struct JoinSide {
     /// The registers it may take.
     pub palette: BTreeSet<RegId>,
     /// The instructions that name it, the copy apart, by kind: what the join
-    /// would leave a narrower class to serve. Empty for a side the join does
-    /// not narrow.
+    /// would leave a narrower class to serve.
     pub kinds: UseKinds,
     /// The same instructions one by one with the frequency of their block;
     /// only under `LLRM_CHECK_USE_SUMMARY`, empty otherwise.
@@ -469,17 +468,7 @@ impl CoalescerEnv for TargetEnv {
             return true;
         }
         self.catch_up(lis);
-        // A partial pair's `src` is the narrow value: the joined value takes
-        // the wide registers that have its registers as their low part.
-        let widths = super::pair::move_copy(lis.instr(copy)).map(|(d, s)| d.width != s.width);
-        let joined = if widths == Some(true) { self.hosts(y, x) } else { x.intersection(y).copied().collect() };
         let side = |value: u32, palette: &BTreeSet<RegId>| {
-            // A side that keeps every register it had gives up nothing: its
-            // uses are not read.
-            if *palette == joined {
-                return JoinSide { value, palette: palette.clone(), kinds: UseKinds::default(), uses: Vec::new() };
-            }
-            SIDES_SCANNED.with(|scanned| scanned.set(scanned.get() + 1));
             let mut kinds = self.use_kinds(lis, value);
             // The copy is no use of the join it is the object of.
             if let Some(kind) = self.kind(lis.instr(copy), value) {
@@ -497,6 +486,10 @@ impl CoalescerEnv for TargetEnv {
             };
             JoinSide { value, palette: palette.clone(), kinds: sums(&kinds), uses }
         };
+        // A partial pair's `src` is the narrow value: the joined value takes
+        // the wide registers that have its registers as their low part.
+        let widths = super::pair::move_copy(lis.instr(copy)).map(|(d, s)| d.width != s.width);
+        let joined = if widths == Some(true) { self.hosts(y, x) } else { x.intersection(y).copied().collect() };
         JOINS_BUILT.with(|built| built.set(built.get() + 1));
         should_join(&Join { one: side(src, x), other: side(dst, y), joined, copy_frequency: freq(copy) })
     }
@@ -549,9 +542,6 @@ thread_local! {
     /// How many [`Join`]s `should_coalesce` has built on this thread, for a
     /// test that a target with no opinion costs none.
     pub static JOINS_BUILT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
-    /// Sides of a [`Join`] whose uses `should_coalesce` has read on this
-    /// thread.
-    pub static SIDES_SCANNED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 /// `body` with its copies joined by the translated coalescer.
