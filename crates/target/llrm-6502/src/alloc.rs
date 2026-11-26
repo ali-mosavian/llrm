@@ -4493,7 +4493,12 @@ fn save_preserved<const STACK: bool>(
         let mut out = Vec::with_capacity(block.insts.len());
         for inst in std::mem::take(&mut block.insts) {
             if inst.kind == Kind::Op("RTS") {
+                // soft-stack slots are reloaded from `rs0`, so before a
+                // realigned frame gives it back. The hardware-stack
+                // restore may end in a jump that returns, so it stays after.
+                let release = out.pop_if(|inst: &mut Inst| STACK && inst.kind == Kind::Op("RESTORESP"));
                 out.extend(restores.iter().cloned());
+                out.extend(release);
             }
             out.push(inst);
         }

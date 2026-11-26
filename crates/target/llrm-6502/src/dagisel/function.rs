@@ -41,7 +41,6 @@ pub fn builder_target() -> BuilderTarget {
         legal_ints: vec![8, 16],
         soft_float: true,
         // the frame realigns the stack for an over-aligned object
-        // (6502-REALIGN)
         max_alloca_align: None,
         jump_tables: false,
         string_instructions: false,

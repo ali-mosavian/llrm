@@ -1241,7 +1241,7 @@ impl llrm_mir::target::Machine for Mos6502Machine {
         Some(crate::frame::STACK_ALIGN as u64)
     }
 
-    /// An `alloca` aligned past this realigns the stack (6502-REALIGN).
+    /// An `alloca` aligned past this realigns the stack.
     fn realigned_above(&self) -> Option<u64> {
         Some(crate::frame::REALIGN_ABOVE)
     }
