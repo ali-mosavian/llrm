@@ -133,11 +133,14 @@ pub enum Event {
     LoopAnalyses,
     /// A top-level `computeKnownBits` of a value (`compute_known_bits`).
     KnownBitsComputed,
+    /// A copy nothing reads that reached the coalescer and was erased there:
+    /// `DeadMachineInstructionElim` should have removed it.
+    DeadCopiesErased,
 }
 
 const SLOTS: usize = 64;
 
-const NAMES: [&str; 50] = [
+const NAMES: [&str; 51] = [
     "function_clones",
     "function_forks",
     "machinings",
@@ -189,6 +192,7 @@ const NAMES: [&str; 50] = [
     "fact_sets",
     "loop_analyses",
     "known_bits_computed",
+    "dead_copies_erased",
 ];
 
 /// A pass's runs and the instructions of the functions it ran over.
@@ -205,7 +209,7 @@ thread_local! {
     static PASSES: RefCell<Vec<PassRow>> = const { RefCell::new(Vec::new()) };
     /// (pass, analysis, misses): the analyses a pass made the manager compute.
     static ASKS: RefCell<Vec<(&'static str, &'static str, u64)>> = const { RefCell::new(Vec::new()) };
-    static EVENTS: [Cell<u64>; 50] = const { [const { Cell::new(0) }; 50] };
+    static EVENTS: [Cell<u64>; 51] = const { [const { Cell::new(0) }; 51] };
     /// (name, hits, misses) by the address of the name, which is a literal.
     static FOUND: [Cell<usize>; SLOTS] = const { [const { Cell::new(0) }; SLOTS] };
     static ANALYSES: RefCell<Vec<(&'static str, u64, u64)>> = const { RefCell::new(Vec::new()) };
