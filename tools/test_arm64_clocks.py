@@ -11,7 +11,6 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "arm64"))
 import clocks  # noqa: E402
 import count  # noqa: E402
 
-HAVE_MCA = os.path.exists(f"{clocks.LLVM}/llvm-mca")
 
 
 def latency(text):
@@ -40,7 +39,25 @@ class Range(unittest.TestCase):
         self.assertTrue(all(count.trace_wants(name, kernel=False) for name in ("kernel", "main", "runtime")))
 
 
-@unittest.skipUnless(HAVE_MCA, "needs the pin's llvm-mca (LLVM_BIN)")
+class Tools(unittest.TestCase):
+    def python(self, llvm_bin, *args):
+        env = {k: v for k, v in os.environ.items() if k != "LLVM_BIN"}
+        if llvm_bin:
+            env["LLVM_BIN"] = llvm_bin
+        return subprocess.run([sys.executable, *args], capture_output=True, text=True, env=env, cwd=os.path.dirname(__file__))
+
+    def test_the_default_directory_has_the_tools_the_model_runs(self):
+        # The default was a build directory that a cleanup emptied of llvm-mca: the tool could not price anything.
+        run = self.python(None, "-c", "import sys; sys.path.insert(0, 'arm64'); import clocks; print(clocks.LLVM)")
+        for tool in ("llvm-mca", "llvm-objdump"):
+            self.assertTrue(os.path.exists(f"{run.stdout.strip()}/{tool}"), f"{run.stdout.strip()}/{tool}")
+
+    def test_a_missing_llvm_mca_fails_the_model_tests(self):
+        # They were skipped instead, so the file passed with the model untested.
+        run = self.python("/nonexistent", "-m", "unittest", "test_arm64_clocks.Model")
+        self.assertNotEqual(run.returncode, 0, run.stderr)
+
+
 class Model(unittest.TestCase):
     def test_a_dependent_chain_costs_the_model_latency_per_instruction(self):
         # The by-hand check: 4 chained muls cost 4 x the latency the model prints for one, in steady state.
