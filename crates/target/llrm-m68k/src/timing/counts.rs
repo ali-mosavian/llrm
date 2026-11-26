@@ -8,7 +8,7 @@
 //! a register alone forgets it: a wrong "known" would price a shift too low
 //! without saying so.
 
-use super::{is_shift, split_operands};
+use super::{is_shift, set_on_condition, split_operands};
 
 /// Bases that write no data register named in their operands.
 const NO_WRITE: [&str; 5] = ["cmp", "cmpa", "cmpi", "tst", "btst"];
@@ -44,10 +44,20 @@ impl DataRegisters {
         data_register(operands[0])
     }
 
-    /// The destination data register and signedness of the 16-bit multiply
-    /// `text` whose source is not an immediate: the 68000 prices it by
-    /// the source's value, which only the cpu state before and after can show.
-    pub fn multiply_destination(text: &str) -> Option<(usize, bool)> {
+    /// The data register the `Scc` `text` sets: whether it set or cleared it
+    /// is the 68000's price, which only the cpu state after can show.
+    pub fn set_destination(text: &str) -> Option<usize> {
+        let (base, _, operands) = parts(text);
+        if !set_on_condition(base) || operands.len() != 1 {
+            return None;
+        }
+        data_register(operands[0])
+    }
+
+    /// The source data register (none for a memory operand), destination data
+    /// register and signedness of the 16-bit multiply `text` whose source is
+    /// not an immediate: the 68000 prices it by the source's value.
+    pub fn multiply_operands(text: &str) -> Option<(Option<usize>, usize, bool)> {
         let (base, suffix, operands) = parts(text);
         if !matches!(base, "mulu" | "muls")
             || suffix != Some("w")
@@ -56,7 +66,7 @@ impl DataRegisters {
         {
             return None;
         }
-        Some((data_register(operands[1])?, base == "muls"))
+        Some((data_register(operands[0]), data_register(operands[1])?, base == "muls"))
     }
 
     /// The places the shift `text` moves, if it shifts by a register whose
