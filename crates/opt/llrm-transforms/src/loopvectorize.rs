@@ -2860,11 +2860,14 @@ fn why(
     }
 }
 
-/// `Function::hasOptSize`.
-/// A phi of one incoming value is that value, as VPlan reads it; the planners
-/// look for the instruction that makes a value, which such a phi hides (the
-/// step of an induction, when rotation could not merge the latch). `blocks`
-/// are of innermost loops, so no phi here is an inner loop's LCSSA phi.
+/// A phi of one incoming value is that value. The planners look for the
+/// instruction that makes a value, which such a phi hides (the step of an
+/// induction, when rotation could not merge the latch). `blocks` are of
+/// innermost loops, so no phi here is an inner loop's LCSSA phi.
+///
+/// DEVIATE LV-PHI1 (owner llrm-target-x86-m64-b, review 2026-12-20): the pin
+/// keeps the phi and VPlan reads through it (`simplifyBlends`); our planners
+/// read the IR, so it is folded before planning.
 fn folded_one_incoming_phis(
     context: &Context,
     function: &mut Function,
@@ -2879,6 +2882,7 @@ fn folded_one_incoming_phis(
     folded
 }
 
+/// `Function::hasOptSize`.
 fn has_opt_size(function: &Function) -> bool {
     use llrm_mir::opcode::Attribute;
     function
