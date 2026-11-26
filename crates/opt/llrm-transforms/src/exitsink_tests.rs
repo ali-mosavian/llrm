@@ -182,9 +182,9 @@ fn the_exits_are_found_by_the_layout_index_not_by_walking_the_layout() {
     assert!(llrm_mir::module::block_places_built() > before, "the exits were put in order by the index");
 }
 
-/// `sunk` found every loop's exits again for each value it sank (619 scans,
-/// 3.7 M Ir inside IndVars on d_faces -O2; the pin reads the exiting blocks
-/// once). Blocks and edges do not change while it sinks: one scan per loop.
+/// `sunk` found a loop's exit blocks again for each value it sank, where the
+/// pin reads them once. Blocks and edges do not change while it sinks: one scan
+/// per loop.
 #[test]
 fn a_loops_exits_are_scanned_once_however_many_values_sink() {
     use llrm_mir::counts::{Event, get};
