@@ -13,7 +13,7 @@ use crate::mfunc::{Class, MFunction};
 use crate::{REGISTER_INFO, reg};
 
 const DATA: [RegId; 8] = [reg::D0, reg::D1, reg::D2, reg::D3, reg::D4, reg::D5, reg::D6, reg::D7];
-const ADDRESS: [RegId; 6] = [reg::A0, reg::A1, reg::A2, reg::A3, reg::A4, reg::A5];
+pub(crate) const ADDRESS: [RegId; 6] = [reg::A0, reg::A1, reg::A2, reg::A3, reg::A4, reg::A5];
 
 /// `%a6` after `a2` to `a5`: the allocator's last address register where the
 /// function has no frame pointer.

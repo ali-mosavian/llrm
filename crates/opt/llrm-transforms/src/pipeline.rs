@@ -143,9 +143,10 @@ use crate::settled::{self, Settled};
 use crate::{
     adce, algebraic, availableexternally, bdce, calleepop, cgpaddr, constmerge, dead, deadstore, decide, extload,
     fixednarrow, floatloop, fold, gepbyteindex, gepoffset, globaldce, globalopt, gvn, indvars, inferfunctionattrs,
-    inferspace, inline, lcssa, loopdeletion, loopidioms, loopinterchange, looprotate, loopsimplify, loopunrollandjam, mosindexiv,
-    loopunrollpass, mem2reg, memcpyopt, mldstmotion, partialinline, ports, promote, ree, sccp, simpleloopunswitch,
-    simplifycfg, splitpaths, switchlower, tailcallelim, trivialunswitch, typepromotion_pass, window, zeromerge,
+    inferspace, inline, lcssa, loopdeletion, loopidioms, loopinterchange, looprotate, loopsimplify, loopunrollandjam,
+    loopunrollpass, mem2reg, memcpyopt, mldstmotion, mosindexiv, partialinline, ports, promote, ree, sccp,
+    simpleloopunswitch, simplifycfg, splitpaths, switchlower, tailcallelim, trivialunswitch, typepromotion_pass,
+    window, zeromerge,
 };
 
 /// Which passes run, and the copy budgets: the old `Options`. The default
@@ -186,8 +187,9 @@ pub struct Options {
     /// when the pin's -O1 gains it; the x86 rows are x87's, review 2026-12-07:
     /// QB instructions at -O1 are 1.15x (m32) and 1.20x (m64) without it): a
     /// target's driver row may turn it on at -O1 (`thread_jumps_at_o1` in
-    /// llrm-cc's targets.toml); the rows that do are m68k's and x86's. clang's -O1 IR leaves a latch `br` on a compare one block up
-    /// (bsearch -O1: a re-test and a loop-carried copy of the result).
+    /// llrm-cc's targets.toml); the rows that do are m68k's and x86's. clang's
+    /// -O1 IR leaves a latch `br` on a compare one block up (bsearch -O1: a
+    /// re-test and a loop-carried copy of the result).
     pub thread_jumps: bool,
     /// `TailCallElimPass` (`tailrec@688`) in the function pipeline before the
     /// inliner at -O1, where the pin's
@@ -892,9 +894,10 @@ impl FunctionPass for LoopPassManager {
             if !unit.function.is_placed(header) || !found.is_loop_header(header) {
                 continue;
             }
-            // LLVM's loop pass manager holds the `Loop`, which keeps its identity
-            // when `LoopRotate` moves its header; the scope follows the header, so
-            // the loop to run again is read from it.
+            // LLVM's loop pass manager holds the `Loop`, which keeps its
+            // identity when `LoopRotate` moves its header; the
+            // scope follows the header, so the loop to run again is
+            // read from it.
             let header = {
                 let _scope = crate::loopfilter::only(&[header]);
                 for part in self.passes.iter_mut() {
@@ -1454,8 +1457,8 @@ pub(crate) fn llvm_order(
                 // L832: hoistCommonInsts and sinkCommonInsts on, besides
                 // convertSwitchRangeToICmp and convertSwitchToArithmetic. The
                 // pin's `default<O1>` ends its function pipeline with a plain
-                // `SimplifyCFGPass(convertSwitchRangeToICmp)` (L621): at -O1 the
-                // pass drops the three unless the target asks
+                // `SimplifyCFGPass(convertSwitchRangeToICmp)` (L621): at -O1
+                // the pass drops the three unless the target asks
                 // (`Tti::common_insts_at_o1`).
                 simplify_cfg_with(
                     "decide@832",
@@ -1788,7 +1791,8 @@ pub fn recorded(
         // LLVM's CGSCC walk: each body inlined into, then simplified, callees
         // first. `Phase::Simplify` runs there and not module-wide.
         if at == 1 {
-            // `AlwaysInlinerPass`, ahead of the CGSCC inliner (PassBuilderPipelines.cpp:1326).
+            // `AlwaysInlinerPass`, ahead of the CGSCC inliner
+            // (PassBuilderPipelines.cpp:1326).
             manager.add_program(crate::alwaysinline::AlwaysInline);
             // What each body does to memory is stated here, as the pin's
             // PostOrderFunctionAttrs inside the CGSCC walk: the early
@@ -1920,9 +1924,9 @@ pub fn recorded(
     // GlobalDCE after inlining.
     manager.add_program(globaldce::GlobalDce);
     manager.add_program(availableexternally::EliminateAvailableExternally);
-    let target_wants_round = !applied.options.prices_bytes()
-        && !applied.options.prefers_size()
-        && program.target.tti().is_some_and(|tti| tti.inline_second_round_at_o1());
+    // The level, not the byte price: a target may price bytes at -O1 too.
+    let target_wants_round =
+        applied.options.at_o1() && program.target.tti().is_some_and(|tti| tti.inline_second_round_at_o1());
     if (applied.options.second_inline || target_wants_round) && applied.options.inline.limit != 0 {
         manager.compute::<GlobalsAA>();
         manager.compute::<GlobalsModRefAnalysis>();
