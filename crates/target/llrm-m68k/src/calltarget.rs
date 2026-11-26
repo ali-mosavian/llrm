@@ -242,30 +242,32 @@ fn price_of(
 
 /// The callees to call through registers, each with its register: those that
 /// make the function cheaper under `price`, tried most called first. `lines`
-/// expands a function to its instructions.
+/// expands a function to its instructions. With them, the expansion of the
+/// function as it stands once they are called through registers, when the
+/// search made it (the expansion it priced the choice by).
 pub fn choose(
     function: &MFunction,
     assignment: &Assignment,
     cpu: Cpu,
     price: Price,
     lines: impl Fn(&MFunction) -> Result<Vec<Line>, String>,
-) -> Result<Vec<(String, RegId)>, String> {
+) -> Result<(Vec<(String, RegId)>, Option<Vec<Line>>), String> {
     let mut chosen: Vec<(String, RegId)> = Vec::new();
     if function.returns_twice {
-        return Ok(chosen);
+        return Ok((chosen, None));
     }
     let counted = repeated_counts(function);
     let candidates: Vec<String> = counted.iter().map(|(name, _)| name.clone()).collect();
     let calls = |name: &str| counted.iter().find(|(callee, _)| callee == name).map_or(0, |(_, count)| *count);
     let mut free = unused(function, assignment);
     if candidates.is_empty() || free.is_empty() {
-        return Ok(chosen);
+        return Ok((chosen, None));
     }
     // a price the tables cannot give keeps the calls as they are
     let mut seen = Prices::new();
-    let Some(mut best) = lines(function).and_then(|lines| price_of(&lines, cpu, &mut seen)).ok() else {
-        return Ok(chosen);
-    };
+    let Ok(base) = lines(function) else { return Ok((chosen, None)) };
+    let Ok(mut best) = price_of(&base, cpu, &mut seen) else { return Ok((chosen, None)) };
+    let mut expansion = Some(base);
     // A callee that does not pay alone may pay with the ones tried before it:
     // the register's save and restore is paid once for them all.
     let mut pending: Vec<String> = Vec::new();
@@ -300,6 +302,7 @@ pub fn choose(
             if price.beats(cpu, cost, best) {
                 best = cost;
                 taken = Some((targets, set.len()));
+                expansion = Some(expanded);
                 break;
             }
         }
@@ -314,7 +317,7 @@ pub fn choose(
             None => pending.push(name),
         }
     }
-    Ok(chosen)
+    Ok((chosen, expansion))
 }
 
 #[cfg(test)]
