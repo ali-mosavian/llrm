@@ -24,6 +24,12 @@ pub fn visits() -> usize {
     VISITS.with(std::cell::Cell::get)
 }
 
+// Header-chain links followed for re-entries by `analyze` on this thread.
+#[cfg(test)]
+thread_local! {
+    pub(crate) static CHAIN_STEPS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 fn visit() {
     VISITS.with(|visits| visits.set(visits.get() + 1));
 }
@@ -373,6 +379,7 @@ impl<B: BlockNumber> LoopInfo<B> {
         let mut info: Vec<(u32, u32)> = vec![(UNVISITED, 0); max_number];
         let mut headers: Vec<u32> = Vec::new();
         let mut reentries: std::collections::BTreeSet<u32> = std::collections::BTreeSet::new();
+        let mut walked: Vec<u32> = Vec::new();
         let mut postorder: Vec<B> = Vec::with_capacity(max_number);
         let mut stack: Vec<(B, usize)> = Vec::new();
         let mut counter = FIRST_ON_PATH;
@@ -407,15 +414,28 @@ impl<B: BlockNumber> LoopInfo<B> {
                 headers.push(b1);
                 tag_loop_header(&mut info, num(top), b1);
             } else {
-                let mut h = info[b1 as usize].1;
-                while h != NO_BLOCK {
+                // The finished headers of the chain are recorded once, from
+                // where the last walk stopped: a finished block's chain keeps
+                // its links and is only extended at its end.
+                if walked.is_empty() {
+                    walked = (0..max_number as u32).collect();
+                }
+                let mut last = walked[b1 as usize];
+                loop {
+                    let h = info[last as usize].1;
+                    if h == NO_BLOCK {
+                        break;
+                    }
                     if info[h as usize].0 >= FIRST_ON_PATH {
                         tag_loop_header(&mut info, num(top), h);
                         break;
                     }
+                    #[cfg(test)]
+                    CHAIN_STEPS.with(|one| one.set(one.get() + 1));
                     reentries.insert(h);
-                    h = info[h as usize].1;
+                    last = h;
                 }
+                walked[b1 as usize] = last;
             }
         }
         if headers.is_empty() {
@@ -789,7 +809,8 @@ impl<B: BlockNumber> LoopInfo<B> {
     /// The order a loop pass manager visits the loops in: it pushes
     /// `getLoopsInReverseSiblingPreorder` on its worklist and pops from the
     /// back, so inner loops come before their parents and siblings in program
-    /// order (https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/LoopPassManager.cpp#L248).
+    /// order
+    /// (https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/LoopPassManager.cpp#L248).
     pub fn get_loops_in_visit_order(&self) -> Vec<Loop<'_, B>> {
         let mut found = self.get_loops_in_reverse_sibling_preorder();
         found.reverse();

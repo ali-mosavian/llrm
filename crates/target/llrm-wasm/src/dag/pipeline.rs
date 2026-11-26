@@ -304,7 +304,29 @@ pub fn select_block(
     alias: &dyn AliasOracle,
     optimize: bool,
 ) -> Result<Scheduled, Refusal> {
-    let tli = target_lowering(cpu, features);
+    LOWERINGS.with(|held| {
+        let mut held = held.borrow_mut();
+        let at = held.iter().position(|(one, with, _)| *one == cpu && *with == features).unwrap_or_else(|| {
+            held.push((cpu, features, target_lowering(cpu, features)));
+            held.len() - 1
+        });
+        select_block_with(&held[at].2, dag, cpu, features, info, alias, optimize)
+    })
+}
+
+thread_local! {
+    static LOWERINGS: std::cell::RefCell<Vec<(Cpu, Features, TargetLowering)>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+fn select_block_with(
+    tli: &TargetLowering,
+    dag: &mut SelectionDAG,
+    cpu: Cpu,
+    features: Features,
+    info: &mut FunctionLoweringInfo,
+    alias: &dyn AliasOracle,
+    optimize: bool,
+) -> Result<Scheduled, Refusal> {
     // The scratch objects the legalizers ask for (an `i128` libcall result's
     // memory) are frame objects numbered after the function's.
     dag.first_temporary = info.next_stack_object();
@@ -313,18 +335,18 @@ pub fn select_block(
     if optimize {
         live_out::assert_live_out_copies(dag, info);
     }
-    combine(dag, CombineLevel::BeforeLegalizeTypes, &tli, alias, optimize);
-    let legalized = TypeLegalizer::new(dag, &tli).with_hooks(&mut lowering).run();
+    combine(dag, CombineLevel::BeforeLegalizeTypes, tli, alias, optimize);
+    let legalized = TypeLegalizer::new(dag, tli).with_hooks(&mut lowering).run();
     if legalized.is_err() && llrm_codegen::support::env_var("LLRM_DAGDUMP").is_some() {
         eprintln!("{}", dag.dump());
     }
     legalized.map_err(|why| Refusal::Legalize(format!("{why:?}")))?;
-    combine(dag, CombineLevel::AfterLegalizeTypes, &tli, alias, optimize);
-    DagLegalizer::new(dag, &tli, &mut lowering).run().map_err(|why| Refusal::Legalize(format!("{why:?}")))?;
+    combine(dag, CombineLevel::AfterLegalizeTypes, tli, alias, optimize);
+    DagLegalizer::new(dag, tli, &mut lowering).run().map_err(|why| Refusal::Legalize(format!("{why:?}")))?;
     for (size, align) in std::mem::take(&mut dag.temporaries) {
         info.new_stack_object(size, align);
     }
-    combine(dag, CombineLevel::AfterLegalizeDag, &tli, alias, optimize);
+    combine(dag, CombineLevel::AfterLegalizeDag, tli, alias, optimize);
     if optimize {
         live_out::compute_live_out_vreg_info(dag, info);
     }

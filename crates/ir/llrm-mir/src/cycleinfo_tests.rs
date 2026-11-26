@@ -59,3 +59,31 @@ fn many_edges_into_one_finished_loop_block_record_one_reentry() {
     CycleInfo::compute(&Cfg { succs, blocks });
     assert_eq!(RECORDED.get(), 1, "an edge into the loop recorded its pair again");
 }
+
+/// exec.c -O2: m blocks outside a depth-d loop nest jumped into its innermost
+/// body, and each edge walked the d finished headers again: 202 M instructions
+/// in `compute` for one function. The chain is followed once.
+#[test]
+fn edges_into_a_finished_block_follow_its_header_chain_once() {
+    // 0 -> {x1..xm, 1}; 1..=d nested loops: k -> {k+1, back to k-1's body}; xk
+    // -> innermost.
+    let steps = |m: u32| {
+        let d = 20u32;
+        let mut succs = vec![Vec::new(); (m + d + 3) as usize];
+        succs[0] = (1..=m).map(|k| d + 1 + k).chain([1]).collect();
+        for k in 1..=d {
+            succs[k as usize] = vec![k + 1, k.saturating_sub(1).max(1)];
+        }
+        let inner = d + 1;
+        succs[inner as usize] = vec![d];
+        for k in 1..=m {
+            succs[(inner + k) as usize] = vec![inner];
+        }
+        let blocks = (0..succs.len() as u32).map(BlockId).collect();
+        STEPS.set(0);
+        CycleInfo::compute(&Cfg { succs, blocks });
+        STEPS.get()
+    };
+    let (few, many) = (steps(10), steps(100));
+    assert!(many <= few + 100, "10 edges followed the chain {few} times, 100 edges {many}");
+}

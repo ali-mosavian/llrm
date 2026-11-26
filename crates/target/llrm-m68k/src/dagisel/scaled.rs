@@ -24,6 +24,7 @@ use llrm_dagisel::instr::InstrDesc;
 use super::asm::{ASM, AsmOperand};
 use super::enc::{Piece, encoding};
 use super::generated::instrinfo;
+use super::local::cached;
 
 /// Codes of the scaled rows, in a range of their own: they follow the pin table
 /// (one row per scale of each indexed row), so they outgrew the 256 codes below
@@ -100,7 +101,11 @@ pub fn scaled_name(
 
 /// The pin's row a scaled row derives from.
 pub fn base_of(name: &str) -> Option<&'static str> {
-    ROWS.iter().find(|one| one.name == name).map(|one| one.base)
+    cached(&BASES, name, |name| ROWS.iter().find(|one| one.name == name).map(|one| one.base))
+}
+
+thread_local! {
+    static BASES: std::cell::RefCell<llrm_support::hash::HashMap<Box<str>, Option<&'static str>>> = Default::default();
 }
 
 fn pin_code(name: &str) -> Option<u16> {

@@ -76,39 +76,48 @@ use crate::lcssa::{arms, exit_phi, from_arms, place_phi};
 
 /// Every add and subtract only an exit reads, moved there; whether any was.
 /// `loops` are the body's: a sink moves an instruction between blocks and
-/// leaves the blocks and edges as they are.
+/// leaves the blocks and edges as they are, so each loop's exit blocks are
+/// found once.
 pub fn sunk(
     function: &mut Function,
     loops: &[Loop],
 ) -> bool {
+    let exits: Vec<_> = loops.iter().map(|loop_| exit_blocks(function, loop_)).collect();
     let mut changed = false;
-    while let Some((loop_, phi, op)) = _sinkable(function, loops) {
-        _sink(function, &loop_, phi, op);
+    while let Some((at, phi, op)) = _sinkable(function, loops, &exits) {
+        _sink(function, &loops[at], phi, op);
         changed = true;
     }
     changed
 }
 
-/// An exit's phi of one input from `loop_`, and the add, subtract or
-/// extension in the loop that input is, which only exit phis read.
+/// The blocks outside `loop_` it exits to, in layout order, as a walk of the
+/// layout finds them: a walk of the whole layout for each loop, on every run
+/// of IndVars, was O(loops x blocks).
+fn exit_blocks(
+    function: &Function,
+    loop_: &Loop,
+) -> Vec<llrm_mir::module::BlockId> {
+    let to = loop_.exits(function).into_iter().map(|(_, to)| to).collect::<std::collections::BTreeSet<_>>();
+    let mut placed: Vec<(usize, llrm_mir::module::BlockId)> = to
+        .iter()
+        .filter(|&&to| !loop_.body.contains(&to))
+        .filter_map(|&to| function.layout_index(cfg::block(to)).map(|at| (at, cfg::block(to))))
+        .collect();
+    placed.sort_unstable_by_key(|&(at, _)| at);
+    placed.into_iter().map(|(_, block)| block).collect()
+}
+
+/// An exit's phi of one input from `loops[at]`, and the add, subtract or
+/// extension in the loop that input is, which only exit phis read. `exits`
+/// are the loops' exit blocks, a candidate phi being in one.
 fn _sinkable(
     function: &Function,
     loops: &[Loop],
-) -> Option<(Loop, InstId, InstId)> {
-    for loop_ in loops.iter().cloned() {
-        // A candidate phi has an input from the loop: it is in a block the loop
-        // exits to, found by the edges and not by every phi of the function.
-        let exits = loop_.exits(function).into_iter().map(|(_, to)| to).collect::<std::collections::BTreeSet<_>>();
-        // In layout order, as a walk of the layout finds them, taken from the
-        // exits: a walk of the whole layout for each loop, on every run of
-        // IndVars, was O(loops x blocks).
-        let mut placed: Vec<(usize, llrm_mir::module::BlockId)> = exits
-            .iter()
-            .filter(|&&to| !loop_.body.contains(&to))
-            .filter_map(|&to| function.layout_index(cfg::block(to)).map(|at| (at, cfg::block(to))))
-            .collect();
-        placed.sort_unstable_by_key(|&(at, _)| at);
-        for &(_, block) in &placed {
+    exits: &[Vec<llrm_mir::module::BlockId>],
+) -> Option<(usize, InstId, InstId)> {
+    for (at, loop_) in loops.iter().enumerate() {
+        for &block in &exits[at] {
             for phi in edges::phis(function, block) {
                 llrm_mir::counts::bump(llrm_mir::counts::Event::ExitSinkPhis);
                 let [(Operand::Value(value), from)] = arms(function, phi)[..] else { continue };
@@ -126,7 +135,7 @@ fn _sinkable(
                             && function.parent(one.user).is_some_and(|at| !loop_.body.contains(&cfg::id(at)))
                     })
                 {
-                    return Some((loop_, phi, op));
+                    return Some((at, phi, op));
                 }
             }
         }

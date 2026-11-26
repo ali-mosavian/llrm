@@ -1239,12 +1239,26 @@ pub fn _reachable(
 /// runs as often as what now reaches it, and a block the table does not hold
 /// is worked out from its predecessors. A stale entry stays until a later
 /// rewrite leaves the verifier ("runs 1.000 times, its predecessors 0.383").
+#[cfg(test)]
+thread_local! {
+    /// Predecessor maps `_forget_moved_inflow` built.
+    pub(super) static PREDECESSOR_MAPS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 pub(super) fn _forget_moved_inflow(
     before: &LirBody,
     after: &mut LirBody,
 ) {
     let Some(kept) = after.frequencies.as_ref() else { return };
+    // The same blocks with the same successors have the same predecessors.
+    if before.blocks.len() == after.blocks.len()
+        && before.blocks.iter().zip(&after.blocks).all(|(was, is)| was.at == is.at && was.succ == is.succ)
+    {
+        return;
+    }
     let reached = |body: &LirBody| {
+        #[cfg(test)]
+        PREDECESSOR_MAPS.with(|count| count.set(count.get() + 1));
         let mut from: IndexMap<i64, BTreeSet<i64>> = IndexMap::default();
         for one in &body.blocks {
             for to in one.succ.iter() {
