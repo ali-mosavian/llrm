@@ -224,6 +224,9 @@ struct BlockInfo {
     pos: u32,
     loop_idx: u32,
     loop_header: u32,
+    /// Where the last walk of this block's header chain stopped: a finished
+    /// block's chain keeps its links and is only ever extended at its end.
+    walked: u32,
 }
 
 #[derive(Clone, Copy)]
@@ -240,9 +243,6 @@ struct Compute<'a> {
     preorder: Vec<u32>,
     num_headers: u32,
     reentries: Vec<(u32, u32)>,
-    /// The pairs in `reentries`: the pin pushes one per edge and sorts them,
-    /// a dispatch block every handler jumps to made 857,465 of 16,122.
-    reentry_seen: crate::hash::HashSet<(u32, u32)>,
 }
 
 impl<'a> Compute<'a> {
@@ -256,7 +256,6 @@ impl<'a> Compute<'a> {
             preorder: Vec::new(),
             num_headers: 0,
             reentries: Vec::new(),
-            reentry_seen: Default::default(),
         }
     }
 
@@ -427,6 +426,7 @@ impl<'a> Compute<'a> {
             counter += 1;
             bi.pos = counter;
             bi.loop_header = NO_BLOCK;
+            bi.walked = n;
             let succs = graph.children(block);
             let left = succs.len();
             stack.push((n, succs, left));
@@ -448,17 +448,24 @@ impl<'a> Compute<'a> {
                     }
                     self.tag_loop_header(b0, b1);
                 } else {
-                    let mut h = b1_info.loop_header;
-                    while h != NO_BLOCK {
+                    // The finished headers of the chain are recorded once, from
+                    // where the last walk stopped.
+                    let mut last = b1_info.walked;
+                    loop {
+                        let h = self.block_infos[last as usize].loop_header;
+                        if h == NO_BLOCK {
+                            break;
+                        }
                         if self.block_infos[h as usize].pos > 0 {
                             self.tag_loop_header(b0, h);
                             break;
                         }
-                        if self.reentry_seen.insert((h, b1)) {
-                            self.reentries.push((h, b1));
-                        }
-                        h = self.block_infos[h as usize].loop_header;
+                        #[cfg(test)]
+                        STEPS.set(STEPS.get() + 1);
+                        self.reentries.push((h, b1));
+                        last = h;
                     }
+                    self.block_infos[b1 as usize].walked = last;
                 }
             } else {
                 let b0 = top.0;
@@ -474,6 +481,10 @@ impl<'a> Compute<'a> {
         }
     }
 }
+
+// Header-chain links followed for re-entries by `compute`s on this thread.
+#[cfg(test)]
+thread_local!(pub(crate) static STEPS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) });
 
 /// How many re-entry pairs the last `compute` on this thread kept to sort.
 #[cfg(test)]
