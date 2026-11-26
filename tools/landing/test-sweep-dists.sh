@@ -3,6 +3,7 @@
 # An old dist with pair_build's `ok` marker goes (with its wt-pair checkout); a recent one, one without the marker, and one a live process has as its cwd stay; DRY=1 removes nothing.
 here=$(cd "$(dirname "$0")" && pwd); r=$(mktemp -d); live=
 trap '[ -n "$live" ] && kill "$live" 2>/dev/null; rm -rf "$r"' EXIT
+export SWEEP_LOCK=$r/lock SWEEP_DRY_STAMP=$r/stamp SWEEP_DRY_MIN=0  # never the machine's; every dry run here must scan
 mkd() { mkdir -p "$r/$1/dist"; echo x > "$r/$1/dist/llrm-cc"; head -c 1000 /dev/zero > "$r/$1/dist/big"; [ "$2" = ok ] && echo sums > "$r/$1/ok"; touch -d "${3:-5 hours ago}" "$r/$1/dist/llrm-cc"; }
 mkd sbp-old ok; mkdir -p "$r/wt-pair-old"; mkd sbp-new ok "10 minutes ago"; mkd mine-nook no; mkd sbp-live ok; mkd sbp-854bb7efc4343d7c ok; mkd sbp-1234567890abcdef ok; mkd sbp-fedcba987654321 ok
 (cd "$r/sbp-live" && exec sleep 300) & live=$!
