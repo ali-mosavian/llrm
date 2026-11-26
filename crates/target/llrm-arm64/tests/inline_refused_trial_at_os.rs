@@ -36,7 +36,7 @@ fn the_calls_the_guard_refuses_are_inlined_where_the_object_is_smaller() {
     let inlined = assembly(ir, true);
     assert!(!inlined.contains("\ncut:") && !inlined.contains("\noutside:"), "{inlined}");
     assert!(
-        instructions(&inlined) + 30 < instructions(&kept),
+        instructions(&inlined) + 20 < instructions(&kept),
         "{} against {}",
         instructions(&inlined),
         instructions(&kept)

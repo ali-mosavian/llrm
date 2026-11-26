@@ -227,22 +227,64 @@ impl ChainEdge {
     }
 }
 
-/// `mergeNodes`: the nodes of X (cut at `offset`) and Y in the order `ty`.
+#[cfg(test)]
+thread_local! {
+    /// Merged node lists built: the pin walks three ranges and builds none.
+    static MERGED_VECS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// `MergedNodesT`: the nodes of X (cut at `offset`) and Y in the order `ty`,
+/// as the three ranges they are walked in.
+fn merged_parts<'a>(
+    x: &'a [usize],
+    y: &'a [usize],
+    offset: usize,
+    ty: MergeType,
+) -> [&'a [usize]; 3] {
+    let (x1, x2) = x.split_at(offset);
+    match ty {
+        MergeType::XY => [x1, x2, y],
+        MergeType::YX => [y, x1, x2],
+        MergeType::X1YX2 => [x1, y, x2],
+        MergeType::YX2X1 => [y, x2, x1],
+        MergeType::X2X1Y => [x2, x1, y],
+    }
+}
+
+/// `mergeNodes`: the list of a merge that is made.
 fn merged_nodes(
     x: &[usize],
     y: &[usize],
     offset: usize,
     ty: MergeType,
 ) -> Vec<usize> {
-    let (x1, x2) = x.split_at(offset);
-    let parts: [&[usize]; 3] = match ty {
-        MergeType::XY => [x1, x2, y],
-        MergeType::YX => [y, x1, x2],
-        MergeType::X1YX2 => [x1, y, x2],
-        MergeType::YX2X1 => [y, x2, x1],
-        MergeType::X2X1Y => [x2, x1, y],
-    };
-    parts.concat()
+    #[cfg(test)]
+    MERGED_VECS.with(|count| count.set(count.get() + 1));
+    merged_parts(x, y, offset, ty).concat()
+}
+
+/// `extTSPScore` of the nodes in `parts`, in that order, and the jumps among
+/// them.
+fn score_parts(
+    addr: &mut [u64],
+    nodes: &[Node],
+    all_jumps: &[Jump],
+    parts: &[&[usize]],
+    jumps: &[usize],
+) -> f64 {
+    let mut at = 0;
+    for &node in parts.iter().copied().flatten() {
+        addr[node] = at;
+        at += nodes[node].size;
+    }
+    jumps
+        .iter()
+        .map(|&jump| {
+            let jump = &all_jumps[jump];
+            let (source, target) = (&nodes[jump.source], &nodes[jump.target]);
+            score_of_jump(addr[jump.source], source.size, addr[jump.target], jump.count, jump.conditional)
+        })
+        .sum()
 }
 
 /// `ExtTSPImpl`.
@@ -432,8 +474,11 @@ impl Layout {
         while self.hot_chains.len() > 1 {
             let mut best: Option<(usize, usize)> = None;
             let mut best_gain = MergeGain::none();
-            for pred in self.hot_chains.clone() {
-                for (succ, edge) in self.chains[pred].edges.clone() {
+            // The lists change only when a merge is made, after this scan.
+            for hot in 0..self.hot_chains.len() {
+                let pred = self.hot_chains[hot];
+                for at in 0..self.chains[pred].edges.len() {
+                    let (succ, edge) = self.chains[pred].edges[at];
                     if self.edges[edge].is_self_edge() {
                         continue;
                     }
@@ -495,27 +540,6 @@ impl Layout {
         self.chains[chain].nodes.iter().all(|&node| self.nodes[node].count == 0)
     }
 
-    /// `extTSPScore` of a node order and the jumps among them.
-    fn score_of(
-        &mut self,
-        order: &[usize],
-        jumps: &[usize],
-    ) -> f64 {
-        let mut at = 0;
-        for &node in order {
-            self.addr[node] = at;
-            at += self.nodes[node].size;
-        }
-        jumps
-            .iter()
-            .map(|&jump| {
-                let jump = &self.jumps[jump];
-                let (source, target) = (&self.nodes[jump.source], &self.nodes[jump.target]);
-                score_of_jump(self.addr[jump.source], source.size, self.addr[jump.target], jump.count, jump.conditional)
-            })
-            .sum()
-    }
-
     /// `getBestMergeGain`.
     fn best_merge_gain(
         &mut self,
@@ -541,8 +565,8 @@ impl Layout {
         // Attach (a part of) the first chain before the first node of the
         // second.
         let first = self.chains[succ].nodes[0];
-        for jump in self.nodes[first].in_jumps.clone() {
-            let source = self.jumps[jump].source;
+        for at in 0..self.nodes[first].in_jumps.len() {
+            let source = self.jumps[self.nodes[first].in_jumps[at]].source;
             if self.nodes[source].cur_chain != pred {
                 continue;
             }
@@ -551,8 +575,8 @@ impl Layout {
         }
         // Attach (a part of) the first chain after the last node of the second.
         let last = *self.chains[succ].nodes.last().expect("a chain has a node");
-        for jump in self.nodes[last].out_jumps.clone() {
-            let target = self.jumps[jump].target;
+        for at in 0..self.nodes[last].out_jumps.len() {
+            let target = self.jumps[self.nodes[last].out_jumps[at]].target;
             if self.nodes[target].cur_chain != pred {
                 continue;
             }
@@ -622,12 +646,13 @@ impl Layout {
         offset: usize,
         ty: MergeType,
     ) -> MergeGain {
-        let merged = merged_nodes(&self.chains[pred].nodes, &self.chains[succ].nodes, offset, ty);
+        let parts = merged_parts(&self.chains[pred].nodes, &self.chains[succ].nodes, offset, ty);
         // The merge must keep the original entry point.
-        if (self.is_entry(pred) || self.is_entry(succ)) && merged[0] != 0 {
+        let first = parts.iter().find_map(|part| part.first());
+        if (self.is_entry(pred) || self.is_entry(succ)) && first != Some(&0) {
             return MergeGain::none();
         }
-        let new_score = self.score_of(&merged, jumps);
+        let new_score = score_parts(&mut self.addr, &self.nodes, &self.jumps, &parts, jumps);
         MergeGain { score: new_score - self.chains[pred].score, offset, ty }
     }
 
@@ -685,9 +710,14 @@ impl Layout {
         self.chains[from].edges.clear();
         // The cached score of the new chain.
         if let Some(inside) = self.edge_between(into, into) {
-            let order = self.chains[into].nodes.clone();
-            let jumps = self.edges[inside].jumps.clone();
-            self.chains[into].score = self.score_of(&order, &jumps);
+            let score = score_parts(
+                &mut self.addr,
+                &self.nodes,
+                &self.jumps,
+                &[&self.chains[into].nodes],
+                &self.edges[inside].jumps,
+            );
+            self.chains[into].score = score;
         }
         self.hot_chains.retain(|&chain| chain != from);
         for (_, edge) in self.chains[into].edges.clone() {
@@ -867,5 +897,25 @@ mod tests {
         let edges = size_edges(&blocks, &index, None);
         assert!(edges.iter().all(|edge| edge.src != 0), "the dispatch has {} jumps", edges.iter().filter(|edge| edge.src == 0).count());
         assert_eq!(edges.len(), 400, "each case still jumps back to the dispatch");
+    }
+
+    /// Scoring a candidate merge built a list of its nodes: a 48-block layout
+    /// built one per candidate (hundreds), where the pin walks the three
+    /// ranges in place and builds a list only for a merge it makes.
+    #[test]
+    fn test_a_candidate_merge_builds_no_node_list() {
+        let n = 48;
+        let (sizes, counts) = (vec![8; n], vec![1; n]);
+        let mut edges = Vec::new();
+        for block in 0..n - 1 {
+            edges.push(edge(block, block + 1));
+            if block + 3 < n {
+                edges.push(edge(block, block + 3));
+            }
+        }
+        MERGED_VECS.with(|count| count.set(0));
+        compute_layout(&sizes, &counts, &edges);
+        let built = MERGED_VECS.with(|count| count.get());
+        assert!(built < n, "{built} node lists for {n} blocks (one per merge made at most)");
     }
 }

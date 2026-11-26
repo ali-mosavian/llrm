@@ -47,9 +47,12 @@ pub fn tuning() -> llrm_mir::target::Tuning {
         inline_threshold_o1: Some(112),
         // QB, 68020: no function over it at -Os, one at -O1 (`voice`)
         trial_insts_max: Some(5000),
-        // -Os: 3,000 loses no byte over 113 modules and spends 3.8 % fewer
-        // compile instructions; at -O1 the same cap grows exec.c by 30 %.
-        trial_insts_max_at_size: Some(3000),
+        // DEVIATE TRIAL-CAP (owner m68k, exit 2026-12-20; user ruling
+        // 2026-11-26): the -Os trials build the function again once each;
+        // m32 and arm64 cap at 2,000. 113 modules: exec.c +150 B and
+        // suggest.c +94 B, nothing else moves; at -O1 the same cap grows
+        // exec.c by 30 %.
+        trial_insts_max_at_size: Some(2000),
         ..llrm_mir::target::Tuning::PIN
     }
 }
