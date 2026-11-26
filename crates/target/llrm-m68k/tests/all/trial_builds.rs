@@ -77,3 +77,23 @@ fn a_function_over_the_trial_cap_is_built_once() {
     assert!(chain_builds(50) > 1, "premise: the small function's trials fire");
     assert_eq!(chain_builds(cap + 100), 1, "a function over the cap ran its trials");
 }
+
+/// The class relaxation and the held data constants each built the function
+/// again at -Os, allocation and all, and ran the late stage again for their
+/// own key: over QB (68020) 49 % of the relaxed builds and 81 % of the
+/// held-constant builds found nothing to rewrite and were the kept build
+/// again, 6,057 of 27,388 builds, 18 % of the Os compile.
+#[test]
+fn a_size_trial_whose_rewrite_finds_nothing_costs_neither_a_late_stage_nor_an_allocation() {
+    let ir = "target datalayout = \"E-m:e-p:32:16:32-i8:8:8-i16:16:16-i32:16:32-n8:16:32-a:0:16-S16\"\ndeclare i32 @ext(i32)\ndefine i32 @f(i32 %a) {\n  %x = call i32 @ext(i32 %a)\n  %y = call i32 @ext(i32 %x)\n  %z = add i32 %x, %y\n  ret i32 %z\n}\n";
+    let module = llrm_mir::parse::module(ir).expect("parses");
+    let stages = |relax_classes, data_constants| {
+        let options = Options { size: true, mid_end: false, relax_classes, data_constants, ..Options::default() };
+        let before = runs();
+        items_with(&module, "f", Cpu::M68020, options).expect("compiles");
+        let after = runs();
+        (after.late - before.late, after.allocations - before.allocations)
+    };
+    let (without, with) = (stages(false, false), stages(true, true));
+    assert_eq!(with, without, "(late stages, allocations): {with:?} with the two trials on, {without:?} with them off");
+}

@@ -245,6 +245,9 @@ pub struct Options {
     /// register ([`crate::moveqremat::hold_in_data_registers`]): a function
     /// built for size is also built without, and the smaller kept.
     pub data_constants: bool,
+    /// A trial build whose rewrite found nothing stops after the rewrites,
+    /// with no items: it would be the build already kept.
+    pub stop_if_unchanged: bool,
     /// Multiplies by `(2^n +- 1) << k` (DEVIATE M68K-MUL-LATE,
     /// [`crate::dagisel::mulprice`]).
     pub mul: crate::dagisel::mulprice::Mode,
@@ -297,6 +300,7 @@ impl Options {
         carry_chain: true,
         global_copies: true,
         relax_classes: false,
+        stop_if_unchanged: false,
         remat_constants: false,
         data_constants: false,
         mul: crate::dagisel::mulprice::Mode::Pin,
@@ -345,6 +349,7 @@ impl Default for Options {
             carry_chain: true,
             global_copies: true,
             relax_classes: true,
+            stop_if_unchanged: false,
             remat_constants: true,
             data_constants: true,
             mul: crate::dagisel::mulprice::Mode::Trial,
@@ -419,7 +424,7 @@ pub fn items_with(
         if !options.relax_classes || !saved || one_build {
             return Ok((plain, shared, chosen));
         }
-        let relaxed_options = Options { relax_classes: true, ..chosen };
+        let relaxed_options = Options { relax_classes: true, stop_if_unchanged: true, ..chosen };
         let (relaxed, touched) = items_once(module, name, cpu, relaxed_options, &prefixes)?;
         let relax = touched.relax_classes && crate::trial::keeps(&relaxed, &plain, cpu, price);
         Ok(if relax { (relaxed, shared, relaxed_options) } else { (plain, shared, chosen) })
@@ -467,8 +472,13 @@ pub fn items_with(
         kept = best;
     }
     if held {
-        let (items, touched) =
-            items_once(module, name, cpu, Options { data_constants: true, ..kept_options }, &prefixes)?;
+        let (items, touched) = items_once(
+            module,
+            name,
+            cpu,
+            Options { data_constants: true, stop_if_unchanged: true, ..kept_options },
+            &prefixes,
+        )?;
         if touched.data_constants && crate::trial::keeps(&items, &kept, cpu, price) {
             trial_won(name, "data_constants", crate::trial::keeps(&items, &kept, cpu, price));
             kept = items;
@@ -875,7 +885,7 @@ struct Selection {
 }
 
 thread_local! {
-    static RUNS: std::cell::Cell<Runs> = const { std::cell::Cell::new(Runs { builds: 0, selections: 0, early: 0, late: 0 }) };
+    static RUNS: std::cell::Cell<Runs> = const { std::cell::Cell::new(Runs { builds: 0, selections: 0, early: 0, late: 0, allocations: 0 }) };
 }
 
 /// How often this thread ran each stage of a build: the regression tests of
@@ -888,6 +898,8 @@ pub struct Runs {
     pub early: usize,
     /// The rewrites from `MachineSink` to allocation.
     pub late: usize,
+    /// Builds that reached allocation.
+    pub allocations: usize,
 }
 
 pub fn runs() -> Runs {
@@ -954,7 +966,13 @@ struct Prefixes {
 /// The options that only the stages after `MachineCSE` read, left out of the
 /// key of the stage before it.
 fn before_late_stage(options: Options) -> Options {
-    Options { relax_classes: false, remat_constants: false, data_constants: false, ..before_allocation(options) }
+    Options {
+        relax_classes: false,
+        remat_constants: false,
+        data_constants: false,
+        stop_if_unchanged: false,
+        ..before_allocation(options)
+    }
 }
 
 /// The options that only allocation and the stages after it read.
@@ -1132,7 +1150,7 @@ fn items_once(
             Ok((function, touched))
         })?;
     let (mut function, mut touched) =
-        prefixes.late.get_or((selection, format!("{:?}", before_allocation(options))), || {
+        prefixes.late.get_or((selection, format!("{:?}", before_late_stage(options))), || {
             counted(|runs| runs.late += 1);
             let (mut function, mut touched) = (function, touched);
             machine_sink(&mut function);
@@ -1152,21 +1170,27 @@ fn items_once(
                 commute_tied(&mut function);
                 two_address(&mut function);
             }
-            if options.indexed && options.relax_classes && !options.shared_prelude {
-                touched.relax_classes = crate::regalloc::relax_copy_only_classes(&mut function);
-            }
-            if options.remat_constants {
-                touched.remat_constants = crate::moveqremat::rematerializable_constants(&mut function) > 0;
-            }
-            if options.data_constants && wants_size {
-                touched.data_constants = crate::moveqremat::hold_in_data_registers(&mut function) > 0;
-            }
             Ok((function, touched))
         })?;
+    // the last rewrites, outside the shared stage: a trial of one of them
+    // reads the stage's result instead of making it again
+    if options.indexed && options.relax_classes && !options.shared_prelude {
+        touched.relax_classes = crate::regalloc::relax_copy_only_classes(&mut function);
+    }
+    if options.remat_constants {
+        touched.remat_constants = crate::moveqremat::rematerializable_constants(&mut function) > 0;
+    }
+    if options.data_constants && wants_size {
+        touched.data_constants = crate::moveqremat::hold_in_data_registers(&mut function) > 0;
+    }
+    if options.stop_if_unchanged && !touched.relax_classes && !touched.data_constants {
+        return Ok((Vec::new(), touched));
+    }
     drop(sp);
     // spill slots are numbered after the static allocas
     let first_slot = function.locals.iter().map(|local| local.0 + 1).max().unwrap_or(0);
     crate::mirdump::dump("before allocation", &function, None);
+    counted(|runs| runs.allocations += 1);
     let allocating = llrm_support::debug::span("m68k allocate");
     let a6_for_calls = options.short && options.call_targets && crate::calltarget::pays(&function, cpu);
     let (assignment, slots) = if std::env::var_os("LLRM_M68K_SPIKE").is_some() {
