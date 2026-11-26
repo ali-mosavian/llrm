@@ -1963,9 +1963,8 @@ fn test_a_carried_value_looks_at_the_definitions_of_each_register_in_its_chain()
 
 /// One value of an immediate, copied 150 times, then defined again so that no
 /// copy can join it: each copy is made again as the immediate, and each took
-/// a read from the source. The source's interval was cut back to its uses after
-/// every one of them (150 times over a long interval: 4.4 G of a 133 G
-/// compile of an interpreter loop); the pin cuts it back once, after them all
+/// a read from the source. The source's interval was cut back to its uses once
+/// per copy, not once after them all as the pin defers it
 /// (`LateRematUpdateThreshold`, `lateLiveIntervalUpdate`).
 #[test]
 fn test_a_value_with_many_copies_made_again_is_cut_back_once() {
