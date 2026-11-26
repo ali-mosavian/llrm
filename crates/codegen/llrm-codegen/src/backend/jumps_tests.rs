@@ -328,6 +328,28 @@ fn test_pruning_unreachable_blocks_keeps_the_frequencies_of_the_others() {
     assert!(crate::analysis::frequency::Frequency::violations(&kept).is_empty());
 }
 
+/// A fold that changed no block's successors rebuilt both predecessor maps of
+/// the whole function to learn that nothing moved: 38 M Ir of an Os module's
+/// 8.5 G, once per fold.
+#[test]
+fn test_a_fold_that_moved_no_edge_builds_no_predecessor_map() {
+    let mut start = body(
+        "f",
+        1,
+        vec![
+            block(1, vec![_move(1, bx()), _jump(2, 9)], vec![9]).into(),
+            block(9, vec![_return(9)], vec![]).into(),
+        ],
+    );
+    start.frequencies =
+        Some(Arc::new(crate::model::lir::BlockFrequencies([(1, 1.0), (9, 1.0)].into_iter().collect())));
+    let mut after = start.clone();
+    super::PREDECESSOR_MAPS.with(|count| count.set(0));
+    _forget_moved_inflow(&start, &mut after);
+    assert_eq!(super::PREDECESSOR_MAPS.with(|count| count.get()), 0);
+    assert_eq!(after.frequencies, start.frequencies, "the table stays whole");
+}
+
 /// Folding branches pruned the unreachable block 5 in place and left it in
 /// the kept table: the verifier said "frequency kept for block 0x5, which is
 /// gone" after `jumps`, and every QB and Nib program failed to compile.
