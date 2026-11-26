@@ -14,7 +14,7 @@ use llrm_support::hash::HashMap;
 
 use crate::compile::Item;
 use crate::dagisel::enc::encoding;
-use crate::encode::{Encoded, encode};
+use crate::encode::{Encoded, encode_final};
 use crate::mc::{Inst, Operand};
 use crate::reg;
 
@@ -287,7 +287,7 @@ fn place(
             }
             Item::Loc(_) => {}
             Item::Inst(one) => {
-                let encoded = encode(one)?;
+                let encoded = encode_final(one)?;
                 pending.push((code.len(), index, encoded.clone()));
                 code.extend_from_slice(&encoded.bytes);
             }
