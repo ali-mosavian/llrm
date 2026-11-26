@@ -1132,10 +1132,10 @@ fn items_once(
             touched.mul_synthesized = mul_synthesized;
             function.returns_twice =
                 module.global(id).function().is_some_and(|one| llrm_mir::memory::calls_returns_twice(module, one));
+            // `addMachineSSAOptimization`: what selection built and nothing
+            // reads, before the selects become branches
+            llrm_spike_mf::dead_machine_instruction_elim(&mut function);
             if options.short {
-                // `addMachineSSAOptimization`: what selection built and nothing
-                // reads, before the selects become branches
-                llrm_spike_mf::dead_machine_instruction_elim(&mut function);
                 crate::cmpelim::eliminate_tests(
                     &mut function,
                     options.hoist_flag_setters,
@@ -1211,9 +1211,7 @@ fn items_once(
             machine_sink(&mut function);
             // The pin's second `DeadMachineInstructionElim`, after sinking and
             // before PHI elimination: what they left unread.
-            if options.short {
-                llrm_spike_mf::dead_machine_instruction_elim(&mut function);
-            }
+            llrm_spike_mf::dead_machine_instruction_elim(&mut function);
             if options.short && options.reuse_shift_out_flags {
                 crate::cmpcarry::reuse_shift_out_flags(&mut function);
                 crate::cmpcarry::reuse_borrow_flags(&mut function);
