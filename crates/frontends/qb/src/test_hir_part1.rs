@@ -166,6 +166,17 @@ fn test_the_microsoft_runtimes_get_a_module_that_zeroes_its_own_bss() {
     assert!(!listing(&little).contains("$QB$ZBSS"), "and nothing zeroes them");
 }
 
+/// ON ERROR made the `_BSS` zeroing call, which stands before the first
+/// statement, a raising one: 40 Microsoft-runtime programs were refused "a call
+/// before the first statement".
+#[test]
+fn test_zeroing_bss_raises_nothing_under_on_error() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let source = written(&tmp, "bss.bas", b"DEFINT A-Z\r\nDIM SHARED a(0 TO 99)\r\nON ERROR GOTO h\r\nREAD k\r\na(k) = k\r\nPRINT a(k + 1)\r\nEND\r\nh:\r\nRESUME NEXT\r\nDATA 7\r\n");
+    let text = listing(&microsoft_program(&source));
+    assert!(text.contains("call far ptr $QB$ZBSS"), "the entry zeroes it:\n{text}");
+}
+
 /// A DATA line was stored re-rendered with ", " between its values: jpeg_fixed's ten rows of "362,502,473" grew 118 B of BC_DS over BC's, which
 /// keeps the text as written (checked on BC 4.5's object: spaced, quoted and commented lines are all verbatim).
 #[test]

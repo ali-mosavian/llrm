@@ -301,10 +301,12 @@ pub fn decoded(
         if near_bytes == 0 { 2 } else { near_bytes },
     );
     program.promises.routines = llrm_codegen::abi::runtime::semantics::routines();
+    // The routine the module writes itself raises none either.
     program.promises.nounwind = llrm_codegen::abi::runtime::CONTRACTS
         .iter()
         .filter(|(_, contract)| !contract.raises_error)
         .map(|(name, _)| name.clone())
+        .chain([llrm_codegen::driver::basic::ZERO_BSS.to_owned()])
         .collect();
     program.promises.no_retain =
         llrm_codegen::abi::runtime::captures_nothing().into_iter().map(str::to_owned).collect();
