@@ -21,7 +21,7 @@ use llrm_spike_mf::{Kind, Operand, Reg};
 use crate::cmpelim::flags_read_after;
 use crate::dagisel::local::memory_at;
 use crate::dagisel::scaled;
-use crate::mfunc::{Class, MFunction};
+use crate::mfunc::{Class, MFunction, operand_class};
 
 /// A register that holds `other`'s value and may be an address register: itself
 /// when its class allows, else the source of the one copy that defines it (a
@@ -181,7 +181,8 @@ pub fn scale_indexes(function: &mut MFunction) {
                 let inst = &mut function.blocks[rb].insts[ri];
                 let Kind::Op(name) = inst.kind else { continue };
                 let Some((base, index)) = memory_at(name) else { continue };
-                inst.kind = Kind::Op(scaled::scaled_name(name, scale).expect("checked"));
+                let row = scaled::scaled_name(name, scale).expect("checked");
+                inst.kind = Kind::Op(row);
                 if position == base {
                     inst.operands.swap(base, index);
                     let Operand::Use(Reg::Virt(other)) = inst.operands[base] else { continue };
@@ -194,6 +195,15 @@ pub fn scale_indexes(function: &mut MFunction) {
                     }
                 }
                 function.blocks[rb].insts[ri].operands[index] = Operand::Use(Reg::Virt(source));
+                // `constrainRegClass`: a scaled compare has no `cmpa` row, so
+                // a register widened for one is a data register again
+                for (at, operand) in function.blocks[rb].insts[ri].operands.iter().enumerate() {
+                    let (Operand::Def(Reg::Virt(v)) | Operand::Use(Reg::Virt(v))) = operand else { continue };
+                    let class = &mut function.classes[*v as usize];
+                    if let Some(narrowed) = operand_class(row, at).and_then(|wanted| class.meet(wanted)) {
+                        *class = narrowed;
+                    }
+                }
             }
         };
         rewrite(&account.indexes, function);
