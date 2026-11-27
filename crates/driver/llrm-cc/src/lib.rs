@@ -160,10 +160,15 @@ pub struct Target {
     /// metric alone.
     #[serde(default)]
     pub speed_rate_at_o1: bool,
-    /// DEVIATE PRE-O1 (owner x86-m16-b, exit 2026-11-24; user ruling
+    /// DEVIATE PRE-O1 (owner x86-m16, exit 2026-12-31; user ruling
     /// 2026-11-14: -O1 to -O3 match the best compiler by clocks): `-ftree-pre`
     /// is the default at `-O1`, so GVN makes a partial redundancy full there as
     /// at -O2. The pin's -O1 GVN does not (`GVNOptions` default, PRE off).
+    ///
+    /// Measured 2026-11-26 (d08d2613c7, m16 C/Nib/BASIC at -O1, 194 cells): the
+    /// pin's rule is +0.26% geomean clocks and +195 B; 17 cells slower
+    /// (rectwo +43%, bintree +17%, grep +11%), 9 faster (stft_fixed~bounds
+    /// -37%, recfloat -14%, lru -9%).
     #[serde(default)]
     pub pre_at_o1: bool,
     /// DEVIATE REC-O1 (owner x86-m32-b, exit 2026-11-24):

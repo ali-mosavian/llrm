@@ -1378,12 +1378,16 @@ impl Tti for X86 {
         self.cmov
     }
 
-    /// DEVIATE D5-M16 (owner x86-m16-b, exit 2026-11-24): in real mode, with no
+    /// DEVIATE D5-M16 (owner x86-m16, exit 2026-12-31): in real mode, with no
     /// conditional move, each select a two-entry phi would become costs the
     /// branch and move it lowers to. m16 grep -O1/-O2 `if (b == 10) { lines +=
     /// inline_hit; inline_hit = 0; }` became two selects and an add run on
     /// every byte of the scan loop (2 clk, and the byte spilled): 34.89M
     /// clk against bcc's 33.86M, 29.72M without the fold.
+    ///
+    /// Measured 2026-11-26 (d08d2613c7, m16 C/Nib/BASIC, 776 cells): without
+    /// it clocks are +0.27..+0.36% geomean a level; 39 cells slower (grep +15
+    /// ..+29%), 9 faster.
     fn select_branch_extra(
         &self,
         _optsize: bool,
