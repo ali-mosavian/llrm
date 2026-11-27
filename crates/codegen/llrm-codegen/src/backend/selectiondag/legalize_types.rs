@@ -611,8 +611,9 @@ impl<'a> TypeLegalizer<'a> {
                             || bits < INT_BITS
                             || (bits <= INT_BITS
                                 && super::known_bits::masked_value_is_zero(self.dag, operand, 1u128 << (bits - 1))));
-                    let op = if nonneg { ISD::SIntToFp } else { op };
+                    // the operand is widened as its own type reads it, whichever routine takes it
                     let extension = if op == ISD::SIntToFp { ISD::SignExtend } else { ISD::ZeroExtend };
+                    let op = if nonneg { ISD::SIntToFp } else { op };
                     let arg =
                         if bits < INT_BITS { self.dag.get_node(extension, EVT::I32, &[operand]) } else { operand };
                     let (EVT::Simple(to), true) = (vt, op != ISD::FpExtend) else {
