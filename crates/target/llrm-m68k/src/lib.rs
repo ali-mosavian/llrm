@@ -92,7 +92,7 @@ fn rows(
     _dests: usize,
     _sources: usize,
 ) -> &'static [Row] {
-    static TIED: std::sync::OnceLock<std::collections::HashMap<&'static str, &'static Row>> =
+    static TIED: std::sync::OnceLock<llrm_support::hash::HashMap<&'static str, &'static Row>> =
         std::sync::OnceLock::new();
     let tied = TIED.get_or_init(|| {
         (0..=u32::from(u16::MAX))

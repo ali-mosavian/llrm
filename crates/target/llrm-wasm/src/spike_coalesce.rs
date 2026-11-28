@@ -162,14 +162,14 @@ pub fn coalesce(f: &mut Function) -> usize {
     // the value, or the copy is dead); the instruction must go too, or its
     // zero is written into the register the join gave to the live value, or
     // the redundant copy is kept as a store nothing reads.
-    let kept: std::collections::HashSet<(usize, usize)> = converted
+    let kept: llrm_support::hash::HashSet<(usize, usize)> = converted
         .body
         .blocks
         .iter()
         .flat_map(|block| block.insns.iter())
         .filter_map(|insn| converted.origin.get((insn.at / 2) as usize).copied())
         .collect();
-    let converted_all: std::collections::HashSet<(usize, usize)> = converted.origin.iter().copied().collect();
+    let converted_all: llrm_support::hash::HashSet<(usize, usize)> = converted.origin.iter().copied().collect();
     for (at, block) in f.blocks.iter_mut().enumerate() {
         let mut position = 0;
         block.retain(|inst| {

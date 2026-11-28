@@ -75,8 +75,9 @@
 //! LLVM [`MachineCopyPropagation`]
 //! (https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/MachineCopyPropagation.cpp#L926)
 
-use std::collections::HashMap;
 use std::ffi::OsStr;
+
+use llrm_support::hash::HashMap;
 
 use crate::asm::{Asm, Inst, Line, Op, Operand};
 use crate::peephole::flags_unread_after;

@@ -8,8 +8,6 @@
 //! The trial unroll was kept at 2.4 clk/B on a 4-trip loop it had priced at
 //! ten (`extension_chain_fused`: +96 B, 1,014 clocks estimated, 235 measured).
 
-use std::collections::HashMap;
-
 use llrm_analysis::scev::{Cx, ScalarEvolution};
 use llrm_mir::context::{ConstantId, ConstantKind, GlobalId};
 use llrm_mir::datalayout::DataLayout;
@@ -18,6 +16,7 @@ use llrm_mir::loopinfo::LoopInfo;
 use llrm_mir::module::{Function, Module, Operand};
 use llrm_mir::opcode::Opcode;
 use llrm_mir::valuetracking::AssumptionCache;
+use llrm_support::hash::HashMap;
 
 /// The trips a loop weighs when ScalarEvolution does not count it.
 const GUESSED_TRIPS: u64 = 10;

@@ -17,7 +17,7 @@ fn longest_chain(
     asm: &str,
     mnemonics: &[&str],
 ) -> usize {
-    let mut depth = std::collections::HashMap::<String, usize>::new();
+    let mut depth = llrm_support::hash::HashMap::<String, usize>::default();
     let mut longest = 0;
     for line in asm.lines().map(str::trim) {
         let Some((op, operands)) = line.split_once(char::is_whitespace) else { continue };

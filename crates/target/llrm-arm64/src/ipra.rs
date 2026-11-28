@@ -13,10 +13,11 @@
 //! and what the call destroys is already what the function writes.
 
 use std::cell::RefCell;
-use std::collections::{BTreeSet, HashMap};
+use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use llrm_lir::registers::RegId;
+use llrm_support::hash::HashMap;
 
 use crate::lir_view::{Class, caller_saved, id};
 use crate::mfunc::{Callee, MFunc, Op};
@@ -25,7 +26,7 @@ use crate::mfunc::{Callee, MFunc, Op};
 pub type Written = Arc<BTreeSet<RegId>>;
 
 thread_local! {
-    static KNOWN: RefCell<HashMap<String, Written>> = RefCell::new(HashMap::new());
+    static KNOWN: RefCell<HashMap<String, Written>> = RefCell::new(HashMap::default());
 }
 
 /// Forgets every function; a compile of a new module starts here.

@@ -28,7 +28,7 @@
 //! # See also
 //! `llvm/lib/Transforms/Scalar/LoopIdiomRecognize.cpp`.
 
-use std::collections::{HashMap, HashSet};
+use llrm_support::hash::{HashMap, HashSet};
 
 use crate::mfunc::{Block, Inst, Kind, MFunction, Operand, Reg};
 use crate::reg;
@@ -116,7 +116,7 @@ fn recognised(
         phis.push((phi.result, entered, looped));
     }
     let pre = pre?;
-    let mut root: HashMap<Reg, Reg> = HashMap::new();
+    let mut root: HashMap<Reg, Reg> = HashMap::default();
     let resolve = |root: &HashMap<Reg, Reg>, reg: Reg| *root.get(&reg).unwrap_or(&reg);
     let (mut load, mut store, mut incs, mut decs, mut byte_out, mut byte_in) =
         (None, None, Vec::new(), Vec::new(), 0, 0);

@@ -47,7 +47,7 @@
 //! pushes a frame (`__csave`): a call to a function of the program may recurse,
 //! and every level would hold two more bytes of the return stack.
 
-use std::collections::HashMap;
+use llrm_support::hash::HashMap;
 
 use crate::asm::{Inst, Line, Op, Operand};
 
@@ -162,7 +162,7 @@ fn legal(
 /// around it: a backward branch makes a loop of the lines from its target to
 /// itself.
 fn weights(lines: &[Line]) -> Vec<u64> {
-    let mut labels: HashMap<&str, usize> = HashMap::new();
+    let mut labels: HashMap<&str, usize> = HashMap::default();
     for (at, line) in lines.iter().enumerate() {
         if let Line::Label(name) = line {
             labels.insert(name, at);
@@ -207,7 +207,7 @@ fn scaled_by_callers(
         _ => None,
     };
     // a function is a label something calls or the module exports
-    let mut callees: std::collections::HashSet<String> = lines.iter().filter_map(calls).collect();
+    let mut callees: llrm_support::hash::HashSet<String> = lines.iter().filter_map(calls).collect();
     for line in lines {
         if let Line::Raw(text) = line {
             if let Some(name) = text.trim().strip_prefix(".export ") {
@@ -218,7 +218,7 @@ fn scaled_by_callers(
     // the function a line is in: the last label that something calls
     let mut owner: Vec<Option<usize>> = Vec::with_capacity(lines.len());
     let mut names: Vec<&str> = Vec::new();
-    let mut at_name: HashMap<&str, usize> = HashMap::new();
+    let mut at_name: HashMap<&str, usize> = HashMap::default();
     let mut current = None;
     for line in lines {
         if let Line::Label(name) = line {
@@ -272,7 +272,7 @@ struct Mapper {
 
 impl Mapper {
     fn new(lines: &[Line]) -> Mapper {
-        let mut by_text: HashMap<String, u32> = HashMap::new();
+        let mut by_text: HashMap<String, u32> = HashMap::default();
         let (mut ids, mut legal_at) = (Vec::with_capacity(lines.len() + 1), Vec::with_capacity(lines.len()));
         let mut unique = u32::MAX;
         let mut in_macro = false;
@@ -327,7 +327,8 @@ struct SuffixTree<'a> {
 
 impl<'a> SuffixTree<'a> {
     fn new(text: &'a [u32]) -> SuffixTree<'a> {
-        let mut tree = SuffixTree { text, nodes: vec![Node { start: 0, end: 0, link: 0, children: HashMap::new() }] };
+        let mut tree =
+            SuffixTree { text, nodes: vec![Node { start: 0, end: 0, link: 0, children: HashMap::default() }] };
         let (mut active_node, mut active_edge, mut active_len) = (0usize, 0usize, 0usize);
         let mut remainder = 0usize;
         for i in 0..text.len() {
@@ -364,7 +365,7 @@ impl<'a> SuffixTree<'a> {
                 }
                 let split = tree.nodes.len();
                 let start = tree.nodes[next].start;
-                tree.nodes.push(Node { start, end: start + active_len, link: 0, children: HashMap::new() });
+                tree.nodes.push(Node { start, end: start + active_len, link: 0, children: HashMap::default() });
                 tree.nodes[active_node].children.insert(edge, split);
                 let leaf = tree.leaf(i);
                 tree.nodes[split].children.insert(text[i], leaf);
@@ -403,7 +404,7 @@ impl<'a> SuffixTree<'a> {
         &mut self,
         start: usize,
     ) -> usize {
-        self.nodes.push(Node { start, end: LEAF, link: 0, children: HashMap::new() });
+        self.nodes.push(Node { start, end: LEAF, link: 0, children: HashMap::default() });
         self.nodes.len() - 1
     }
 
@@ -423,7 +424,7 @@ impl<'a> SuffixTree<'a> {
         let mut found = Vec::new();
         // (node, string length at it, children done)
         let mut stack: Vec<(usize, usize, bool)> = vec![(0, 0, false)];
-        let mut starts: HashMap<usize, Vec<usize>> = HashMap::new();
+        let mut starts: HashMap<usize, Vec<usize>> = HashMap::default();
         while let Some((node, depth, done)) = stack.pop() {
             let me = &self.nodes[node];
             if me.children.is_empty() {
@@ -604,7 +605,7 @@ fn rewrite(
     chosen: &[Chosen],
     newline: bool,
 ) -> String {
-    let mut replace: HashMap<usize, usize> = HashMap::new();
+    let mut replace: HashMap<usize, usize> = HashMap::default();
     for (index, one) in chosen.iter().enumerate() {
         for &place in &one.places {
             replace.insert(place, index);

@@ -19,7 +19,7 @@ use crate::reg;
 
 /// Steps each word added to (subtracted by) a flag by `INC16c` / `DEC16c`.
 pub fn step_by_flags(function: &mut MFunction) -> bool {
-    let mut reads = std::collections::HashMap::<u32, usize>::new();
+    let mut reads = llrm_support::hash::HashMap::<u32, usize>::default();
     for block in &function.blocks {
         for inst in &block.insts {
             for operand in &inst.operands {
@@ -66,7 +66,7 @@ fn defines(
 
 fn recognised(
     insts: &[Inst],
-    reads: &std::collections::HashMap<u32, usize>,
+    reads: &llrm_support::hash::HashMap<u32, usize>,
 ) -> Option<Found> {
     let (hl, flags) = (Reg::Phys(reg::HL), Reg::Phys(reg::FLAGS));
     for (add, inst) in insts.iter().enumerate() {

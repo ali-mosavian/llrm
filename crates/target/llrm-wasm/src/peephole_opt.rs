@@ -30,7 +30,7 @@
 //! After `machine_sink`, before the second `dead_machine_instruction_elim`; the
 //! MIR is in SSA form.
 
-use std::collections::HashMap;
+use llrm_support::hash::HashMap;
 
 use crate::mir::{Function, Operand, VReg, is_copy};
 
@@ -48,7 +48,7 @@ fn copy_regs(inst: &crate::mir::Inst) -> Option<(VReg, VReg)> {
 /// Whether anything changed.
 pub fn peephole_opt(f: &mut Function) -> bool {
     // `MRI->getVRegDef`: where each register's only definition is.
-    let mut defs: HashMap<VReg, (usize, usize)> = HashMap::new();
+    let mut defs: HashMap<VReg, (usize, usize)> = HashMap::default();
     for (block, insts) in f.blocks.iter().enumerate() {
         for (at, inst) in insts.iter().enumerate() {
             for reg in inst.defs() {
@@ -58,10 +58,10 @@ pub fn peephole_opt(f: &mut Function) -> bool {
     }
     let mut changed = false;
     let mut erased: Vec<Vec<bool>> = f.blocks.iter().map(|insts| vec![false; insts.len()]).collect();
-    let mut replaced: HashMap<VReg, VReg> = HashMap::new();
+    let mut replaced: HashMap<VReg, VReg> = HashMap::default();
     for block in 0..f.blocks.len() {
         // `CopySrcMIs`: the first copy of each register in this block.
-        let mut copy_srcs: HashMap<VReg, VReg> = HashMap::new();
+        let mut copy_srcs: HashMap<VReg, VReg> = HashMap::default();
         for at in 0..f.blocks[block].len() {
             let Some((dst, src)) = copy_regs(&f.blocks[block][at]) else { continue };
             // `SP32` is a physical register here, which the pin's copy rewrites

@@ -601,8 +601,9 @@ pub fn shared(
     text: &str,
     dialect: &Dialect,
 ) -> Result<std::sync::Arc<Vec<Form>>, String> {
-    static FORMS: std::sync::LazyLock<std::sync::Mutex<std::collections::HashMap<String, std::sync::Arc<Vec<Form>>>>> =
-        std::sync::LazyLock::new(Default::default);
+    static FORMS: std::sync::LazyLock<
+        std::sync::Mutex<llrm_support::hash::HashMap<String, std::sync::Arc<Vec<Form>>>>,
+    > = std::sync::LazyLock::new(Default::default);
     if let Some(found) = FORMS.lock().expect("the forms lock").get(text) {
         return Ok(std::sync::Arc::clone(found));
     }

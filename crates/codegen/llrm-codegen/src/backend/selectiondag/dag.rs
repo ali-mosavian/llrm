@@ -611,7 +611,7 @@ pub struct SelectionDAG {
     /// which `computeKnownBits` of a `LOAD` reads): the node's known-zero
     /// and known-one bits. A load a combine or the legalizer remakes is not
     /// in it.
-    pub load_ranges: std::collections::HashMap<u32, (u128, u128)>,
+    pub load_ranges: llrm_support::hash::HashMap<u32, (u128, u128)>,
     /// The loads of a GOT entry (`MachinePointerInfo::getGOT`); like
     /// `invariant_loads`, the number follows the node into a machine node. The
     /// emitter makes such a load the symbol's External immediate, which the

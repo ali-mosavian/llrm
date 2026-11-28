@@ -22,8 +22,9 @@
 //! their variable shifts are priced like the 68020's. Owner m68k.
 //! Review: 2026-12-20.
 
-use std::collections::HashMap;
 use std::sync::LazyLock;
+
+use llrm_support::hash::HashMap;
 
 /// DEVIATE M68K-SIZE-LIBCALL-CAP: a function is built `1 + kinds` times to
 /// price its sites (the three shifts count as one kind, see `grouped`), so the
@@ -119,7 +120,7 @@ static COSTS: LazyLock<Costs<Kind>> = LazyLock::new(|| parse(include_str!("libca
 /// The table: `candidate KEY ROUTINE` and `member ROUTINE BYTES [NEEDS,..]`
 /// lines, `#` comments.
 pub fn parse(text: &str) -> Costs<Kind> {
-    let mut costs = Costs { candidates: Vec::new(), members: HashMap::new() };
+    let mut costs = Costs { candidates: Vec::new(), members: HashMap::default() };
     for line in text.lines().filter(|line| !line.starts_with('#') && !line.trim().is_empty()) {
         let fields: Vec<&str> = line.split('\t').collect();
         match fields[..] {
@@ -255,7 +256,7 @@ pub fn chosen(
 ) -> Vec<Kind> {
     let mut kinds = match mode {
         Mode::Auto => {
-            let mut saved: HashMap<Kind, i64> = HashMap::new();
+            let mut saved: HashMap<Kind, i64> = HashMap::default();
             for (_, global, function) in module.functions().filter(|(_, _, one)| !one.is_declaration()) {
                 let (Some(name), true) = (global.name.as_deref(), built_for_size(function)) else { continue };
                 let here =

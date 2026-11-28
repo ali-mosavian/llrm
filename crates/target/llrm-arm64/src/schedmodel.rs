@@ -29,7 +29,6 @@
 //! # Used by
 //! `lir_view`'s `AllocTarget::scheduling_model`.
 
-use std::collections::HashMap;
 use std::sync::OnceLock;
 
 use llrm_codegen::backend::genericdriver::RegionPolicy;
@@ -41,6 +40,7 @@ use llrm_codegen::model::lir::Insn;
 use llrm_dagisel::generated::aarch64::aarch64_apple_m1::MACHINE_OPCODES;
 use llrm_dagisel::generated::aarch64::sched::CORTEX_A510_MODEL;
 use llrm_dagisel::sched::{Modeled, SchedModel, SchedPred};
+use llrm_support::hash::HashMap;
 
 use crate::opcode_rows::{FORM_NAMES, llvm_names};
 
@@ -497,7 +497,7 @@ mod tests {
     /// unmodeled (matmul O2: `SUBXri`).
     #[test]
     fn every_opcode_a_form_stands_for_has_a_number_in_the_table() {
-        let numbered: std::collections::HashSet<&str> =
+        let numbered: llrm_support::hash::HashSet<&str> =
             opcode_numbers().keys().flat_map(|names| names.split('|')).collect();
         let missing: Vec<_> =
             crate::opcode_rows::LLVM_OPCODES.iter().filter(|name| !numbered.contains(**name)).collect();

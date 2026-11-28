@@ -34,7 +34,7 @@
 //!  define i32 @c(i32 %y) { %s = add i32 %y, 2  ret i32 %s }   ; not: another constant
 //! ```
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet};
 use std::hash::{Hash, Hasher};
 
 use llrm_analysis::globalsaa::embedded;
@@ -45,6 +45,7 @@ use llrm_mir::module::{GlobalKind, Linkage, UnnamedAddr};
 use llrm_mir::opcode::{Attribute, Opcode, Tail};
 use llrm_mir::program::{Program, ProgramAnalyses, ProgramPass};
 use llrm_mir::types::Type;
+use llrm_support::hash::HashMap;
 
 /// `FunctionComparator::functionHash`: what two equivalent functions share.
 pub fn function_hash(function: &Function) -> u64 {
@@ -117,7 +118,7 @@ impl Comparator<'_> {
             return false;
         };
         let mut pending = vec![(first_left, first_right)];
-        let mut met = HashMap::new();
+        let mut met = HashMap::default();
         self.pair_blocks(first_left, first_right);
         met.insert(first_left, first_right);
         while let Some((l, r)) = pending.pop() {
@@ -433,7 +434,7 @@ fn merge_functions(
     module: &mut Module,
     thunks_allowed: bool,
 ) -> bool {
-    let mut buckets: HashMap<u64, Vec<GlobalId>> = HashMap::new();
+    let mut buckets: HashMap<u64, Vec<GlobalId>> = HashMap::default();
     for index in 0..module.globals.len() as u32 {
         let id = GlobalId(index);
         if eligible(module, id) {

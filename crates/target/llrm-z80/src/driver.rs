@@ -436,7 +436,7 @@ pub fn take_selected_names() -> Vec<String> {
     SELECTED_NAMES.with(|held| std::mem::take(&mut *held.borrow_mut()))
 }
 
-pub type Digests = std::rc::Rc<std::collections::HashMap<String, u64>>;
+pub type Digests = std::rc::Rc<llrm_support::hash::HashMap<String, u64>>;
 
 /// The selections of an earlier compile of the module. DEVIATE LSR-KEY-TRIAL
 /// (owner z80, exit 2026-12-01): the twin compile of a module differs from the

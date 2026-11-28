@@ -522,7 +522,8 @@ pub fn functions_with(
         return Ok(out);
     }
     // Callees first, so a call is priced by what its callee wrote.
-    let mut lowered: std::collections::HashMap<llrm_mir::context::GlobalId, crate::emit::Function> = Default::default();
+    let mut lowered: llrm_support::hash::HashMap<llrm_mir::context::GlobalId, crate::emit::Function> =
+        Default::default();
     let graph = llrm_mir::callgraph::CallGraph::new(module);
     for (component, _) in graph.bottom_up_components() {
         for id in component.iter().copied() {

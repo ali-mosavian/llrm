@@ -20,9 +20,8 @@
 //! # See also
 //! `X86InstrInfo::optimizeCompareInstr`, `cmpelim.rs`.
 
-use std::collections::HashMap;
-
 use llrm_spike_mf::{Inst, Kind, Operand, Reg};
+use llrm_support::hash::HashMap;
 
 use crate::REGISTER_INFO;
 use crate::mfunc::MFunction;
@@ -61,7 +60,7 @@ pub fn drop_repeated_compares(
     assignment: &Assignment,
 ) {
     // the edges into each block, by id
-    let mut entering: HashMap<u32, Vec<usize>> = HashMap::new();
+    let mut entering: HashMap<u32, Vec<usize>> = HashMap::default();
     for (at, block) in function.blocks.iter().enumerate() {
         for inst in block.insts.iter().filter(|inst| inst.terminator) {
             for operand in &inst.operands {

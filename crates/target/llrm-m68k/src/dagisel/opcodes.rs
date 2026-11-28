@@ -1,8 +1,9 @@
 //! The pin's machine opcodes, by name and by code.
 
 use std::cell::Cell;
-use std::collections::HashMap;
 use std::sync::LazyLock;
+
+use llrm_support::hash::HashMap;
 
 use super::generated::{m68k_m68000, m68k_m68020};
 

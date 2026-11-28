@@ -95,7 +95,7 @@
 //! LLVM's
 //! [`LCSSA.cpp`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/LCSSA.cpp).
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::BTreeMap;
 use std::rc::Rc;
 
 use llrm_analysis::cfg;
@@ -110,6 +110,7 @@ use llrm_mir::module::{BlockId, Function, InstId, Operand, Use, ValueId};
 use llrm_mir::opcode::{Flags, Opcode};
 use llrm_mir::passes::{Analyses, Dominators, FunctionPass, Loops, PreservedAnalyses, Unit};
 use llrm_mir::types::Type;
+use llrm_support::hash::{HashMap, HashSet};
 
 pub struct LoopClosedSSA;
 
@@ -176,7 +177,8 @@ pub(crate) fn form_on_all_loops(
     tree: &DomTree,
     info: &LoopInfo,
 ) -> Result<bool, String> {
-    let mut form = Form { context, layout, function, tree, info, exit_blocks: HashMap::new(), placed: IdMap::new() };
+    let mut form =
+        Form { context, layout, function, tree, info, exit_blocks: HashMap::default(), placed: IdMap::new() };
     let mut changed = false;
     for top in info.top_level_loops() {
         changed |= form.recursively(top)?;
@@ -272,7 +274,7 @@ impl Form<'_> {
         exits: &[BlockId],
     ) -> Vec<BlockId> {
         let mut found = Vec::new();
-        let mut seen = HashSet::new();
+        let mut seen = HashSet::default();
         let mut worklist = exits.to_vec();
         while let Some(block) = worklist.pop() {
             if loop_.get_header() == block {
@@ -302,7 +304,7 @@ impl Form<'_> {
         let mut changed = false;
         let mut local_to_remove: Vec<InstId> = Vec::new();
         // `PredIteratorCache`.
-        let mut pred_cache: HashMap<BlockId, Rc<[BlockId]>> = HashMap::new();
+        let mut pred_cache: HashMap<BlockId, Rc<[BlockId]>> = HashMap::default();
         while let Some(inst) = worklist.pop() {
             let value = self.function.instruction(inst).result.expect("a worklist instruction has a value");
             let inst_block = self.function.parent(inst).expect("a placed instruction");
@@ -447,7 +449,7 @@ impl Form<'_> {
     /// block's own phis, by the value they close; the pin leaves each first in
     /// its block, the last made first.
     fn in_value_order(&mut self) -> Result<(), String> {
-        let mut by_block: HashMap<BlockId, Vec<(ValueId, InstId)>> = HashMap::new();
+        let mut by_block: HashMap<BlockId, Vec<(ValueId, InstId)>> = HashMap::default();
         for (phi, &value) in self.placed.iter() {
             if let Some(block) = self.function.parent(phi) {
                 by_block.entry(block).or_default().push((value, phi));

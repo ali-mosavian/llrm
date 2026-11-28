@@ -211,7 +211,7 @@ pub fn sign_extended_words(
     }
     // the adds that may take an address register: a sum feeding one is not
     // held back by it
-    let candidate_adds: std::cell::RefCell<std::collections::HashSet<(usize, usize)>> =
+    let candidate_adds: std::cell::RefCell<llrm_support::hash::HashSet<(usize, usize)>> =
         std::cell::RefCell::new(sites.iter().map(|site| (site.block, site.at)).collect());
     // the registers that may be address registers: defined and used by copies,
     // phis and operands the pin gives an address-capable class
@@ -375,7 +375,7 @@ pub fn sign_extended_words(
             }
             at
         }
-        let mut owner: std::collections::HashMap<usize, usize> = std::collections::HashMap::new();
+        let mut owner: llrm_support::hash::HashMap<usize, usize> = llrm_support::hash::HashMap::default();
         for (index, web) in webs.iter().enumerate() {
             let Some((acc, sum)) = web else { continue };
             for &member in acc.members.iter().chain(&sum.members) {
@@ -393,7 +393,7 @@ pub fn sign_extended_words(
             if members.iter().any(|&i| webs[i].is_none()) {
                 continue;
             }
-            let mut moves: std::collections::HashSet<Move> = std::collections::HashSet::new();
+            let mut moves: llrm_support::hash::HashSet<Move> = llrm_support::hash::HashSet::default();
             let (mut old, mut new) = ((0usize, 0u32), (0usize, 0u32));
             let mut priced = true;
             for &i in &members {

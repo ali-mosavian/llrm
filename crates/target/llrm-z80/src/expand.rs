@@ -2636,7 +2636,7 @@ fn drop_dead_byte_loads(lines: Vec<Line>) -> Vec<Line> {
             }
         }
     };
-    let labels: std::collections::HashSet<&str> =
+    let labels: llrm_support::hash::HashSet<&str> =
         lines.iter().filter_map(|line| if let Line::Label(name) = line { Some(name.as_str()) } else { None }).collect();
     let mut keep = vec![true; lines.len()];
     for end in 0..lines.len() {

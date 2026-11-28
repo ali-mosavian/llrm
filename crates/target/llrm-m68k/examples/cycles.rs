@@ -15,7 +15,6 @@
 //! true total is at most it; `?` counts executed instructions the tables do not
 //! cover.
 
-use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
@@ -25,6 +24,7 @@ use llrm_m68k::isa::Cpu as Model;
 use llrm_m68k::kernels::{data, library_data, library_table, program_with_data, source_in, table};
 use llrm_m68k::object::{assemble, executable, write_executable};
 use llrm_m68k::timing::{DataRegisters, cost_on, cost_on_counted, from_gnu};
+use llrm_support::hash::HashMap;
 
 // An explicit path: matrix.rs includes this file as a module, where `mod
 // tempdir;` would look beside it.
@@ -371,7 +371,7 @@ impl Total {
         bytes: u32,
         taken: bool,
         places: Option<u32>,
-        seen: &mut std::collections::HashSet<String>,
+        seen: &mut llrm_support::hash::HashSet<String>,
     ) {
         for (slot, cpu) in models.iter().copied().enumerate() {
             match cost_on_counted(cpu, text, bytes, taken, places) {
@@ -406,7 +406,7 @@ impl Total {
         bytes: u32,
         taken: bool,
         counted: Option<u32>,
-        seen: &mut std::collections::HashSet<String>,
+        seen: &mut llrm_support::hash::HashSet<String>,
     ) {
         self.charge(models, text, bytes, taken, counted.or_else(|| registers.places_of(text)), seen);
         registers.execute(text);
@@ -507,7 +507,7 @@ mod tests {
     fn an_instruction_one_model_lacks_marks_only_that_models_column() {
         let models = [Model::M68000, Model::M68020];
         let mut total = Total::new(&models);
-        let mut seen = std::collections::HashSet::new();
+        let mut seen = llrm_support::hash::HashSet::default();
         for _ in 0..16 {
             total.charge(&models, "extb.l %d2", 2, false, None, &mut seen);
         }
@@ -525,7 +525,7 @@ mod tests {
         let run = |trace: &[&str]| {
             let mut total = Total::new(&models);
             let mut registers = DataRegisters::new();
-            let mut seen = std::collections::HashSet::new();
+            let mut seen = llrm_support::hash::HashSet::default();
             for text in trace {
                 total.charge_executed(&models, &mut registers, text, 4, false, None, &mut seen);
             }
@@ -546,7 +546,7 @@ mod tests {
         let models = [Model::M68020];
         let mut total = Total::new(&models);
         let mut registers = DataRegisters::new();
-        let mut seen = std::collections::HashSet::new();
+        let mut seen = llrm_support::hash::HashSet::default();
         for text in ["muls.l %d1, %d0", "bfextu (%a0){0:8}, %d1", "bfextu (%a0){0:8}, %d1"] {
             total.charge_executed(&models, &mut registers, text, 4, false, None, &mut seen);
         }
@@ -566,7 +566,7 @@ mod tests {
         let run = |trace: &[&str]| {
             let mut total = Total::new(&models);
             let mut registers = DataRegisters::new();
-            let mut seen = std::collections::HashSet::new();
+            let mut seen = llrm_support::hash::HashSet::default();
             for text in trace {
                 total.charge_executed(&models, &mut registers, text, 2, false, None, &mut seen);
             }
@@ -592,7 +592,7 @@ mod tests {
         let run = |trace: &[&str], counted: Option<u32>| {
             let mut total = Total::new(&models);
             let mut registers = DataRegisters::new();
-            let mut seen = std::collections::HashSet::new();
+            let mut seen = llrm_support::hash::HashSet::default();
             for text in trace {
                 total.charge_executed(&models, &mut registers, text, 2, false, counted, &mut seen);
             }
@@ -615,7 +615,7 @@ mod tests {
             echo 'Trace 0: 0x7f00 [00000000/00001000/00000000/0]' >&2; echo 'D5 = 0000001a   A5 = 0' >&2";
         let mut command = std::process::Command::new("sh");
         command.args(["-c", log]);
-        let shifts = std::collections::HashMap::from([(0x1000, 5)]);
+        let shifts = llrm_support::hash::HashMap::from_iter([(0x1000, 5)]);
         let counts = read_shift_counts(command, &shifts, std::time::Duration::from_secs(30));
         assert_eq!(counts, [(0x1000, 0x5f % 64), (0x1000, 0x1a)]);
     }
@@ -632,7 +632,7 @@ mod tests {
             echo 'Trace 0: 0x7f00 [00000000/00001002/00000000/0]' >&2; echo 'D3 = 00000000   A3 = 0' >&2";
         let mut command = std::process::Command::new("sh");
         command.args(["-c", log]);
-        let traced = std::collections::HashMap::from([(
+        let traced = llrm_support::hash::HashMap::from_iter([(
             0x1000,
             (2, super::Term::Product { source: None, destination: 3, signed: true }),
         )]);
@@ -653,7 +653,7 @@ mod tests {
         command.args(["-c", log]);
         let term = llrm_m68k::timing::DataRegisters::multiply_operands("mulu.w %d2, %d3").unwrap();
         assert_eq!(term, (Some(2), 3, false));
-        let traced = std::collections::HashMap::from([(
+        let traced = llrm_support::hash::HashMap::from_iter([(
             0x1000,
             (2, super::Term::Product { source: term.0, destination: term.1, signed: term.2 }),
         )]);
@@ -671,7 +671,7 @@ mod tests {
         let mut command = std::process::Command::new("sh");
         command.args(["-c", log]);
         let destination = llrm_m68k::timing::DataRegisters::set_destination("sne %d1").unwrap();
-        let traced = std::collections::HashMap::from([(0x1000, (2, super::Term::Condition { destination }))]);
+        let traced = llrm_support::hash::HashMap::from_iter([(0x1000, (2, super::Term::Condition { destination }))]);
         let counts = super::read_term_counts(command, &traced, std::time::Duration::from_secs(30));
         assert_eq!(counts, [(0x1000, Some(1)), (0x1000, Some(0))]);
     }
@@ -728,7 +728,7 @@ pub(crate) fn price(
     let shifts: HashMap<u32, usize> = if models.iter().any(|m| matches!(m, Model::M68000 | Model::M68010)) {
         at.iter().filter_map(|(pc, (_, text))| Some((*pc, DataRegisters::count_register(text)?))).collect()
     } else {
-        HashMap::new()
+        HashMap::default()
     };
     let mut counted = shift_counts(exe, &cpu, &shifts).into_iter();
     let traced: Traced = if models.iter().any(|m| matches!(m, Model::M68000 | Model::M68010)) {
@@ -742,12 +742,12 @@ pub(crate) fn price(
             })
             .collect()
     } else {
-        HashMap::new()
+        HashMap::default()
     };
     let mut shown = term_counts(exe, &cpu, &traced).into_iter();
     let mut total = Total::new(models);
     total.truncated = !complete;
-    let mut seen = std::collections::HashSet::new();
+    let mut seen = llrm_support::hash::HashSet::default();
     // CYCLES_LISTING=1: each distinct executed instruction, its count and
     // clocks
     let mut counts: std::collections::BTreeMap<u32, usize> = std::collections::BTreeMap::new();

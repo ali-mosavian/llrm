@@ -37,7 +37,7 @@
 //! LLVM's `GlobalMerge`
 //! ([GlobalMerge.cpp](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/CodeGen/GlobalMerge.cpp)).
 
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::BTreeSet;
 
 use llrm_mir::context::{Constant, ConstantExpr, ConstantId, ConstantKind, GlobalId};
 use llrm_mir::datalayout::DataLayout;
@@ -48,6 +48,7 @@ use llrm_mir::opcode::{Attribute, Opcode};
 use llrm_mir::target::GlobalMerge;
 use llrm_mir::types::Type;
 use llrm_mir::types::TypeId;
+use llrm_support::hash::{HashMap, HashSet};
 
 /// A set of globals, by position in the group.
 #[derive(Clone)]
@@ -117,8 +118,11 @@ pub fn merged(
     }
     let wanted: HashSet<u32> = groups.iter().flat_map(|(_, globals)| globals.iter().map(|g| g.0)).collect();
     let sites = uses(module, &wanted);
-    let kept =
-        if options.keep_data_indexed { data_indexed_in_loops(module, layout, &wanted, &sites) } else { HashSet::new() };
+    let kept = if options.keep_data_indexed {
+        data_indexed_in_loops(module, layout, &wanted, &sites)
+    } else {
+        HashSet::default()
+    };
     let mut plans = Vec::new();
     for (_, mut globals) in groups {
         globals.retain(|id| !kept.contains(&id.0));
@@ -145,7 +149,7 @@ fn data_indexed_in_loops(
     wanted: &HashSet<u32>,
     sites: &HashMap<u32, Vec<Site>>,
 ) -> HashSet<u32> {
-    let mut hit = HashSet::new();
+    let mut hit = HashSet::default();
     let functions: BTreeSet<usize> =
         wanted.iter().flat_map(|global| sites.get(global).into_iter().flatten().map(|site| site.function)).collect();
     for at in functions {
@@ -191,8 +195,8 @@ fn data_indexed_in_loops(
 /// Globals that something other than an instruction names, which stay: the
 /// initializers (`llvm.used` among them), the aliases, the landing pads.
 fn named_elsewhere(module: &Module) -> HashSet<u32> {
-    let mut named = HashSet::new();
-    let mut seen = HashSet::new();
+    let mut named = HashSet::default();
+    let mut seen = HashSet::default();
     for global in &module.globals {
         if let GlobalKind::Variable(variable) = &global.kind {
             if let Some(init) = variable.initializer {
@@ -253,7 +257,7 @@ fn candidates(
     named: &HashSet<u32>,
 ) -> Vec<((bool, u32, Option<String>), Vec<GlobalId>)> {
     let mut groups: Vec<((bool, u32, Option<String>), Vec<GlobalId>)> = Vec::new();
-    let mut index: HashMap<(bool, u32, Option<String>), usize> = HashMap::new();
+    let mut index: HashMap<(bool, u32, Option<String>), usize> = HashMap::default();
     for (at, global) in module.globals.iter().enumerate() {
         let GlobalKind::Variable(variable) = &global.kind else { continue };
         let Some(init) = variable.initializer else { continue };
@@ -324,8 +328,8 @@ fn uses(
     module: &Module,
     wanted: &HashSet<u32>,
 ) -> HashMap<u32, Vec<Site>> {
-    let mut sites: HashMap<u32, Vec<Site>> = HashMap::new();
-    let mut named: HashMap<ConstantId, Vec<u32>> = HashMap::new();
+    let mut sites: HashMap<u32, Vec<Site>> = HashMap::default();
+    let mut named: HashMap<ConstantId, Vec<u32>> = HashMap::default();
     for (at, global) in module.globals.iter().enumerate() {
         let GlobalKind::Function(function) = &global.kind else { continue };
         for (_, inst) in function.walk() {
@@ -335,8 +339,8 @@ fn uses(
                     .entry(*id)
                     .or_insert_with(
                         || {
-                            let mut found = HashSet::new();
-                            collect(module, *id, &mut HashSet::new(), &mut found);
+                            let mut found = HashSet::default();
+                            collect(module, *id, &mut HashSet::default(), &mut found);
                             let mut found: Vec<u32> = found.into_iter().filter(|g| wanted.contains(g)).collect();
                             found.sort_unstable();
                             found
@@ -382,7 +386,7 @@ fn plan_group(
         count: i64,
     }
     let mut sets = vec![Set { globals: Bits::new(globals.len()), count: 0 }];
-    let mut by_function: HashMap<usize, usize> = HashMap::new();
+    let mut by_function: HashMap<usize, usize> = HashMap::default();
     for (gi, id) in globals.iter().enumerate() {
         let mut expanded = vec![0usize; sets.len()];
         let mut only = 0usize;
@@ -501,9 +505,9 @@ fn apply(
     sites: &HashMap<u32, Vec<Site>>,
     options: &GlobalMerge,
 ) -> Result<(), String> {
-    let mut remove: HashSet<u32> = HashSet::new();
+    let mut remove: HashSet<u32> = HashSet::default();
     // member -> (merged global, struct type, field index)
-    let mut homes: HashMap<u32, (GlobalId, TypeId, u32)> = HashMap::new();
+    let mut homes: HashMap<u32, (GlobalId, TypeId, u32)> = HashMap::default();
     for plan in plans {
         let first = plan.members[0];
         let (space, section) = {
@@ -569,7 +573,7 @@ fn apply(
 
     // Every use becomes the constant `getelementptr inbounds (M, @M, 0, i)`,
     // inside whatever expression named the original.
-    let mut memo: HashMap<ConstantId, ConstantId> = HashMap::new();
+    let mut memo: HashMap<ConstantId, ConstantId> = HashMap::default();
     let functions: BTreeSet<usize> =
         homes.keys().flat_map(|member| sites.get(member).into_iter().flatten().map(|site| site.function)).collect();
     let (globals, context) = (&mut module.globals, &module.context);

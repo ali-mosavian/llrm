@@ -156,7 +156,7 @@ fn a_name_without_a_suffix_is_llvms_or_is_listed() {
 /// that make the same name and counts would hide the second.
 #[test]
 fn a_name_with_its_operand_counts_is_made_once() {
-    let mut seen = std::collections::HashSet::new();
+    let mut seen = llrm_support::hash::HashSet::default();
     for one in opcodes() {
         let key = (one.name.clone(), one.form.dests.len(), one.form.sources.len());
         assert!(seen.insert(key.clone()), "{key:?} is made twice");

@@ -7,7 +7,7 @@
 //! over the rows that leave it empty. [`Table::get`] finds a cell by row and
 //! column label, both compared with spaces, `*` and the dash variants removed.
 
-use std::collections::HashMap;
+use llrm_support::hash::HashMap;
 
 /// A cell's clocks: `base`, `per` more for each of `n` (a shift count, a
 /// register count), and whether the effective address time is to be added.
@@ -62,7 +62,7 @@ impl Table {
         let header = split_csv(lines.next().expect("a header row"));
         let skip = if two_labels { 2 } else { 1 };
         let mut rows = Vec::new();
-        let mut by_name: HashMap<String, Vec<usize>> = HashMap::new();
+        let mut by_name: HashMap<String, Vec<usize>> = HashMap::default();
         let mut carried = String::new();
         for line in lines.filter(|line| !line.is_empty()) {
             let fields = split_csv(line);
@@ -80,7 +80,7 @@ impl Table {
             }
             rows.push((second, fields[skip..].to_vec()));
         }
-        let mut columns = HashMap::new();
+        let mut columns = HashMap::default();
         for (at, name) in header[skip..].iter().enumerate() {
             let name = key(name);
             columns.entry(name.strip_suffix('+').unwrap_or(&name).to_owned()).or_insert(at);

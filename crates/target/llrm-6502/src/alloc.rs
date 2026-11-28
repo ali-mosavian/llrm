@@ -118,7 +118,7 @@ thread_local! {
     static SIZE_FAST_DIVISION16: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     /// The functions of the module in hand that save their cells inline (see
     /// [`keep_saves_inline`]).
-    static INLINE_SAVES: std::cell::RefCell<std::collections::HashSet<String>> = std::cell::RefCell::new(Default::default());
+    static INLINE_SAVES: std::cell::RefCell<llrm_support::hash::HashSet<String>> = std::cell::RefCell::new(Default::default());
     /// Whether `commute_accumulator` makes its wider choice (see
     /// [`with_wide_commute`]).
     static WIDE_COMMUTE: std::cell::Cell<bool> = const { std::cell::Cell::new(true) };

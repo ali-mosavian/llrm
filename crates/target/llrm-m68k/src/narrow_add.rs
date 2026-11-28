@@ -20,11 +20,10 @@
 //! gcc and clang is the goal. [`sites`] lists the candidates;
 //! [`narrow_adds`] rewrites the sound ones.
 
-use std::collections::HashMap;
-
 use llrm_lir::registers::RegId;
 use llrm_spike_mf::regalloc::successors;
 use llrm_spike_mf::{Inst, Kind, Operand, Reg};
+use llrm_support::hash::HashMap;
 
 use crate::REGISTER_INFO;
 use crate::cmpelim::flags_read_after;
@@ -157,11 +156,11 @@ fn start_state(
 ) -> State {
     // the entry has a predecessor the blocks do not list: the caller
     if block == 0 {
-        return State::new();
+        return State::default();
     }
     match predecessors[block][..] {
         [only] if depth > 0 && only != block => end_state(function, assignment, predecessors, only, depth - 1),
-        _ => State::new(),
+        _ => State::default(),
     }
 }
 

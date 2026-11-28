@@ -49,7 +49,7 @@ fn a_callee_the_trial_rejected_is_not_tried_again_in_the_same_caller() {
         .output()
         .unwrap();
     let log = String::from_utf8_lossy(&output.stderr);
-    let mut rejected = std::collections::HashSet::new();
+    let mut rejected = llrm_support::hash::HashSet::default();
     let mut trials = 0;
     for line in log.lines() {
         let Some((caller, rest)) = line.split_once(' ') else { continue };

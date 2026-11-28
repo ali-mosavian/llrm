@@ -12,12 +12,11 @@
 //! costs) is decided here, by building the function both ways, instead of
 //! guessing before allocation.
 
-use std::collections::HashMap;
-
 use llrm_mir::blocklist::BlockList;
 use llrm_mir::cycleinfo::{CycleInfo, FlowGraph};
 use llrm_mir::domtree::DomGraph;
 use llrm_mir::module::BlockId;
+use llrm_support::hash::HashMap;
 
 use crate::compile::Item;
 use crate::dagisel::hooks::Cpu;
@@ -716,7 +715,7 @@ pub fn cheaper(
 
 #[cfg(test)]
 mod ending_tests {
-    use std::collections::HashMap;
+    use llrm_support::hash::HashMap;
 
     use super::{Ending, ending};
     use crate::mc;

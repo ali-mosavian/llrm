@@ -5,7 +5,8 @@
 //! again, through the encoder and a table lookup of the printed text.
 
 use std::cell::RefCell;
-use std::collections::HashMap;
+
+use llrm_support::hash::HashMap;
 
 use crate::dagisel::hooks::Cpu;
 use crate::mc::{self, Inst};

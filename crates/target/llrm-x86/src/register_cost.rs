@@ -127,7 +127,7 @@ mod tests {
             }
         }
         for what in &shapes {
-            let mut seen: std::collections::HashMap<u8, i64> = std::collections::HashMap::new();
+            let mut seen: llrm_support::hash::HashMap<u8, i64> = llrm_support::hash::HashMap::default();
             for phys in RegId::values() {
                 let bytes = register_extra_bytes(what, 1, phys);
                 let known = *seen.entry(encoding_class(phys)).or_insert(bytes);

@@ -211,7 +211,7 @@ fn inst_item(
 /// the 16-bit form because the callee may be another object's.
 pub(crate) fn tail_jumps_narrowed(items: &[Item]) -> Vec<Item> {
     use crate::mc::Operand;
-    let defined: std::collections::HashSet<&str> =
+    let defined: llrm_support::hash::HashSet<&str> =
         items.iter().filter_map(|item| if let Item::Label(name) = item { Some(name.as_str()) } else { None }).collect();
     items
         .iter()

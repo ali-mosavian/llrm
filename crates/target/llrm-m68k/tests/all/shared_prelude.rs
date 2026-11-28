@@ -172,7 +172,7 @@ fn added_moves(
     before: &LirBody,
     after: &LirBody,
 ) -> Vec<String> {
-    let was: std::collections::HashSet<u64> =
+    let was: llrm_support::hash::HashSet<u64> =
         before.blocks.iter().flat_map(|block| block.insns.iter()).map(|insn| insn.id()).collect();
     let is_mov = |insn: &llrm_codegen::model::lir::Insn| {
         insn.what.as_ref().is_some_and(|what| what.name.as_deref() == Some("mov"))
@@ -202,7 +202,7 @@ fn added_moves(
 #[test]
 fn the_shared_two_address_ties_only_the_pairs_m68k_declares() {
     let functions = functions();
-    let tied_names: std::collections::HashSet<&str> = functions
+    let tied_names: llrm_support::hash::HashSet<&str> = functions
         .iter()
         .flat_map(|(_, function)| function.blocks.iter().flat_map(|block| block.insts.iter()))
         .filter(|inst| !inst.ties.is_empty())

@@ -1165,7 +1165,7 @@ fn near_within_group(
     if !model.segmented() {
         return;
     }
-    let defined: std::collections::HashSet<String> = items
+    let defined: llrm_support::hash::HashSet<String> = items
         .iter()
         .filter_map(|item| match item {
             Encoded::Label(masm::Label { name }) => Some(name.clone()),
@@ -1403,7 +1403,7 @@ pub fn short_reaches(displacement: i64) -> bool {
 /// ([X86AsmBackend.cpp](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/MCTargetDesc/X86AsmBackend.cpp#L845)).
 /// A call has no short form; a name not defined here stays a relocation.
 fn resolved_siblings(items: &mut [Encoded]) {
-    let defined: std::collections::HashSet<String> = items
+    let defined: llrm_support::hash::HashSet<String> = items
         .iter()
         .filter_map(|item| match item {
             Encoded::Label(masm::Label { name }) => Some(name.clone()),

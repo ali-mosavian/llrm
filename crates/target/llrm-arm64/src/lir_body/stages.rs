@@ -197,8 +197,8 @@ fn complaints(
 /// The virtual registers defined more than once: (all by copies, which is a
 /// phi's lowering; some by another operation, which is not SSA either way).
 fn multiple_definitions(function: &crate::mfunc::MFunc) -> (usize, usize) {
-    use std::collections::HashMap;
-    let mut defs: HashMap<crate::mc::visit::Reg, (usize, bool)> = HashMap::new();
+    use llrm_support::hash::HashMap;
+    let mut defs: HashMap<crate::mc::visit::Reg, (usize, bool)> = HashMap::default();
     for op in function.blocks.iter().flat_map(|block| block.ops.iter()) {
         let copy = matches!(op, crate::mfunc::Op::Copy { .. });
         for register in op.defs_and_uses().0 {

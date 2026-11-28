@@ -123,7 +123,7 @@ pub fn float_facts(text: &str) -> (usize, bool) {
 /// again (0.9 M Ir of a 17 M compile).
 pub fn file(text: &str) -> Result<std::sync::Arc<Vec<Register>>, String> {
     static FILES: std::sync::LazyLock<
-        std::sync::Mutex<std::collections::HashMap<String, std::sync::Arc<Vec<Register>>>>,
+        std::sync::Mutex<llrm_support::hash::HashMap<String, std::sync::Arc<Vec<Register>>>>,
     > = std::sync::LazyLock::new(Default::default);
     if let Some(found) = FILES.lock().expect("the files lock").get(text) {
         return Ok(std::sync::Arc::clone(found));

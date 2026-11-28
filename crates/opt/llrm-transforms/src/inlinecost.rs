@@ -3420,7 +3420,7 @@ fn innermost_body(
     function: &Function,
     header: BlockId,
     headers: &IdSet<BlockId>,
-) -> Option<std::collections::HashSet<u32>> {
+) -> Option<llrm_support::hash::HashSet<u32>> {
     let blocks: Vec<BlockId> = function.layout().to_vec();
     let mut predecessors: HashMap<u32, Vec<BlockId>> = HashMap::default();
     for &block in &blocks {
@@ -3428,14 +3428,14 @@ fn innermost_body(
             predecessors.entry(next.0).or_default().push(block);
         }
     }
-    let mut reached: std::collections::HashSet<u32> = std::collections::HashSet::new();
+    let mut reached: llrm_support::hash::HashSet<u32> = llrm_support::hash::HashSet::default();
     let mut stack = vec![header];
     while let Some(block) = stack.pop() {
         if reached.insert(block.0) {
             stack.extend(function.successors(block));
         }
     }
-    let mut body: std::collections::HashSet<u32> = std::collections::HashSet::from([header.0]);
+    let mut body: llrm_support::hash::HashSet<u32> = llrm_support::hash::HashSet::from_iter([header.0]);
     let mut work: Vec<BlockId> =
         predecessors.get(&header.0).into_iter().flatten().copied().filter(|latch| reached.contains(&latch.0)).collect();
     while let Some(block) = work.pop() {

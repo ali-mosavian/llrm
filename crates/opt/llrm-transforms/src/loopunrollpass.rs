@@ -2547,8 +2547,8 @@ fn unroll_updates(
     from.dedup();
     from.extend(function.layout().iter().copied().filter(|one| one.0 as usize >= capacity));
     let after = edges_from(function, &from);
-    let kept: std::collections::HashSet<(BlockId, BlockId)> = after.iter().copied().collect();
-    let was: std::collections::HashSet<(BlockId, BlockId)> = before.iter().copied().collect();
+    let kept: llrm_support::hash::HashSet<(BlockId, BlockId)> = after.iter().copied().collect();
+    let was: llrm_support::hash::HashSet<(BlockId, BlockId)> = before.iter().copied().collect();
     let mut updates = Vec::new();
     for &(a, b) in before {
         if !kept.contains(&(a, b)) {

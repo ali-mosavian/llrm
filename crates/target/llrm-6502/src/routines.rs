@@ -118,7 +118,9 @@ fn named<T>(
     name: &str,
     answer: impl Fn(&Option<std::collections::BTreeSet<u8>>) -> T,
 ) -> T {
-    use std::collections::{BTreeSet, HashMap};
+    use std::collections::BTreeSet;
+
+    use llrm_support::hash::HashMap;
     type Answers = HashMap<String, Option<BTreeSet<u8>>>;
     static ANSWERS: std::sync::Mutex<Option<Answers>> = std::sync::Mutex::new(None);
     let mut answers = ANSWERS.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -129,7 +131,7 @@ fn named<T>(
     answer(answers.entry(name.to_owned()).or_insert_with(|| scan_cells(name)))
 }
 
-use std::collections::HashMap;
+use llrm_support::hash::HashMap;
 
 /// The runtime's routines (top-level labels) and macros, by name.
 pub(crate) struct Runtime {
@@ -184,7 +186,7 @@ pub(crate) fn runtime() -> &'static Runtime {
     static RUNTIME: std::sync::OnceLock<Runtime> = std::sync::OnceLock::new();
     RUNTIME.get_or_init(|| {
         let source: &'static str = crate::RUNTIME;
-        let (mut routines, mut macros) = (HashMap::new(), HashMap::new());
+        let (mut routines, mut macros) = (HashMap::default(), HashMap::default());
         let mut start: Option<(&'static str, usize)> = None;
         let mut macro_start: Option<(&'static str, usize)> = None;
         let mut offset = 0;
@@ -217,10 +219,12 @@ pub(crate) fn runtime() -> &'static Runtime {
 }
 
 fn scan_cells(name: &str) -> Option<std::collections::BTreeSet<u8>> {
-    use std::collections::{BTreeSet, HashSet};
+    use std::collections::BTreeSet;
+
+    use llrm_support::hash::HashSet;
     let runtime = runtime();
     let mut cells = BTreeSet::new();
-    let mut seen = HashSet::new();
+    let mut seen = HashSet::default();
     let mut pending = vec![name];
     while let Some(routine) = pending.pop() {
         if !seen.insert(routine) {

@@ -29,7 +29,7 @@
 //! duplicateInstruction, updateSuccessorsPHIs, isSimpleBB, duplicateSimpleBB}`,
 //! pin d1106deb71cc.
 
-use std::collections::{HashMap, HashSet};
+use llrm_support::hash::{HashMap, HashSet};
 
 use crate::branch_fold::{ending, set_branches};
 use crate::dagisel::generated::ids::opcode as op;
@@ -389,7 +389,7 @@ impl Copier<'_> {
         f: &mut Function,
         pred: usize,
     ) {
-        let mut map: HashMap<VReg, VReg> = HashMap::new();
+        let mut map: HashMap<VReg, VReg> = HashMap::default();
         let mut infos: Vec<(VReg, VReg)> = Vec::new();
         let insts = f.blocks[self.tail].clone();
         let mut kept = Vec::new();
@@ -548,7 +548,7 @@ fn tail_duplicate_and_update(
     let kept: Vec<usize> =
         preds[tail].iter().copied().filter(|p| !done.contains(p) && f.succs[*p].len() == 1).collect();
     for pred in kept {
-        let mut map = HashMap::new();
+        let mut map = HashMap::default();
         let mut infos = Vec::new();
         let mut copier =
             Copier { tail, used_by_phi: &used_by_phi, live_out: &live_out, updates: &mut updates, copies: &mut copies };
@@ -665,7 +665,7 @@ fn rewrite_uses(
     // value every way in agrees on, a PHI of its own where two differ. A
     // block takes a PHI once and keeps it.
     let mut entering: Vec<Option<VReg>> = vec![None; blocks];
-    let mut phi_of: HashMap<usize, VReg> = HashMap::new();
+    let mut phi_of: HashMap<usize, VReg> = HashMap::default();
     loop {
         let mut changed = false;
         for block in 0..blocks {
