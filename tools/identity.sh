@@ -5,14 +5,14 @@ ulimit -v "${LLRM_MEMORY_LIMIT_KB:-8000000}"  # a runaway compile dies at 8 GB i
 # this against a build of the base, and fails on any DIFF, or STATUS (one build refused what the
 # other accepted). A program both refuse is REFUSED and counts for neither.
 #
-#   tools/identity.sh KIND BASE_BIN NEW_BIN [-m16|-m32]   (c, qcport: BASE_BIN, NEW_BIN are llrm-cc)
+#   tools/identity.sh KIND BASE_BIN NEW_BIN [-m16|-m32|-m64|ROW]   (c, qcport: BASE_BIN, NEW_BIN are llrm-cc; ROW a targets.toml row)
 #
 # KIND: nib    llrm-nib over examples/, tests/run/nib, bench/, at -O2 and -Os, procedure segments
 #       c      llrm-cc over bench/ and tests/run/c, at -O2
 #       qcport llrm-cc over QCport's modules at -O2 and -Os; QCPORT names its src/ and QCPORT_INC the
 #              Borland headers it builds with (neither is in this repository)
 # IDENTITY_SAME_SOURCE=1 allows BASE_BIN and NEW_BIN to be one binary (a build against itself).
-# c, qcport: the llrm-llc beside each llrm-cc must differ too (IDENTITY_SAME_LLC=1 for a frontend-only change).
+# c, qcport: the target's backends beside each llrm-cc must differ too (IDENTITY_SAME_LLC=1 for a frontend-only change).
 # The -m flag is passed to the compiler (default: its own, m16).
 #
 # Prints a count of each outcome and the programs that are not SAME; exit 1 if any DIFF or STATUS.
@@ -22,10 +22,9 @@ export AB_ALLOW_ENV="${AB_ALLOW_ENV:-} LLRM_VERIFY"  # set above, for both sides
 . "$(dirname "$0")/ab_env.sh"; ab_env_check || exit 2
 kind=${1:?kind: nib, c or qcport}; base=${2:?base compiler}; new=${3:?new compiler}; shift 3
 python3 -c "import sys; sys.path.insert(0, '$(dirname "$0")'); import llrmbin; print(llrmbin.assert_distinct(sys.argv[1], sys.argv[2], bool(sys.argv[3])))" "$base" "$new" "${IDENTITY_SAME_SOURCE:-}" || exit 2
-case $kind in c|qcport) python3 -c "import sys; sys.path.insert(0, '$(dirname "$0")'); import llrmbin; llrmbin.assert_distinct_llc(sys.argv[1], sys.argv[2], bool(sys.argv[3]))" "$base" "$new" "${IDENTITY_SAME_LLC:-}" || exit 2 ;; esac
 . "$(dirname "$0")/fresh_compile.sh"
 target=()
-case "${1:-}" in -*) target=("$1") ;; esac
+case "${1:-}" in -*) target=("$1") ;; "") ;; *) row=$1 ;; esac
 root=$(cd "$(dirname "$0")/.." && pwd)
 out=$(mktemp -d); trap 'rm -rf "$out"' EXIT
 export base new out root
@@ -38,10 +37,13 @@ c|qcport)
     ""|-m16) cc_target=x86_16-wat ;;
     -m32) cc_target=x86_32-wat ;;
     -m64) cc_target=x86_64-linux ;;
-    *) echo "identity.sh: no llrm-cc target for $target_flags (-m16, -m32, -m64)" >&2; exit 2 ;;
+    *) echo "identity.sh: no llrm-cc target for $target_flags (-m16, -m32, -m64 or a targets.toml row)" >&2; exit 2 ;;
     esac
+    cc_target=${row:-$cc_target}
+    python3 "$(dirname "$0")/llrmbin.py" sides "$base" "$new" --target "$cc_target" || exit 2
     export cc_target compile_flags="-c" target_flags="" LLRM_CC_TARGET=$cc_target ;;
-*) export compile_flags="" ;;
+*) [ -n "${row:-}" ] && { echo "identity.sh: $kind takes -m flags, not a target row ($row)" >&2; exit 2; }
+   export compile_flags="" ;;
 esac
 
 one() {
