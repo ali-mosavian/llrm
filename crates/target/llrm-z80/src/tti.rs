@@ -646,6 +646,12 @@ impl Tti for Z80Tti {
         true
     }
 
+    /// DEVIATE SZ1-O1 (row SZ1-O1): the SZ1 rule holds -O1 too; a small
+    /// platform pays for bytes at every level.
+    fn opt_size_inline_rule_at_o1(&self) -> bool {
+        true
+    }
+
     /// Where the pin's own cost is negative the inline shrinks the caller (a
     /// wrapper, a callee that folds away): the bound stands down.
     fn opt_size_inline_guard_yields_to_negative_cost(&self) -> bool {

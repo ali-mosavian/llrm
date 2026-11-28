@@ -39,7 +39,7 @@ fn a_hidden_atomic_is_a_call_whose_name_says_what_it_was() {
 fn an_x86_atomic_load_and_store_lower_to_volatile_accesses() {
     let mut module = parse::module(TEXT).unwrap();
     hidden(&mut module).unwrap();
-    lowered(&mut module, 32, true, false, false).unwrap();
+    lowered(&mut module, 32, true, false, false, false).unwrap();
     let kinds = opcodes(&module);
     assert!(kinds.contains(&Opcode::Load { align: Some(4), volatile: true }), "{kinds:?}");
     assert!(kinds.contains(&Opcode::Store { align: Some(4), volatile: true }), "{kinds:?}");
@@ -60,7 +60,7 @@ fn an_x86_atomic_load_and_store_lower_to_volatile_accesses() {
 fn an_ordered_atomic_is_refused_where_the_target_has_no_lowering() {
     let mut module = parse::module(TEXT).unwrap();
     hidden(&mut module).unwrap();
-    let refused = lowered(&mut module, 32, false, false, false).unwrap_err();
+    let refused = lowered(&mut module, 32, false, false, false, false).unwrap_err();
     assert!(refused.contains("load acquire"), "{refused}");
 }
 
@@ -88,7 +88,7 @@ entry:
 fn a_wide_atomic_is_a_libcall_not_a_refusal_or_a_split() {
     let mut module = parse::module(WIDE).unwrap();
     hidden(&mut module).unwrap();
-    lowered(&mut module, 32, true, false, false).unwrap();
+    lowered(&mut module, 32, true, false, false, false).unwrap();
     assert_eq!(crate::verify::verify(&module), Vec::<String>::new());
     let called: Vec<&str> = module
         .globals
@@ -122,7 +122,7 @@ entry:
 ";
     let mut module = parse::module(text).unwrap();
     hidden(&mut module).unwrap();
-    let refused = lowered(&mut module, 32, true, false, false).unwrap_err();
+    let refused = lowered(&mut module, 32, true, false, false, false).unwrap_err();
     assert!(refused.contains("64 bits"), "{refused}");
 }
 
@@ -145,12 +145,12 @@ entry:
 fn an_x86_exchange_and_a_seq_cst_store_stay_for_the_target_to_select() {
     let mut module = parse::module(SWAP).unwrap();
     hidden(&mut module).unwrap();
-    lowered(&mut module, 32, true, true, false).unwrap();
+    lowered(&mut module, 32, true, true, false, false).unwrap();
     let calls = opcodes(&module).iter().filter(|opcode| matches!(opcode, Opcode::Call(_))).count();
     assert_eq!(calls, 2);
     let mut refused = parse::module(SWAP).unwrap();
     hidden(&mut refused).unwrap();
-    assert!(lowered(&mut refused, 32, true, false, false).unwrap_err().contains("not lowered"));
+    assert!(lowered(&mut refused, 32, true, false, false, false).unwrap_err().contains("not lowered"));
 }
 
 /// The shadow harness handed the pin's `llc` the hidden calls, so it compared
@@ -234,7 +234,7 @@ fn kept_atomics(module: &Module) -> Vec<String> {
 fn an_x86_add_sub_unread_or_and_cmpxchg_stay_for_the_target_to_select() {
     let mut module = parse::module(LOCKED).unwrap();
     hidden(&mut module).unwrap();
-    lowered(&mut module, 32, true, true, true).unwrap();
+    lowered(&mut module, 32, true, true, true, false).unwrap();
     let kept = kept_atomics(&module);
     for want in ["rmwadd", "rmwsub", "rmwor", "cmpxchg"] {
         assert!(kept.iter().any(|name| name.starts_with(&format!("llrm.atomic.{want}."))), "{want} in {kept:?}");
@@ -242,7 +242,7 @@ fn an_x86_add_sub_unread_or_and_cmpxchg_stay_for_the_target_to_select() {
     // without the lock forms (16-bit code) the same is refused, as before
     let mut old = parse::module(LOCKED).unwrap();
     hidden(&mut old).unwrap();
-    assert!(lowered(&mut old, 32, true, true, false).unwrap_err().contains("not lowered"));
+    assert!(lowered(&mut old, 32, true, true, false, false).unwrap_err().contains("not lowered"));
 }
 
 /// An `and`, `or` or `xor` whose result is read, and a `nand`, `max` or `min`,
@@ -256,11 +256,11 @@ fn an_x86_read_modify_write_that_needs_a_cmpxchg_loop_is_refused_by_name() {
         );
         let mut module = parse::module(&text).unwrap();
         hidden(&mut module).unwrap();
-        let why = lowered(&mut module, 32, true, true, true).unwrap_err();
+        let why = lowered(&mut module, 32, true, true, true, false).unwrap_err();
         assert!(why.contains("compare-exchange loop"), "{op}: {why}");
     }
     let text = "target datalayout = \"e-p:32:32-i32:32\"\n@w = global i32 0\ndefine void @f(i32 %v) {\nentry:\n  atomicrmw nand ptr @w, i32 %v monotonic\n  ret void\n}\n";
     let mut module = parse::module(text).unwrap();
     hidden(&mut module).unwrap();
-    assert!(lowered(&mut module, 32, true, true, true).unwrap_err().contains("compare-exchange loop"));
+    assert!(lowered(&mut module, 32, true, true, true, false).unwrap_err().contains("compare-exchange loop"));
 }

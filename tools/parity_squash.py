@@ -850,7 +850,42 @@ def conflict_detail(head: str, body: str, base: str = BASE, cwd: Path = ROOT) ->
     return f" [owner {owner}; conflicts in: {' '.join(files[:6]) or 'none found'}]"
 
 
-def squash(number: str, info: dict, body: str, run=subprocess.run, update=update_generated_only, settle: float = 5, merge=merge_parity, retry_wait: float = 60) -> bool | None:
+def squash_subject(number: str, title: str) -> str:
+    """The squash commit's subject: the PR title and its number, once."""
+    return title if title.endswith(f"(#{number})") else f"{title} (#{number})"
+
+
+VOUCHED = Path(os.environ.get("VOUCHED") or Path(os.environ.get("LAND_TMP") or "/tmp/landing") / "vouched.state")  # `<PR> <full head sha> <UTC> <by>`, oversight's accepts
+
+
+def vouch_line(number: str, head: str, path: Path | None = None) -> str:
+    """The line of the vouched file that names PR `number` at exactly `head`; "" when none does. Read afresh at each call: a vouch is added or withdrawn mid-run."""
+    path = path or VOUCHED
+    for line in path.read_text().splitlines() if path.exists() else []:
+        if line.split()[:2] == [number, head]:
+            return line.strip()
+    return ""
+
+
+def changed_since_batch(number: str, head: str, run=gh_run, vouched: str = "") -> str:
+    """Why PR `number` may not be merged now though the batch read it ready at `head`: "unvouched" when no vouch names `vouched` (the head the batch tested, default
+    `head`), or drafted, closed or pushed while the batch ran ("" when none). #10789 landed unvouched and after it was drafted mid-run."""
+    if not vouch_line(number, vouched or head):
+        return "unvouched"
+    view = run(["gh", "pr", "view", number, "--json", "isDraft,headRefOid,state"], capture_output=True, text=True, errors="replace")
+    now = json.loads(view.stdout) if view.returncode == 0 and view.stdout.strip() else {}
+    if not now:
+        return "its state could not be read again before the merge"
+    if now.get("state") != "OPEN":
+        return f"it is {str(now.get('state')).lower()} now"
+    if now.get("isDraft"):
+        return "it was made a draft while the batch ran"
+    if now.get("headRefOid") != head:
+        return "head moved"
+    return ""
+
+
+def squash(number: str, info: dict, body: str, run=subprocess.run, update=update_generated_only, settle: float = 5, merge=merge_parity, retry_wait: float = 60, recheck=None) -> bool | None:
     """Squash PR `number` into release/next; None, with nothing pushed, when waits.txt holds it now. In fast mode a PR GitHub calls conflicting (only generated pages, regenerated) is first brought up to date on its branch, and says so in a comment."""
     run = rate_limit_proof(run)
     if waiting(number):
@@ -863,21 +898,32 @@ def squash(number: str, info: dict, body: str, run=subprocess.run, update=update
         run(["gh", "pr", "comment", number, "--body", note])
         info = {**info, "headRefOid": fresh}
         time.sleep(settle)  # GitHub recomputes the PR's mergeability after the push
+    if why := (recheck or (lambda number, info: changed_since_batch(number, info["headRefOid"], run, info.get("vouchedHead", ""))))(number, info):
+        if why == "unvouched":
+            print(f"#{number}: SKIPPED: unvouched at {info.get('vouchedHead') or info['headRefOid']}; back to the queue")
+            return None
+        if why == "head moved":
+            HEAD_MOVED.add(number)
+            print(f"#{number}: LEFT OUT (head moved): pushed while the batch ran; it re-enters the queue with its new head, not refused")
+        else:
+            print(f"#{number}: REFUSED: not merged: {why}")
+        return False
+    print(f"#{number}: vouched: {vouch_line(number, info.get('vouchedHead') or info['headRefOid'])}")
     stage(f"squash #{number}")
-    done = run(["gh", "pr", "merge", number, "--squash", "--match-head-commit", info["headRefOid"], "--subject", info["title"], "--body", body], capture_output=True, text=True, errors="replace")
+    done = run(["gh", "pr", "merge", number, "--squash", "--match-head-commit", info["headRefOid"], "--subject", squash_subject(number, info["title"]), "--body", body], capture_output=True, text=True, errors="replace")
     if done.returncode and "out of date" in f"{done.stderr}{done.stdout}".lower() and info.get("headRefName"):
         # Another landing moved release/next between the batch and this squash: the owner did nothing. Fresh parity is merged into the head once (a merge commit, no
         # force-push), only when it is conflict-free, and the squash retried once; a second refusal, or a conflict, is the owner's.
         if fresh := merge(info["headRefOid"], info["headRefName"]):
             print(f"#{number}: head out of date: merged parity {fresh[:9]}, retried")
             time.sleep(settle)  # GitHub takes the pushed head as the PR's before a --match-head-commit squash accepts it
-            done = run(["gh", "pr", "merge", number, "--squash", "--match-head-commit", fresh, "--subject", info["title"], "--body", body], capture_output=True, text=True, errors="replace")
+            done = run(["gh", "pr", "merge", number, "--squash", "--match-head-commit", fresh, "--subject", squash_subject(number, info["title"]), "--body", body], capture_output=True, text=True, errors="replace")
         else:
             print(f"#{number}: head out of date and {BRANCH} does not merge into it cleanly: the owner merges fresh {BRANCH}")
     if done.returncode and any(one in f"{done.stderr}{done.stdout}" for one in GITHUB_TRANSIENT):
         print(f"#{number}: GitHub failed on its side, retrying once after {retry_wait:g} s")
         time.sleep(retry_wait)
-        done = run(["gh", "pr", "merge", number, "--squash", "--match-head-commit", info["headRefOid"], "--subject", info["title"], "--body", body], capture_output=True, text=True, errors="replace")
+        done = run(["gh", "pr", "merge", number, "--squash", "--match-head-commit", info["headRefOid"], "--subject", squash_subject(number, info["title"]), "--body", body], capture_output=True, text=True, errors="replace")
     if done.returncode and "Head branch was modified" in f"{done.stderr}{done.stdout}":
         HEAD_MOVED.add(number)
         print(f"#{number}: LEFT OUT (head moved): pushed while the batch ran; it re-enters the queue with its new head, not refused")
@@ -1035,37 +1081,34 @@ def timed(took: dict[str, float], name: str, call):
 MAX_BATCH = int(os.environ.get("BATCH_CAP") or (16 if FAST else 8))  # PRs per smoke: with ~38 ready PRs queued, batches of four took 12-16 minutes each; a failing batch is halved, so the cost of a bad PR is log2(8) more smokes
 
 
-def batch(prs: list, passes, land, refuse, offenders=None, pending=None) -> None:
+def batch(prs: list, passes, land, refuse, offenders=None, after=None) -> None:
     """Land `prs` (up to MAX_BATCH, ready, in order) with ONE test of the combined tree. `passes(prs)` merges them all into the base and runs the fast set; when it fails the
     set is halved (2+2, then singles): the passing half lands, then the other half is tested on top of what landed. `refuse(pr)` names a PR that fails alone. `offenders(prs)`,
-    when given, names the PRs that fail the failing unit alone: they are refused and the rest are tested once. `pending` is the list `land` appends to when it does not push
-    (PUSH_MODE): those PRs are not on the base yet, so a later half is tested on top of them; without that two halves that build apart land together and the push fails
-    on the pair (#5784 x #5830, "missing seh", 15:57 and 16:11: every PR passed alone, the set was assembled again each pass)."""
+    when given, names the PRs that fail the failing unit alone: they are refused and the rest are tested once. `after(prs)`, when given, runs once a passing set has landed."""
     if not prs:
         return
-    under = [pr for pr in (pending or ()) if pr not in prs]
-    if passes([*under, *prs]):
+    if passes(prs):
         try:
             land.group = list(prs)  # the members that land together: a rescan after a drop covers them once
         except AttributeError:  # a builtin as `land` (tests) has no attributes
             pass
         for pr in prs:
             land(pr)
+        if after:
+            after(prs)
         return
     if len(prs) == 1:
-        if under:
-            print(f"interaction: #{prs[0]} fails on top of {' '.join('#' + pr for pr in under)}")
         refuse(prs[0])
         return
     # A unit the head passes fails on the merged tree: the PRs that fail it alone are dropped by name and the rest are tested once, instead of a smoke per half.
     if offenders and (named := [pr for pr in offenders(prs) if pr in prs]) and len(named) < len(prs):
         for pr in named:
             refuse(pr)
-        batch([pr for pr in prs if pr not in named], passes, land, refuse, offenders, pending)
+        batch([pr for pr in prs if pr not in named], passes, land, refuse, offenders, after)
         return
     middle = len(prs) // 2
-    batch(prs[:middle], passes, land, refuse, offenders, pending)
-    batch(prs[middle:], passes, land, refuse, offenders, pending)
+    batch(prs[:middle], passes, land, refuse, offenders, after)
+    batch(prs[middle:], passes, land, refuse, offenders, after)
 
 
 SCAN_CRATE = "llrm-mir"  # the crate whose lib tests scan the other crates' sources
@@ -1614,46 +1657,10 @@ def _failing_on_head(by_package: dict[str, set[str]]) -> set[str]:
     return {f"unit {package}::{test}" for package, tests in by_package.items() for test in failing_on_checkout(package, tests)}
 
 
-PUSH_MODE = os.environ.get("PUSH_MODE") == "1"  # runner.env: land a verified batch as one fast-forward push of its merge tip, not one squash per PR
-
-
-def format_tip(cwd: Path = ROOT) -> bool:
-    """tools/fmt.sh and the docs sync on the batch tip, committed when they change anything (the squash path pushes the same to each PR's branch). True when a commit was made."""
-    subprocess.run(["tools/fmt.sh"], cwd=cwd, capture_output=True)
-    subprocess.run([sys.executable, "tools/docs/docsbuild/build.py", "--sync", "--force"], cwd=cwd, capture_output=True)
-    git("add", "-A", "docs", cwd=cwd)  # a new pass's generated page is untracked: `commit -a` skipped it, --check passed on the file on disk, and rpoattrs, deadmi and calledvaluepropagation landed without their page
-    if not git("status", "--porcelain", "--untracked-files=no", cwd=cwd).strip():
-        return False
-    git("commit", "-qam", "style: fmt and generated docs of the batch", cwd=cwd)
-    return True
-
-
-def verify_tip(cwd: Path = ROOT) -> str:
-    """Why the tip fails the cheap checks (fmt, docs), or "" when it passes: they run on the exact tip that is pushed."""
-    if subprocess.run(["tools/fmt.sh", "--check"], cwd=cwd, capture_output=True).returncode:
-        return "fmt --check fails on the tip"
-    if subprocess.run([sys.executable, "tools/docs/docsbuild/build.py", "--check"], cwd=cwd, capture_output=True).returncode:
-        return "docs --check fails on the tip"
-    return ""
-
-
-def push_tip(heads: dict[str, str], cwd: Path = ROOT, base: str = BASE, ref: str = BRANCH, prepare=format_tip, verify=verify_tip) -> tuple[str, str]:
-    """(tip, ""): the verified PR `heads` merged in order onto `base` (merge commits, the tests-append driver), formatted, checked, and pushed to `ref` as a plain fast-forward (never forced).
-    GitHub marks each PR whose head is in the tip merged. ("", why) when a head does not merge, the tip fails `verify`, or the push is refused: the caller squashes per PR then."""
-    clean_checkout(base, cwd)
-    for number, head in heads.items():
-        git("fetch", "-q", "origin", head, cwd=cwd)
-        if subprocess.run(["git", "merge", "--no-edit", "-q", head], cwd=cwd, capture_output=True).returncode:
-            subprocess.run(["git", "merge", "--abort"], cwd=cwd, capture_output=True)
-            return "", f"#{number} does not merge on the tip"
-    prepare(cwd)
-    if why := verify(cwd):
-        return "", why
-    tip = git("rev-parse", "HEAD", cwd=cwd).strip()
-    done = subprocess.run(["git", "push", "origin", f"{tip}:refs/heads/{ref}"], cwd=cwd, capture_output=True, text=True, errors="replace")
-    if done.returncode:
-        return "", f"push refused: {(done.stderr or done.stdout).strip()[:200]}"
-    return tip, ""
+def tree_mismatch(tested_tree: str, ref: str = BASE, cwd: Path = ROOT) -> str:
+    """Why `ref`'s tree, after the batch's squashes, is not the tree the batch tested ("" when it is): the landing stops there and reports, it never pushes a fix."""
+    landed = git("rev-parse", f"{ref}^{{tree}}", cwd=cwd).strip()
+    return "" if landed == tested_tree else f"{ref} has tree {landed[:9]} after the squashes, the batch tested {tested_tree[:9]}"
 
 
 def clean_checkout(ref: str, cwd: Path = ROOT) -> None:
@@ -2168,6 +2175,10 @@ class BatchTooOld(Exception):
     pass
 
 
+class TreeMismatch(Exception):
+    pass
+
+
 def batch_expired(started: float, now: float, cap: float = BATCH_MAX_SECONDS) -> bool:
     return now - started > cap
 
@@ -2193,8 +2204,12 @@ def merge_batch(numbers: list[str], known: dict[str, str] | None = None) -> int:
         info = known_prs[number]
         if info["baseRefName"] != BRANCH:
             raise SystemExit(f"#{number} targets {info['baseRefName']}, not {BRANCH}")
-        infos[number] = info
+        infos[number] = {**info, "vouchedHead": info["headRefOid"]}
     landed, refused, held, late_drops, moved = [], [], [], [], []
+    for number in [one for one in numbers if not vouch_line(one, infos[one]["headRefOid"])]:
+        print(f"#{number}: SKIPPED: unvouched at {infos[number]['headRefOid']}; back to the queue")
+        held.append(number)
+    numbers = [one for one in numbers if one not in held]
     docs_synced: set[str] = set()  # PRs whose merge staled a generated page: synced in the batch tree, and on their branch before the squash
     started = time.monotonic()
 
@@ -2479,7 +2494,6 @@ def merge_batch(numbers: list[str], known: dict[str, str] | None = None) -> int:
 
     rescan_check = (lambda *_: "") if os.environ.get("LAND_SKIP_RESCAN") == "1" else make_rescan_check()  # the user's bulk order: the batch scan stands, no rescan after a drop
 
-    pending: list[str] = []
 
     def land(number: str) -> None:
         if number in left_out:
@@ -2500,9 +2514,6 @@ def merge_batch(numbers: list[str], known: dict[str, str] | None = None) -> int:
             print(f"#{number}: REFUSED: {why}")
             refused.append(number)
             late_drops.append(number)
-            return
-        if PUSH_MODE:
-            pending.append(number)
             return
         finish(number)
 
@@ -2552,20 +2563,32 @@ def merge_batch(numbers: list[str], known: dict[str, str] | None = None) -> int:
     with land_lock():
         if git("status", "--porcelain", "--untracked-files=no").strip():
             raise SystemExit("this checkout has uncommitted changes")
+        tested: dict[tuple[str, ...], tuple[str, dict[str, str]]] = {}
+
+        def tested_passes(group: list[str]) -> bool:
+            ok = passes(group)
+            if ok:
+                tested[tuple(group)] = (git("rev-parse", "HEAD^{tree}").strip(), {n: infos[n]["headRefOid"] for n in group if n not in left_out})
+            return ok
+
+        def compare_tree(group: list[str]) -> None:
+            tree, heads = tested.get(tuple(group), ("", {}))
+            if not heads:
+                return
+            if unlanded := [n for n in heads if n not in landed]:
+                print(f"tree not compared: {' '.join('#' + n for n in unlanded)} did not land")
+            elif changed := [n for n, head in heads.items() if infos[n]["headRefOid"] != head]:
+                print(f"tree not compared: {' '.join('#' + n for n in changed)} formatted or synced after the test")
+            else:
+                git("fetch", "-q", "origin", BRANCH)
+                if why := tree_mismatch(tree):
+                    raise TreeMismatch(why)
+
         try:
-            batch(list(numbers), passes, land, refuse, offending if FAST else None, pending)
-            if pending:
-                tip, why = push_tip({n: infos[n]["headRefOid"] for n in pending})
-                if tip:
-                    print(f"PUSHED: {tip} to {BRANCH} with {' '.join('#' + n for n in pending)}")
-                    for number in pending:
-                        landed.append(number)
-                        log_landed(tip, number, "gate-ok")
-                        print(delete_merged_head(number))
-                else:
-                    print(f"one-push failed ({why}); squashing each PR instead")
-                    for number in pending:
-                        finish(number)
+            batch(list(numbers), tested_passes, land, refuse, offending if FAST else None, compare_tree)
+        except TreeMismatch as why:
+            back = [one for one in numbers if one not in landed and one not in refused]
+            print(f"STOPPED: {why}; nothing more of this batch lands, back to the queue: {' '.join('#' + one for one in back) or '-'}")
         except BatchTooOld:
             back = [one for one in numbers if one not in landed and one not in refused]
             print(f"batch older than {BATCH_MAX_SECONDS // 60} min: its heads and assembly are stale; back to the queue unlanded: {' '.join('#' + one for one in back) or '-'}")
@@ -2803,6 +2826,9 @@ def _merge(number: str, known: dict[str, str] | None = None) -> int:
     info = json.loads(gh_run(["gh", "pr", "view", number, "--json", "headRefOid,title,body,baseRefName"], capture_output=True, text=True, errors="replace", check=True).stdout)
     if info["baseRefName"] != BRANCH:
         raise SystemExit(f"#{number} targets {info['baseRefName']}, not {BRANCH}")
+    if not vouch_line(number, info["headRefOid"]):
+        print(f"SKIPPED: #{number} unvouched at {info['headRefOid']}; back to the queue")
+        return 0
     git("fetch", "-q", "origin", BRANCH)
     if git("status", "--porcelain", "--untracked-files=no").strip():
         raise SystemExit(f"this checkout has uncommitted changes: the fast set runs on the PR head merged with {BRANCH}, checked out here")
@@ -2864,7 +2890,14 @@ def _merge(number: str, known: dict[str, str] | None = None) -> int:
     if git("rev-parse", BASE).strip() != tested_base:
         print(f"REFUSED: {BRANCH} moved from {tested_base[:9]} to {git('rev-parse', BASE).strip()[:9]} while the checks ran; run again")
         return 1
-    done = gh_run(["gh", "pr", "merge", number, "--squash", "--match-head-commit", info["headRefOid"], "--subject", info["title"], "--body", known_red_line(known)])
+    if why := changed_since_batch(number, info["headRefOid"]):
+        if why == "unvouched":
+            print(f"SKIPPED: #{number} unvouched at {info['headRefOid']}; back to the queue")
+            return 0
+        print(f"REFUSED: #{number} not merged: {why}")
+        return 1
+    print(f"#{number}: vouched: {vouch_line(number, info['headRefOid'])}")
+    done = gh_run(["gh", "pr", "merge", number, "--squash", "--match-head-commit", info["headRefOid"], "--subject", squash_subject(number, info["title"]), "--body", known_red_line(known)])
     if done.returncode:
         return done.returncode
     git("fetch", "-q", "origin", BRANCH)

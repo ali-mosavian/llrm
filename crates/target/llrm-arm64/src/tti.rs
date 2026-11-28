@@ -778,12 +778,6 @@ impl Tti for AArch64 {
         BYTES_PER_COST_UNIT_MILLI
     }
 
-    /// DEVIATE INL-O1-HOT: a hot -O1 site inlines where the code grows by no
-    /// more than the call it removes.
-    fn inline_o1_hot_growth_percent(&self) -> Option<i64> {
-        Some(100)
-    }
-
     /// The pin's threshold alone at -O2/-O3: AArch64 is a large platform, and
     /// the 11-04 rule of bytes against clocks on a hot path is for the small
     /// ones (6502, z80, m68k, m16). The earlier fit (62.5 milliclocks a byte)
