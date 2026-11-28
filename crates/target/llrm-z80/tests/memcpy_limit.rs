@@ -2,7 +2,6 @@
 //! at size), so `variadic` copied a 12 B struct argument twice as six word pairs, 72 B each: 547 B / 4729 T against 443 B /
 //! 4523 T with the copies as `ldir` (hand edit, same judge).
 
-use llrm_mir::target::Machine;
 use llrm_z80::compile::text;
 use llrm_z80::driver::{Level, Request, machine};
 use llrm_z80::expand::{Line, price};

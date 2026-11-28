@@ -1034,7 +1034,7 @@ fn price_key(
     one: &Allocated,
     level: Level,
 ) -> (u64, u64) {
-    use std::hash::{Hash, Hasher};
+    use std::hash::Hash;
     let (function, assignment, slots, reads, frequencies) = one;
     let mut both = Both::new();
     let _ = std::fmt::Write::write_fmt(&mut both, format_args!("{level:?}|"));
@@ -1764,7 +1764,7 @@ fn allocation_key(
     want_apart: bool,
 ) -> (u64, u64) {
     use std::fmt::Write;
-    use std::hash::Hasher;
+    
     // The scalars as text, the function as its fields: `Debug` of a function is
     // the cost of the key (`int64_divmod_edges`: a fifth of the compile),
     // and most of it is the selector's `form` of each instruction.

@@ -114,7 +114,7 @@ use llrm_mir::blockfrequency::BranchProbability;
 use crate::backend::liveness;
 use crate::liveness::blockfrequency::{Graph, MachineBlockFrequencyInfo, MachineBranchProbabilityInfo};
 use crate::liveness::cfg::{Cfg, DomTree};
-use crate::model::ir::{Held, Imm, Loc, Operation};
+use crate::model::ir::{Imm, Loc, Operation};
 use crate::model::lir::{Block, Insn, LirBody};
 use crate::model::passes::LIRTransform;
 use crate::support::hash::{HashMap, HashSet, IndexMap};

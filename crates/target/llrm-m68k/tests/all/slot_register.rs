@@ -9,7 +9,6 @@
 use llrm_m68k::compile::{Options, text_with};
 use llrm_m68k::dagisel::hooks::Cpu;
 
-use crate::support;
 
 const IR: &str = include_str!("../fixtures/slot_register.ll");
 

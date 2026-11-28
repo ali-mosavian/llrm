@@ -965,8 +965,8 @@ fn matched_over(
     Mode { base: inner.base, reg, offset: total, index, insts, in_bounds }
 }
 
-/// Each load and store whose address is made in another block, with the address
-/// made where it is used; whether any was.
+// Each load and store whose address is made in another block, with the address
+// made where it is used; whether any was.
 thread_local! {
     /// Whether a match reached the retry's conflict without being allowed it.
     static RETRY_REACHED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };

@@ -423,7 +423,7 @@ pub fn selections_with_alternatives(
     selections_reusing(text, request, None).map(|(main, alternatives, _)| (main, alternatives))
 }
 
-/// What the mid-end made of each function of a module, hashed by its text.
+// What the mid-end made of each function of a module, hashed by its text.
 thread_local! {
     /// The functions [`selections_reusing`] selected (not took from `reuse`),
     /// in order.

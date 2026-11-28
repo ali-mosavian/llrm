@@ -80,7 +80,7 @@ pub fn address_roles(function: &mut MFunction) {
                 }
                 Kind::Op(name) => {
                     for (position, operand) in inst.operands.iter().enumerate() {
-                        if let (Operand::Def(Reg::Virt(v)) | Operand::Use(Reg::Virt(v))) = operand {
+                        if let Operand::Def(Reg::Virt(v)) | Operand::Use(Reg::Virt(v)) = operand {
                             let slot = &mut arm[*v as usize];
                             *slot = slot.and_then(|class| class.meet(class_at(name, position)?));
                         }

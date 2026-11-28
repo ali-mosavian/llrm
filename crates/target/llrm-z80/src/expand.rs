@@ -2853,7 +2853,7 @@ fn branch_over_tail_jump(lines: Vec<Line>) -> Vec<Line> {
             let (cc, target) = branch.strip_prefix("jp ")?.split_once(", ")?;
             let cc = opposite(cc)?;
             let mut next = at + 1;
-            let mut step = |next: &mut usize| {
+            let step = |next: &mut usize| {
                 while matches!(lines.get(*next), Some(Line::Loc(_))) {
                     *next += 1;
                 }
@@ -3808,26 +3808,26 @@ fn flag_and_b_free(text: &str) -> bool {
     }
 }
 
-/// The stack arguments of a call, all words in a register pair, are pushed in
-/// place of reserving the area with `push bc` and storing into it: `ld hl, #0;
-/// push hl` is 4 B where `push bc; ld hl, #0; ld -32(ix), l; ld -31(ix), h`
-/// is 10. This is `X86CallFrameOptimization::collectCallInfo` and
-/// `adjustCallSequence`: the stores of one call cover the area once, nothing
-/// else in the sequence stores to the stack or touches it, and the pushes run
-/// from the top word down. SP moves per call here, so there is no reserved
-/// call frame: the pin's `isProfitable` answers true (`CannotReserveFrame`)
-/// and every legal frame converts.
-///
-/// DEVIATE Z80-ARGPUSH (owner z80-argpush, exit 2026-11-14): the pin runs on
-/// virtual registers and puts every push at the call, bailing when an
-/// instruction defines a register an earlier store
-/// read (`classifyInstruction`). This runs after allocation, where the
-/// argument registers are loaded between the stores and the call, so a push
-/// stands at its store, or behind the push above it when that comes later:
-/// the same legality (no def of the stored register in between), the least
-/// motion.
-///
-/// <https://github.com/llvm/llvm-project/blob/29eff20316/llvm/lib/Target/X86/X86CallFrameOptimization.cpp#L358>
+// The stack arguments of a call, all words in a register pair, are pushed in
+// place of reserving the area with `push bc` and storing into it: `ld hl, #0;
+// push hl` is 4 B where `push bc; ld hl, #0; ld -32(ix), l; ld -31(ix), h`
+// is 10. This is `X86CallFrameOptimization::collectCallInfo` and
+// `adjustCallSequence`: the stores of one call cover the area once, nothing
+// else in the sequence stores to the stack or touches it, and the pushes run
+// from the top word down. SP moves per call here, so there is no reserved
+// call frame: the pin's `isProfitable` answers true (`CannotReserveFrame`)
+// and every legal frame converts.
+//
+// DEVIATE Z80-ARGPUSH (owner z80-argpush, exit 2026-11-14): the pin runs on
+// virtual registers and puts every push at the call, bailing when an
+// instruction defines a register an earlier store
+// read (`classifyInstruction`). This runs after allocation, where the
+// argument registers are loaded between the stores and the call, so a push
+// stands at its store, or behind the push above it when that comes later:
+// the same legality (no def of the stored register in between), the least
+// motion.
+//
+// <https://github.com/llvm/llvm-project/blob/29eff20316/llvm/lib/Target/X86/X86CallFrameOptimization.cpp#L358>
 thread_local! {
     /// Instructions `push_arguments` went over to rewrite a call frame, since
     /// the last [`take_push_span`].

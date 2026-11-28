@@ -32,7 +32,7 @@
 
 use std::cmp::Ordering;
 
-use super::pair::{CoalescerEnv, full_copy, move_copy};
+use super::pair::{CoalescerEnv, move_copy};
 use super::register_coalescer::{JoinResult, State, join_copy};
 use crate::liveness::liveintervals::LiveIntervals;
 use crate::liveness::slotindex::{InstrKey, SlotIndex};

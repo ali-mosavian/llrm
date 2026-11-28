@@ -559,7 +559,7 @@ impl Defs {
 
 impl IfConv {
     /// `canConvertIf`: whether the sub-CFG headed by `head` can be converted.
-    pub fn can_convert(
+    pub(crate) fn can_convert(
         function: &MFunc,
         cfg: &Cfg,
         head: usize,
@@ -782,7 +782,7 @@ impl IfConv {
     /// join becomes a select, the arms (and the join, if it is the head's
     /// layout successor and has no other predecessor) are removed. The
     /// numbers of the blocks removed.
-    pub fn convert(
+    pub(crate) fn convert(
         &self,
         function: &mut MFunc,
         cfg: &mut Cfg,

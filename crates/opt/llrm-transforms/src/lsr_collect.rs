@@ -40,7 +40,6 @@
 
 use llrm_analysis::scev::expr::{Kind as ScevKind, Scev, Ty, Type, Use as ScevUse};
 use llrm_analysis::scev::{Cx, Flags, ScalarEvolution};
-use llrm_mir::context::GlobalId;
 use llrm_mir::dense::IdSet;
 use llrm_mir::module::{BlockId, InstId, Operand, ValueDef, ValueId};
 use llrm_mir::opcode::{IntPredicate, Opcode};
@@ -51,7 +50,7 @@ use llrm_support::hash::{HashMap, HashSet, IndexSet};
 use crate::ivusers::IvUsers;
 use crate::lsr_formula::{Formula, Immediate, MemAccessTy, RegBits, RegUseTracker, Symbol};
 use crate::lsr_use::{
-    Cost, Fixup, Kind, Rating, Use, is_am_completely_folded_at, is_am_completely_folded_between, is_legal_use_formula,
+    Cost, Fixup, Kind, Rating, Use, is_am_completely_folded_at, is_am_completely_folded_between,
 };
 
 // ---- helpers ----
@@ -1128,12 +1127,12 @@ impl<'a, 'b> Collection<'a, 'b> {
     }
 }
 
-/// The registers the loop keeps live at once beside the
-/// recurrences LSR rewrites: the accumulators, the loaded values and the
-/// temporaries the body defines (an `i64` takes two on a 32-bit register file).
-/// They compete with the formulae for the target's registers, which the phis
-/// alone did not show (shellsort bas -Os: a third formula register spilled the
-/// `i32` chain).
+// The registers the loop keeps live at once beside the
+// recurrences LSR rewrites: the accumulators, the loaded values and the
+// temporaries the body defines (an `i64` takes two on a 32-bit register file).
+// They compete with the formulae for the target's registers, which the phis
+// alone did not show (shellsort bas -Os: a third formula register spilled the
+// `i32` chain).
 thread_local! {
     static UNITS_COMPUTED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }

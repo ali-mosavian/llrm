@@ -2180,7 +2180,7 @@ mod tests {
     /// as the pin's own selection spells it.
     #[test]
     fn test_what_the_m64_sweep_had_the_pins_verifier_refuse_prints_as_the_pin_spells_it() {
-        use llrm_lir::{Addr, Mem, Space};
+        use llrm_lir::{Addr, Mem};
         let quad = |value| Loc::Held(Held { value, width: 8, offset: 0 });
         let word = |value| Loc::Held(Held { value, width: 2, offset: 0 });
         let dword = |value| Loc::Held(Held { value, width: 4, offset: 0 });

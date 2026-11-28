@@ -2005,7 +2005,7 @@ fn frame_held(procedure: &Procedure) -> bool {
 pub fn listing(
     procedure: &Procedure,
     number: usize,
-) -> Result<Vec<Item>, Unprintable> {
+) -> Result<Vec<Item<'_>>, Unprintable> {
     let mut items = listed(procedure, number)?;
     // A Windows 64-bit function (`probe_stack` marks one).
     if procedure.probe_stack.is_some() {
@@ -2113,7 +2113,7 @@ fn trailing_calls_padded(items: &mut Vec<Item>) {
 fn listed(
     procedure: &Procedure,
     number: usize,
-) -> Result<Vec<Item>, Unprintable> {
+) -> Result<Vec<Item<'_>>, Unprintable> {
     let registers = &procedure.registers;
     let held = frame_held(procedure);
     if procedure.body.frame_exit == Some(false) {
@@ -2391,7 +2391,7 @@ fn built(
     procedure: &Procedure,
     number: usize,
     omit: bool,
-) -> Result<Vec<Item>, Unprintable> {
+) -> Result<Vec<Item<'_>>, Unprintable> {
     let regs = procedure.body.regs();
     let sequences = Sequences::of(procedure, omit);
     let (wrap, enter, unwrapped_leave) = (&sequences.wrap, sequences.entry.clone(), sequences.exit.clone());
@@ -3089,7 +3089,7 @@ fn frame_omitted(
     procedure: &Procedure,
     number: usize,
     held: bool,
-) -> Option<Vec<Item>> {
+) -> Option<Vec<Item<'_>>> {
     let omitted = stack_addressed(procedure, number)?;
     // The exits were made instructions for an omitted frame (`exits_inserted`):
     // the size comparison below, asked again of the body that now holds them,

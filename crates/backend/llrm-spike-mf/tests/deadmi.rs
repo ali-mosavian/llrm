@@ -4,7 +4,7 @@
 mod common;
 
 use common::{op, v};
-use llrm_spike_mf::{Block, Inst, Kind, MFunction, Operand, Phi, Reg, dead_machine_instruction_elim};
+use llrm_spike_mf::{Block, Kind, MFunction, Operand, Phi, Reg, dead_machine_instruction_elim};
 
 fn function(blocks: Vec<Block>) -> MFunction<()> {
     let mut function = MFunction::new("f");

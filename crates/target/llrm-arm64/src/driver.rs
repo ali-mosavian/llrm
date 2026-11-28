@@ -850,7 +850,7 @@ fn compiled(
     Ok((best.0, best.1))
 }
 
-/// The assembly of the lowered functions, one instruction a line.
+// The assembly of the lowered functions, one instruction a line.
 thread_local! {
     static GREEDY_FALLBACKS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
