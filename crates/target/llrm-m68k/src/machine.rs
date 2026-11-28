@@ -554,6 +554,12 @@ impl Tti for M68k {
         true
     }
 
+    /// The SZ1 rule holds -O1 too: a small platform pays for bytes at every
+    /// level.
+    fn opt_size_inline_rule_at_o1(&self) -> bool {
+        true
+    }
+
     /// DEVIATE LASTCALL-COLD (gcc `-finline-functions-called-once`): a static
     /// function with one caller is inlined at -Os wherever its call sits;
     /// the pin drops the bonus at a cold site.

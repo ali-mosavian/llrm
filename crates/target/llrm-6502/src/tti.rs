@@ -224,6 +224,12 @@ impl Tti for Mos6502 {
         true
     }
 
+    /// The SZ1 rule holds -O1 too: a small platform pays for bytes at every
+    /// level.
+    fn opt_size_inline_rule_at_o1(&self) -> bool {
+        true
+    }
+
     /// `function_bytes` is calibrated against the objects
     /// (tests/size_calibration.rs).
     fn opt_size_inline_trial_by_bytes(&self) -> bool {
