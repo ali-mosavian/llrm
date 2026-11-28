@@ -1216,7 +1216,7 @@ def test_a_kernel_folded_to_a_constant_is_an_error_not_a_row(tmp_path, monkeypat
     exe.write_bytes(b"")
 
     def run(instructions):
-        region = types.SimpleNamespace(instructions=instructions, memory_operands=0, clocks=15, layout_clocks=15, pad_nops=0)
+        region = types.SimpleNamespace(instructions=instructions, memory_operands=0, clocks=15, layout_clocks=15, pad_nops=0, misaligned=0, misaligned_p5=0)
         return lambda *a, **k: types.SimpleNamespace(output=b"15007\n", error="", region=region)
 
     monkeypatch.setattr(bench.maps, "locate", lambda *_: 0)
