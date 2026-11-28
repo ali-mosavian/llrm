@@ -6,6 +6,7 @@
 pub mod callsites;
 #[cfg(test)]
 mod codemetrics_tests;
+pub mod constraints;
 pub mod effects;
 pub mod encoding;
 #[cfg(test)]

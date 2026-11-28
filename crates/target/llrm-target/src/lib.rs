@@ -3,6 +3,7 @@
 
 pub mod addressing;
 pub mod calling;
+pub mod inline_asm;
 pub mod instr;
 pub mod isa;
 pub mod layout;
@@ -778,6 +779,11 @@ pub trait Target {
     /// The register the DAG names the top of the x87 stack by (the pin's
     /// `FP0`), where the target has an x87 unit.
     fn x87_stack_top(&self) -> Option<RegId> {
+        None
+    }
+
+    /// The target's facts for GCC inline assembly, where it takes it.
+    fn inline_asm(&self) -> Option<inline_asm::InlineAsm> {
         None
     }
 

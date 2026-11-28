@@ -407,6 +407,11 @@ impl llrm_target::Target for M16 {
         Some(llrm_x86::registers::X87_TOP)
     }
 
+    fn inline_asm(&self) -> Option<llrm_target::inline_asm::InlineAsm> {
+        let mode = u8::try_from(self.layout().mode).expect("an x86 mode is 16, 32 or 64");
+        Some(llrm_x86::constraints::inline_asm(mode, self.registers_text()))
+    }
+
     fn string_registers(&self) -> Option<llrm_target::StringRegisters> {
         Some(llrm_target::StringRegisters {
             count: RegId::CX,

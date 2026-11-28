@@ -200,6 +200,18 @@ impl Target for Arm64 {
         include_str!("registers.regs").to_owned()
     }
 
+    fn inline_asm(&self) -> Option<llrm_target::inline_asm::InlineAsm> {
+        Some(llrm_target::inline_asm::InlineAsm {
+            bits: llrm_mir::intrinsics::AARCH64,
+            flat: true,
+            registers: self.registers_text(),
+            mode: None,
+            aliases: &[],
+            immediates: None,
+            dead_stack_input: None,
+        })
+    }
+
     /// The forms written so far (`arm64.instr`); the selector's ~250 follow.
     fn forms_text(&self) -> String {
         include_str!("instructions/arm64.instr").to_owned()
