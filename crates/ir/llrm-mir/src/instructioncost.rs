@@ -269,11 +269,17 @@ fn address_form(
     pointer: Operand,
 ) -> AddressForm {
     let global = |operand: Operand| {
-        matches!(operand, Operand::Constant(id) if matches!(context.get(id).kind, ConstantKind::Global(_)))
+        matches!(
+            operand,
+            Operand::Constant(id) if matches!(context.get(id).kind, ConstantKind::Global(_))
+        )
     };
     let slot = |operand: Operand| {
         let Operand::Value(value) = operand else { return false };
-        matches!(function.value(value).def, ValueDef::Instruction(def) if matches!(function.instruction(def).opcode, Opcode::Alloca { .. }))
+        matches!(
+            function.value(value).def,
+            ValueDef::Instruction(def) if matches!(function.instruction(def).opcode, Opcode::Alloca { .. })
+        )
     };
     let base_of = |operand: Operand| {
         if global(operand) {
@@ -554,9 +560,9 @@ pub fn instruction_cost_known(
                 Cost::FREE
             }
         }
-        // BasicTTIImpl::getInstructionCost prices these through getVectorInstrCost and
-        // getShuffleCost; the model has no vector type yet (VECTORS-1 PR-D), so
-        // they are invalid, never cheap.
+        // BasicTTIImpl::getInstructionCost prices these through
+        // getVectorInstrCost and getShuffleCost; the model has no vector type
+        // yet (VECTORS-1 PR-D), so they are invalid, never cheap.
         Opcode::ExtractElement | Opcode::InsertElement | Opcode::ShuffleVector(_) => Cost::INVALID,
         Opcode::Alloca { .. } => {
             if is_static_alloca(function, inst) {
@@ -629,10 +635,7 @@ pub fn instruction_cost_known(
         // BasicTTIImpl prices the other instructions at one unit.
         Opcode::Atomic(_) => Cost::BASIC,
         Opcode::Store { align, .. } => match modelled(operands[0]) {
-            Some(ty) => {
-                tti.memory_op_cost(MemoryOp::Store, ty, kind, info(0).constant)
-                    + address_cost(operands[1])
-            }
+            Some(ty) => tti.memory_op_cost(MemoryOp::Store, ty, kind, info(0).constant) + address_cost(operands[1]),
             // A vector store: the target's price, or none.
             None => operand_type(context, function, operands[0])
                 .and_then(|stored| {
@@ -654,10 +657,7 @@ pub fn instruction_cost_known(
                 loaded = function.instruction(only.user).ty;
             }
             match Ty::of(&context.types, loaded) {
-                Some(ty) => {
-                    tti.memory_op_cost(MemoryOp::Load, ty, kind, false)
-                        + address_cost(operands[0])
-                }
+                Some(ty) => tti.memory_op_cost(MemoryOp::Load, ty, kind, false) + address_cost(operands[0]),
                 // A vector load: the target's price, or none.
                 None => {
                     let align = align.unwrap_or_else(|| layout.align(&context.types, loaded));

@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/loopvectorizeskeleton.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/loopvectorizeskeleton.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/loopvectorizeskeleton.rs sha256:c3bfd789b2957b3dbcfe740e43f80e0d454555eb62065355b26e7e1597368031 -->
+<!-- src: crates/opt/llrm-transforms/src/loopvectorizeskeleton.rs sha256:4ea0c0ce5fa7c8d46bba8d0e5a33cc02d83c10e6e565bf1c24475cde07690a81 -->
 
 # loopvectorizeskeleton
 
@@ -48,7 +48,8 @@ the preheader falls into the vector loop, which leaves into the remainder.
   the recipe extraction, LVP2.
 
 ## Example
-A loop gets a trip-count check, a vector trip count `n.vec` and a scalar remainder loop around it.
+A loop gets a trip-count check, a vector trip count `n.vec` and a scalar
+remainder loop around it.
 
 ```text
 %n = sub %bound, %start

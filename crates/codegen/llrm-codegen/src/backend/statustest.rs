@@ -33,7 +33,6 @@ use std::sync::Arc;
 
 use llrm_lir::registers::RegId;
 
-use crate::backend::lanes::Lanes;
 use crate::backend::peephole::{_ARITHMETIC_LANES, _flag_effect, _flags_live_out, _skippable_nothing};
 use crate::model::ir::{Imm, Loc, Operation, Reg, Semantics};
 use crate::model::lir::{Insn, LirBody};

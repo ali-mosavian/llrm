@@ -14,11 +14,8 @@ fn at_o2_a_two_call_recursion_is_copied_two_deep() {
          long f(int n) { return paths(n, n); }\n",
     )
     .unwrap();
-    let output = common::cc::llrm_c()
-        .current_dir(directory)
-        .args(["-m64", "-O2", "-S", "-o", "a.s", "a.c"])
-        .output()
-        .unwrap();
+    let output =
+        common::cc::llrm_c().current_dir(directory).args(["-m64", "-O2", "-S", "-o", "a.s", "a.c"]).output().unwrap();
     assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
     let text = std::fs::read_to_string(directory.join("a.s")).unwrap();
     let calls = text.matches("call").count();

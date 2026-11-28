@@ -1234,11 +1234,11 @@ pub fn _reachable(
     made
 }
 
-/// The table of `after` without the blocks whose predecessors differ from
-/// `before`'s: a block that gained or lost an edge (copied, threaded, merged)
-/// runs as often as what now reaches it, and a block the table does not hold
-/// is worked out from its predecessors. A stale entry stays until a later
-/// rewrite leaves the verifier ("runs 1.000 times, its predecessors 0.383").
+// The table of `after` without the blocks whose predecessors differ from
+// `before`'s: a block that gained or lost an edge (copied, threaded, merged)
+// runs as often as what now reaches it, and a block the table does not hold
+// is worked out from its predecessors. A stale entry stays until a later
+// rewrite leaves the verifier ("runs 1.000 times, its predecessors 0.383").
 #[cfg(test)]
 thread_local! {
     /// Predecessor maps `_forget_moved_inflow` built.

@@ -185,7 +185,8 @@ fn the_first_row_is_the_scope_line() {
 /// bench, 2026-11-06).
 #[test]
 fn a_variable_in_a_register_has_a_location_from_dbg_value() {
-    // The counts are the process's: no other compile may run between the two readings.
+    // The counts are the process's: no other compile may run between the two
+    // readings.
     let _guard = COMPILE.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     let before = llrm_arm64::lir_view::note_counts();
     let object = driver::object_with(include_str!("data/debug_value_o2.ll"), Platform::Linux, "t", Level::O2, true)

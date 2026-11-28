@@ -1,9 +1,10 @@
 use std::path::Path;
 use std::process::Command;
 
-/// Three byte copies at offsets 0..2 stayed three `load8_u`/`store8` pairs; the pin
-/// merges two of them into one `i32.load16_u`/`i32.store16` (a truncstore of an
-/// extload, `tryStoreMergeOfLoads`): stack_arrays_copy -O2 was 8 B larger.
+/// Three byte copies at offsets 0..2 stayed three `load8_u`/`store8` pairs; the
+/// pin merges two of them into one `i32.load16_u`/`i32.store16` (a truncstore
+/// of an extload, `tryStoreMergeOfLoads`): stack_arrays_copy -O2 was 8 B
+/// larger.
 #[test]
 fn two_of_three_byte_copies_are_one_halfword_copy() {
     let ir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/ir/merge_load_store_pair.ll");

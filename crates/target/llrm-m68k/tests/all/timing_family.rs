@@ -123,9 +123,10 @@ fn operand_for(label: &str) -> &'static str {
 /// Every cell of Tables 9-2 and 9-4 (pp. 9-3, 9-4), the whole move grid.
 #[test]
 fn m68010_whole_move_grid() {
-    for (suffix, csv) in
-        [("w", include_str!("../../src/timing/m68010/t9-2.csv")), ("l", include_str!("../../src/timing/m68010/t9-4.csv"))]
-    {
+    for (suffix, csv) in [
+        ("w", include_str!("../../src/timing/m68010/t9-2.csv")),
+        ("l", include_str!("../../src/timing/m68010/t9-4.csv")),
+    ] {
         let rows: Vec<Vec<String>> = csv_rows(csv);
         let destinations: Vec<&str> =
             rows[0][1..].iter().map(|name| name.trim_start_matches("Destination / ")).collect();
@@ -304,9 +305,10 @@ fn m68060_move_cells() {
 #[test]
 fn m68060_whole_move_grid() {
     let operand = |label: &str| operand_for(&label.replace("Xi*SF", "Xn").replace("(xxx).WL", "(xxx).L"));
-    for (suffix, csv) in
-        [("w", include_str!("../../src/timing/m68060/t10-6.csv")), ("l", include_str!("../../src/timing/m68060/t10-7.csv"))]
-    {
+    for (suffix, csv) in [
+        ("w", include_str!("../../src/timing/m68060/t10-6.csv")),
+        ("l", include_str!("../../src/timing/m68060/t10-7.csv")),
+    ] {
         let rows = csv_rows(csv);
         let destinations: Vec<&str> =
             rows[0][1..].iter().map(|name| name.trim_start_matches("Destination / ")).collect();

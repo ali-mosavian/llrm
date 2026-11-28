@@ -111,27 +111,40 @@ fn a_function_keeps_the_call_when_the_shifts_pull_in_more_runtime_than_the_routi
     );
 }
 
-/// z80 prices bytes first at every level (#9872), clocks second. call_keeps -O2 `churn` takes the routines: 1077 B
-/// -> 834 B (-243 B); the all-calls form runs about +10% T (+5970 T of 57813 priced earlier). The speed-first
-/// premise ("-O2 keeps the shifts inline") is gone with it.
+/// z80 prices bytes first at every level (#9872), clocks second. call_keeps -O2
+/// `churn` takes the routines: 1077 B -> 834 B (-243 B); the all-calls form
+/// runs about +10% T (+5970 T of 57813 priced earlier). The speed-first premise
+/// ("-O2 keeps the shifts inline") is gone with it.
 #[test]
 fn the_routines_replace_long_shifts_and_multiplies_at_o1_and_o2() {
     let calls = |level| {
-        let asm = llrm_z80::compile::text(include_str!("data/call_keeps.ll"), "churn", 0, &llrm_z80::driver::Request::new(level))
-            .expect("compiles");
-        (asm.matches("call __ashlsi3").count() + asm.matches("call __lshrsi3").count(), asm.matches("call __mulsi3").count())
+        let asm = llrm_z80::compile::text(
+            include_str!("data/call_keeps.ll"),
+            "churn",
+            0,
+            &llrm_z80::driver::Request::new(level),
+        )
+        .expect("compiles");
+        (
+            asm.matches("call __ashlsi3").count() + asm.matches("call __lshrsi3").count(),
+            asm.matches("call __mulsi3").count(),
+        )
     };
     let (o1, o2) = (calls(llrm_z80::driver::Level::O1), calls(llrm_z80::driver::Level::O2));
     assert!(o1.1 > 0, "O1 calls the multiply routine: {o1:?}");
     assert!(o2.0 > 0 && o2.1 > 0, "O2 takes the routines for their bytes: {o2:?}");
 }
 
-/// div_constants_long -O1 took `call __ashlsi3` for xorshift steps (-14 B, +10% T measured). That was the speed-first
-/// premise's worry; at -O1 bytes decide since #9769: each step of shift_steps_beside_hot_loop is 150 B inline and 119 B
-/// with the routines (-31 B), the clocks of the hot loop elsewhere do not enter its price.
+/// div_constants_long -O1 took `call __ashlsi3` for xorshift steps (-14 B, +10%
+/// T measured). That was the speed-first premise's worry; at -O1 bytes decide
+/// since #9769: each step of shift_steps_beside_hot_loop is 150 B inline and
+/// 119 B with the routines (-31 B), the clocks of the hot loop elsewhere do not
+/// enter its price.
 #[test]
 fn small_long_shift_functions_beside_a_hot_loop_take_the_routines_at_o1() {
-    let ir = "target datalayout = \"e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16-S8\"\n".to_owned() + include_str!("data/shift_steps_beside_hot_loop.ll");
-    let asm = llrm_z80::compile::text(&ir, "step1", 0, &llrm_z80::driver::Request::new(llrm_z80::driver::Level::O1)).expect("compiles");
+    let ir = "target datalayout = \"e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16-S8\"\n".to_owned()
+        + include_str!("data/shift_steps_beside_hot_loop.ll");
+    let asm = llrm_z80::compile::text(&ir, "step1", 0, &llrm_z80::driver::Request::new(llrm_z80::driver::Level::O1))
+        .expect("compiles");
     assert!(asm.contains("call __ashlsi3") && asm.contains("call __lshrsi3"), "{asm}");
 }

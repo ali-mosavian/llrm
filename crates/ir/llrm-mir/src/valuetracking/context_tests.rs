@@ -381,7 +381,8 @@ fn test_an_intrinsic_is_found_by_probes_not_a_scan() {
 fn test_an_intrinsic_match_on_a_non_call_probes_no_name() {
     use crate::module::{GlobalKind, Operand};
     use crate::valuetracking::pattern::{NAME_PROBES, intrinsic_call};
-    let module = crate::parse::module("define i32 @f(i32 %a, i32 %b) {\n  %s = add i32 %a, %b\n  ret i32 %s\n}\n").expect("parses");
+    let module = crate::parse::module("define i32 @f(i32 %a, i32 %b) {\n  %s = add i32 %a, %b\n  ret i32 %s\n}\n")
+        .expect("parses");
     let layout = crate::datalayout::DataLayout::default();
     let GlobalKind::Function(function) = &module.global(module.named("f").expect("@f")).kind else { unreachable!() };
     let q = crate::valuetracking::Query::new(&module, function, &layout);

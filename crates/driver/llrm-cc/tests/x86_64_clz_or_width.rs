@@ -1,5 +1,6 @@
-//! x86-64: `x ? __builtin_clzl(x) : 64` is a `bsr` and no branch. Long mode priced `ctlz.i64` from the i486 rows (10,
-//! the pin's x86-64 rows say 3, and 2 for the zero-poison call), so SimplifyCFG kept the branch and InstCombine's
+//! x86-64: `x ? __builtin_clzl(x) : 64` is a `bsr` and no branch. Long mode
+//! priced `ctlz.i64` from the i486 rows (10, the pin's x86-64 rows say 3, and 2
+//! for the zero-poison call), so SimplifyCFG kept the branch and InstCombine's
 //! select-of-ctlz fold never ran (bitcount_u64 -O1, +6 B). Needs `LLRM_LLC`.
 
 use std::path::Path;
@@ -22,7 +23,8 @@ fn a_64_bit_clz_guarded_by_a_zero_test_has_no_branch_at_x86_64() {
         .unwrap();
     assert!(run.status.success(), "{}", String::from_utf8_lossy(&run.stderr));
     let text = std::fs::read_to_string(&asm).unwrap();
-    let body = text.split("lead0q proc near").nth(1).and_then(|rest| rest.split("lead0q endp").next()).expect("a lead0q body");
+    let body =
+        text.split("lead0q proc near").nth(1).and_then(|rest| rest.split("lead0q endp").next()).expect("a lead0q body");
     let branches: Vec<&str> = body.lines().map(str::trim).filter(|line| line.starts_with('j')).collect();
     assert!(branches.is_empty(), "a branch for the zero test: {branches:?}\n{body}");
     assert!(body.contains("bsr"), "no bsr:\n{body}");

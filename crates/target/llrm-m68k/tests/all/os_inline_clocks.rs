@@ -1,14 +1,18 @@
-//! -Os counts bytes and clocks against the best compiler's. `pick` (u64_shift_select_arms: a 64-bit shift whose
-//! result is cut to its low word, four calls) stayed a call at -Os: the size bound refused the inline (+72 B), the
-//! bytes bar had 118 B to spare and the program ran 8606 clocks against clang's 7780. OS-INLINE-TRIAL-CLOCKS builds
-//! the inline too and keeps it where the finished code is faster within the bytes ceiling.
+//! -Os counts bytes and clocks against the best compiler's. `pick`
+//! (u64_shift_select_arms: a 64-bit shift whose result is cut to its low word,
+//! four calls) stayed a call at -Os: the size bound refused the inline (+72 B),
+//! the bytes bar had 118 B to spare and the program ran 8606 clocks against
+//! clang's 7780. OS-INLINE-TRIAL-CLOCKS builds the inline too and keeps it
+//! where the finished code is faster within the bytes ceiling.
 
 use llrm_m68k::driver::{Level, assembly, cpu_of, object};
 
-/// Each call's arguments are read, then a volatile store sits before the call: #10057 fuses volatile loads into
-/// the pushes when nothing is between, which made the call build 8 B and 16 clk cheaper and the inline (+32 % bytes
-/// for about -10 % real clocks, 8590 against 7704) no longer pay: `trial::pays_tests` records that pair. The store
-/// keeps the loads unfused, the shape this trial was made for.
+/// Each call's arguments are read, then a volatile store sits before the call:
+/// #10057 fuses volatile loads into the pushes when nothing is between, which
+/// made the call build 8 B and 16 clk cheaper and the inline (+32 % bytes
+/// for about -10 % real clocks, 8590 against 7704) no longer pay:
+/// `trial::pays_tests` records that pair. The store keeps the loads unfused,
+/// the shape this trial was made for.
 const PICK: &str = "target datalayout = \"E-m:e-p:32:16:32-i8:8:8-i16:16:16-i32:16:32-n8:16:32-a:0:16-S16\"
 declare void @report(i32)
 define dso_local i32 @main() nounwind optsize {
@@ -85,13 +89,16 @@ fn the_faster_inline_is_kept_at_os_within_the_bytes_ceiling() {
     let asm = assembly(PICK, cpu, Level::Os).expect("compiles");
     assert!(!asm.contains("pick"), "pick is still a function at -Os (8606 clk as a call, 7704 inlined):\n{asm}");
     // the same program with the call kept: the ceiling is a half more
-    let plain = PICK.replace("@pick(i32 %a, i32 %e) nounwind optsize {", "@pick(i32 %a, i32 %e) nounwind optsize noinline {");
-    let (kept, called) = (object(PICK, cpu, Level::Os, "t.ll").unwrap().len(), object(&plain, cpu, Level::Os, "t.ll").unwrap().len());
+    let plain =
+        PICK.replace("@pick(i32 %a, i32 %e) nounwind optsize {", "@pick(i32 %a, i32 %e) nounwind optsize noinline {");
+    let (kept, called) =
+        (object(PICK, cpu, Level::Os, "t.ll").unwrap().len(), object(&plain, cpu, Level::Os, "t.ll").unwrap().len());
     assert!(kept * 2 <= called * 3, "the inline is {kept} B against {called} B with the call");
 }
 
-/// stack_arrays_copy: inlining `bench` turned `bench(63) * 100` from a `muls` into a `__mulsi3` call. The routine is
-/// 54 B the program links, which the trial did not count: 100 B became 174 B linked against gcc's 110.
+/// stack_arrays_copy: inlining `bench` turned `bench(63) * 100` from a `muls`
+/// into a `__mulsi3` call. The routine is 54 B the program links, which the
+/// trial did not count: 100 B became 174 B linked against gcc's 110.
 const BENCH: &str = "target datalayout = \"E-m:e-p:32:16:32-i8:8:8-i16:16:16-i32:16:32-n8:16:32-a:0:16-S16\"
 declare void @report(i32)
 define i32 @main() optsize minsize {
@@ -141,16 +148,28 @@ fn an_inline_that_links_the_multiply_routine_pays_for_its_bytes() {
     assert!(!asm.contains("__mulsi3"), "the inline brought in __mulsi3 (54 B linked, not priced):\n{asm}");
 }
 
-/// The runtime library is built at -Os unit by unit: with no `main` the trial weighs each function as run once, and
-/// its clocks were phantom there. libm's `mathf.o` grew 4234 -> 5006 B (-Os) and every float program that links it
-/// ran the same clocks (`floats` 68000 -Os 3038 -> 3230 B, 30511034 clk before and after).
+/// The runtime library is built at -Os unit by unit: with no `main` the trial
+/// weighs each function as run once, and its clocks were phantom there. libm's
+/// `mathf.o` grew 4234 -> 5006 B (-Os) and every float program that links it
+/// ran the same clocks (`floats` 68000 -Os 3038 -> 3230 B, 30511034 clk before
+/// and after).
 #[test]
 fn a_unit_without_main_is_not_trialled_for_clocks() {
     let cpu = cpu_of("68000").unwrap();
     let unit = PICK.replace("define dso_local i32 @main()", "define dso_local i32 @entry()");
     let (kept, called) = (
         object(&unit, cpu, Level::Os, "t.ll").unwrap().len(),
-        object(&unit.replace("@pick(i32 %a, i32 %e) nounwind optsize {", "@pick(i32 %a, i32 %e) nounwind optsize noinline {"), cpu, Level::Os, "t.ll").unwrap().len(),
+        object(
+            &unit.replace(
+                "@pick(i32 %a, i32 %e) nounwind optsize {",
+                "@pick(i32 %a, i32 %e) nounwind optsize noinline {",
+            ),
+            cpu,
+            Level::Os,
+            "t.ll",
+        )
+        .unwrap()
+        .len(),
     );
     assert_eq!(kept, called, "a library unit grew: {kept} B against {called} B with the call kept");
 }

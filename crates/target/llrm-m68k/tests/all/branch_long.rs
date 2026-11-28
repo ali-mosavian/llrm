@@ -25,7 +25,8 @@ fn far_branch() -> Vec<Item> {
 #[test]
 fn a_branch_over_32_kib_takes_the_32_bit_form_on_the_68020() {
     let object = relocatable_with_branches("far", &far_branch(), &HashMap::default(), &[], true).expect("relaxes");
-    // `bne.l`: 0x66ff, then the displacement from the extension word, 40,004 = 0x9c44
+    // `bne.l`: 0x66ff, then the displacement from the extension word, 40,004 =
+    // 0x9c44
     let found = object.windows(6).any(|window| window == [0x66, 0xff, 0x00, 0x00, 0x9c, 0x44]);
     assert!(found, "no bne.l with a 40,004 displacement in the object");
 }
@@ -40,7 +41,8 @@ fn a_branch_over_32_kib_is_a_jump_under_the_opposite_condition_on_the_68000() {
 
 #[test]
 fn a_function_over_32_kib_compiles_at_the_68020() {
-    let stores: String = (0..6_000).map(|n| format!("  store volatile i32 {}, ptr @g, align 4\n", 100_000 + n)).collect();
+    let stores: String =
+        (0..6_000).map(|n| format!("  store volatile i32 {}, ptr @g, align 4\n", 100_000 + n)).collect();
     let ir = format!(
         "target datalayout = \"E-m:e-p:32:16:32-i8:8:8-i16:16:16-i32:16:32-n8:16:32-a:0:16-S16\"\n@g = global i32 0\n\
          define void @big(i1 %c) {{\nentry:\n  br i1 %c, label %body, label %done\nbody:\n{stores}  br label %done\ndone:\n  ret void\n}}\n"

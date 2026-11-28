@@ -10,13 +10,15 @@
 //! the function with and without it and keeps the cheaper.
 //!
 //! DEVIATE 6502-RANGE (owner llrm-target-6502, exit 2026-12-15): it is not
-//! LLVM's. The pin has the join (`foldRangeChecks`, `SimplifyBranchOnICmpChain`)
-//! and no inverse; llvm-mos keeps the two compares of `c >= 'a' && c <= 'z'`
-//! (k_strupper, 47 B / 412 clocks). Exit: the target's own cost for the join in
-//! SimplifyCFG's `FoldBranchToCommonDest`, once it can tell a branch from a value.
+//! LLVM's. The pin has the join (`foldRangeChecks`,
+//! `SimplifyBranchOnICmpChain`) and no inverse; llvm-mos keeps the two compares
+//! of `c >= 'a' && c <= 'z'` (k_strupper, 47 B / 412 clocks). Exit: the
+//! target's own cost for the join in SimplifyCFG's `FoldBranchToCommonDest`,
+//! once it can tell a branch from a value.
 //!
 //! # Runs
-//! In the 6502 driver, per function, priced with and without the split (`rangesplit::unmerged`).
+//! In the 6502 driver, per function, priced with and without the split
+//! (`rangesplit::unmerged`).
 //!
 //! # Example
 //! ```text

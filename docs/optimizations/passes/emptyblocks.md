@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/emptyblocks.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/emptyblocks.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/emptyblocks.rs sha256:1f2f18b2fc364357fa20776b517cc08a2fa95be00e49d15acb7810243aebd374 -->
+<!-- src: crates/opt/llrm-transforms/src/emptyblocks.rs sha256:75ac609e8e3bcf38efd6915db8ae3eca0c6615c3bd8b8ed8513c627dcd7e4df9 -->
 
 # emptyblocks
 
@@ -29,8 +29,9 @@ predecessors in its place, and the block goes.
 MIRROR: the dead-phi sweep, `findDestBlockOfMergeableEmptyBlock`,
 `canMergeBlocks`, and the preheader and switch-frequency rules of
 `isMergingEmptyBlockProfitable` (`FreqRatioToSkipMerge` 2, frequencies from
-before the first merge, as the pin's `BFI`), for a `switch` or an `indirectbr`: a
-threaded interpreter's empty handlers stay, as the pin keeps them.
+before the first merge, as the pin's `BFI`), for a `switch` or an
+`indirectbr`: a threaded interpreter's empty handlers stay, as the pin keeps
+them.
 
 DEVIATE ECB2: the merge itself is `simplifycfg::empty_block_removed`
 (`TryToSimplifyUncondBranchFromEmptyBlock`), which does the same to the

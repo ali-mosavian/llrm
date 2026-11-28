@@ -11,10 +11,7 @@ const SOURCE: &str = "static unsigned char src[700];\nstatic int bad;\n__attribu
 
 #[test]
 fn bodies_the_second_ipsccp_restated_are_all_told_changed_before_the_first_runs_again() {
-    assert!(
-        llrm_cc::ow_present(),
-        "the Open Watcom tree is missing: run tools/ow-fetch.sh; this test does not skip"
-    );
+    assert!(llrm_cc::ow_present(), "the Open Watcom tree is missing: run tools/ow-fetch.sh; this test does not skip");
     assert!(
         std::env::var_os("LLRM_PIN_CLANG").is_some(),
         "LLRM_PIN_CLANG is not set: this test needs it and does not skip"

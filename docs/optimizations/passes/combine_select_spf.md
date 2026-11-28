@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/combine_select_spf.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/combine_select_spf.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/combine_select_spf.rs sha256:ad58be50488d870826d12b19d8b4bb4449c20736b5aa62d1b672b7d39eff3ee1 -->
+<!-- src: crates/opt/llrm-transforms/src/combine_select_spf.rs sha256:3b4af758270834b6e212648bde95e7eaa1d9dcb4785b5a16a6f5befa4b6ae2a4 -->
 
 # combine_select_spf
 
@@ -32,7 +32,8 @@ DEVIATE 1: the other steps of `foldSelectInstWithICmp`
 (the range half of `foldSelectInstWithICmpConst`, `canonicalizeClampLike`,
 `tryToReuseConstantFromSelectInComparison`, `foldSelectICmpEq`) are not
 translated; `foldSelectICmpMinMax` runs here, ahead of them.
-Exit: translated by their own strips, by 2026-12-06 (owner x87, from wasm-3).
+Exit: translated by their own strips, by 2026-12-06 (owner x87, from
+wasm-3).
 
 ## Used by
 `visitSelectInst`.

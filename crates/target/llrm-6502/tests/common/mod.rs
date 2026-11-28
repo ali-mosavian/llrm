@@ -142,7 +142,8 @@ pub fn long_args(
             text += &format!("  lda #{}\n  sta {cell}\n", byte(b, at));
         }
     } else {
-        // the multiply by a byte reads rc4 only: the others are not its multiplier
+        // the multiply by a byte reads rc4 only: the others are not its
+        // multiplier
         let garbage = routine.contains("mulsi3") && routine.ends_with("_byte");
         for at in 0..4 {
             let value = if garbage && at > 0 { 0xA5 } else { byte(b, at) };

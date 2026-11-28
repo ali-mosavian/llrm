@@ -1,8 +1,9 @@
-//! x86-64: the address of a global (`lea r,[rip+sym]`, `LEA64r`) is made again where a split
-//! piece starts and copied where it returns (DEVIATE SPLIT-REMAT-ENTER). The pin copies it
-//! (`isAsCheapAsAMove`, SplitKit.cpp#L658); remade at both ends, ten globals live across 80
-//! call sequences gave 134 `lea`s against the pin's 122, an object 424 B larger (13680 B
-//! against 13256 B). Needs `LLRM_LLC`.
+//! x86-64: the address of a global (`lea r,[rip+sym]`, `LEA64r`) is made again
+//! where a split piece starts and copied where it returns (DEVIATE
+//! SPLIT-REMAT-ENTER). The pin copies it (`isAsCheapAsAMove`,
+//! SplitKit.cpp#L658); remade at both ends, ten globals live across 80
+//! call sequences gave 134 `lea`s against the pin's 122, an object 424 B larger
+//! (13680 B against 13256 B). Needs `LLRM_LLC`.
 
 use std::path::Path;
 use std::process::Command;

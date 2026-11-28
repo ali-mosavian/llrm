@@ -29,6 +29,7 @@ fn visits(values: u32) -> usize {
 fn the_class_split_walks_the_function_once_not_once_per_register() {
     let (small, large) = (visits(30), visits(120));
     assert!(small > 0, "premise: the class split visited nothing");
-    // 4x the values: 4x the work if linear, 16x if each register walks the function
+    // 4x the values: 4x the work if linear, 16x if each register walks the
+    // function
     assert!(large <= 6 * small, "{small} visits for 30 values, {large} for 120");
 }

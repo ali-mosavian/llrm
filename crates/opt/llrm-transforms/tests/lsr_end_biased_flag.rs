@@ -50,7 +50,10 @@ fn reduced(text: &str) -> String {
     reduced_with(text, None)
 }
 
-fn reduced_with(text: &str, flag: Option<&str>) -> String {
+fn reduced_with(
+    text: &str,
+    flag: Option<&str>,
+) -> String {
     let mut module = llrm_mir::parse::module(text).unwrap_or_else(|why| panic!("{why:?}"));
     if let Some(flag) = flag {
         let (_, function) = module.function_mut("f").expect("f");

@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/cold_chrec.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/cold_chrec.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/cold_chrec.rs sha256:2654c9bab35039a6fba65c4105a347472d94d342f20ec002e56737fb33880f82 -->
+<!-- src: crates/opt/llrm-transforms/src/cold_chrec.rs sha256:c750f3224226ebcdbfbd87b0e84a5a8f934bc3d1ecc390679804408c685c3727 -->
 
 # cold_chrec
 
@@ -13,8 +13,9 @@ The pin expands it in `WidenIV` and in LSR; gcc's ivopts weighs a use's cost
 by the frequency of its block.
 
 ## Example
-A start value `i * i` of an inner loop, a recurrence of the outer loop, is left
-as the written multiply instead of becoming an outer phi stepped on every trip.
+A start value `i * i` of an inner loop, a recurrence of the outer loop, is
+left as the written multiply instead of becoming an outer phi stepped on
+every trip.
 
 ```text
 outer: for i:  if (flag[i]) { for (j = i*i; j < n; j += i) mark(j); }

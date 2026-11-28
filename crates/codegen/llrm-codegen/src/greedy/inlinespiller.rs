@@ -1847,8 +1847,10 @@ impl InlineSpiller<'_> {
         }
         let folded = self.tii.fold_memory_operand(&reader, read, cell)?;
         let block = lis.indexes.get_mbb_from_index(&lis.indexes.get_instruction_index(user));
-        // The pin asks the value number's def instruction each time; our tables hold what the body had at the
-        // start, so a copy folded into a load is entered as a value to remake (its split pieces remake the load).
+        // The pin asks the value number's def instruction each time; our tables
+        // hold what the body had at the start, so a copy folded into a
+        // load is entered as a value to remake (its split pieces remake the
+        // load).
         if self.tii.remat_shape(&folded) && folded.uses.is_empty() {
             let mut roots = self.tables.remat_roots.borrow_mut();
             for value in &folded.defines {
@@ -2846,7 +2848,6 @@ mod tests {
     /// before it (lz4c -O2: two reloads into one register, the first dead).
     #[test]
     fn test_spilling_a_reload_does_not_reload_before_it() {
-        use crate::model::ir::Imm;
         let reload = Arc::new({
             let what = Semantics {
                 name: Some("RELOAD16".into()),

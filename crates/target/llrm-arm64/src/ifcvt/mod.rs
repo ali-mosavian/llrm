@@ -218,10 +218,6 @@ pub struct IfConv {
 }
 
 impl IfConv {
-    fn is_triangle(&self) -> bool {
-        self.tbb == self.tail || self.fbb == self.tail
-    }
-
     /// The join's predecessor on the true side.
     fn t_pred(&self) -> usize {
         if self.tbb == self.tail { self.head } else { self.tbb }
@@ -436,7 +432,10 @@ impl Speculation {
             if facts.may_load || facts.may_store || facts.call || facts.side_effects {
                 return false;
             }
-            if matches!(op, Op::Call { .. } | Op::Return { .. } | Op::JumpTable { .. } | Op::IndirectJump { .. }) {
+            if matches!(
+                op,
+                Op::Call { .. } | Op::Return { .. } | Op::JumpTable { .. } | Op::IndirectJump { .. }
+            ) {
                 return false;
             }
             if facts.sets_flags {
@@ -559,7 +558,7 @@ impl Defs {
 
 impl IfConv {
     /// `canConvertIf`: whether the sub-CFG headed by `head` can be converted.
-    pub fn can_convert(
+    pub(crate) fn can_convert(
         function: &MFunc,
         cfg: &Cfg,
         head: usize,
@@ -782,7 +781,7 @@ impl IfConv {
     /// join becomes a select, the arms (and the join, if it is the head's
     /// layout successor and has no other predecessor) are removed. The
     /// numbers of the blocks removed.
-    pub fn convert(
+    pub(crate) fn convert(
         &self,
         function: &mut MFunc,
         cfg: &mut Cfg,

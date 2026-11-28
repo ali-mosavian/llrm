@@ -37,8 +37,8 @@
 //! the other way. Exit: the dual.
 //!
 //! DEVIATE 3: the wide load's alignment is the narrow load's; a target is
-//! asked only whether it has vector registers (`vector_register_bits`, word vectors
-//! excluded), not
+//! asked only whether it has vector registers (`vector_register_bits`, word
+//! vectors excluded), not
 //! whether a misaligned access is fast.
 //!
 //! # Runs

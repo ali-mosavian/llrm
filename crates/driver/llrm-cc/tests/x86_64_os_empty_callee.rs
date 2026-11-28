@@ -1,6 +1,7 @@
-//! A callee emptied by the write-only removal of its only store keeps the `llrm.reads` it was
-//! stamped with, so the calls of it stay (byvalue_struct_address -Os: `foo` 40 B against clang's
-//! 1; here `forward` is a `jmp` to an empty `add_row`). Needs `LLRM_LLC`.
+//! A callee emptied by the write-only removal of its only store keeps the
+//! `llrm.reads` it was stamped with, so the calls of it stay
+//! (byvalue_struct_address -Os: `foo` 40 B against clang's 1; here `forward` is
+//! a `jmp` to an empty `add_row`). Needs `LLRM_LLC`.
 
 use std::path::Path;
 use std::process::Command;

@@ -41,7 +41,8 @@ fn a_negated_shifted_bit_is_a_bit_test_and_sbb() {
     let tli = TargetLowering::x86_32(Features::default(), MVT::I32);
     let mut hooks = X86Lowering {
         multiply_early_out: None,
-        imul_if_smaller: false, hot_chains: false,
+        imul_if_smaller: false,
+        hot_chains: false,
         share_products: false,
         cmov: false,
         sse2: false,

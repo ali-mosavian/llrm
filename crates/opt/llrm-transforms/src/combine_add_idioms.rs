@@ -504,7 +504,8 @@ fn infer_wrap_flags(
     flags: Flags,
 ) -> Visit {
     use llrm_mir::valuetracking::range::{
-        OverflowResult::NeverOverflows, compute_overflow_for_cached_signed_add, compute_overflow_for_cached_unsigned_add,
+        OverflowResult::NeverOverflows, compute_overflow_for_cached_signed_add,
+        compute_overflow_for_cached_unsigned_add,
     };
     let mut new = flags;
     {

@@ -30,7 +30,6 @@ enum Ending {
     Return,
     Jump(usize),
     Branch(usize),
-    Falls,
 }
 
 fn ending(

@@ -14,12 +14,19 @@ struct Counting;
 static ALLOCATIONS: AtomicUsize = AtomicUsize::new(0);
 
 unsafe impl GlobalAlloc for Counting {
-    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+    unsafe fn alloc(
+        &self,
+        layout: Layout,
+    ) -> *mut u8 {
         ALLOCATIONS.fetch_add(1, Ordering::Relaxed);
         unsafe { System.alloc(layout) }
     }
 
-    unsafe fn dealloc(&self, pointer: *mut u8, layout: Layout) {
+    unsafe fn dealloc(
+        &self,
+        pointer: *mut u8,
+        layout: Layout,
+    ) {
         unsafe { System.dealloc(pointer, layout) }
     }
 }
@@ -30,7 +37,8 @@ static COUNTING: Counting = Counting;
 #[test]
 fn looking_at_copies_allocates_in_proportion_to_the_function() {
     let pairs = 1500;
-    // `rc5` is read at once, but `rc4` is read again by the next group: no copy goes
+    // `rc5` is read at once, but `rc4` is read again by the next group: no copy
+    // goes
     let text: String = (0..pairs).map(|_| "  lda rc4\n  sta rc5\n  ldx rc5\n  stx rc6\n").collect();
     let mut asm = Asm::parse(&text);
     let before = ALLOCATIONS.load(Ordering::Relaxed);

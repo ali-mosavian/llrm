@@ -27,7 +27,8 @@
 //! 68000: +20 B at both, -14% and -38% clocks).
 //!
 //! # Example
-//! A divide whose operands ScalarEvolution proves to be 0..255 is done in 8 bits.
+//! A divide whose operands ScalarEvolution proves to be 0..255 is done in 8
+//! bits.
 //!
 //! ```text
 //! %q = udiv i32 %a, %b        ; %a, %b in 0..255

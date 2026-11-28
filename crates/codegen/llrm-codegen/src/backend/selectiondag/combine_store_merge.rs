@@ -469,11 +469,9 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
         bits: u32,
     ) -> bool {
         match (self.promoted(bits), EVT::integer(bits)) {
-            (EVT::Simple(wide), EVT::Simple(narrow)) => {
-                [LoadExt::ZExtLoad, LoadExt::SExtLoad, LoadExt::ExtLoad]
-                    .into_iter()
-                    .all(|ext| tli.load_ext_action(ext, wide, narrow) == Action::Legal)
-            }
+            (EVT::Simple(wide), EVT::Simple(narrow)) => [LoadExt::ZExtLoad, LoadExt::SExtLoad, LoadExt::ExtLoad]
+                .into_iter()
+                .all(|ext| tli.load_ext_action(ext, wide, narrow) == Action::Legal),
             _ => false,
         }
     }

@@ -2696,7 +2696,7 @@ impl<'a> Analyzer<'a> {
             let mut derived = IdSet::<ValueId>::new();
             derived.insert(root);
             let mut stores = Vec::new();
-            let mut folded_by_calls = 0;
+            let mut folded_by_calls;
             let mut sound = true;
             loop {
                 let before = derived.len();
@@ -3413,18 +3413,6 @@ fn lowered_to_call(
 
 fn only_reads_memory(info: &CallInfo) -> bool {
     !llrm_mir::memory::stated(&info.attrs).writes
-}
-
-/// Whether the natural loop of `header` holds no other loop
-/// (`Loop::isInnermost`): the blocks that reach a latch (a block reached from
-/// `header` that branches back to it) without passing `header`, none of them
-/// another header.
-fn is_innermost(
-    function: &Function,
-    header: BlockId,
-    headers: &IdSet<BlockId>,
-) -> bool {
-    innermost_body(function, header, headers).is_some()
 }
 
 /// The blocks of the natural loop of `header` where it holds no other loop.

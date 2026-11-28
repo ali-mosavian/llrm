@@ -21,10 +21,10 @@
 //! ```
 //!
 //! # DEVIATE rows
-//! - IAI1 (owner llrm-arm64-vec, exit 2026-11-24): no `PredicatedScalarEvolution`
-//!   (LoopAccessAnalysis D24): the predicates `collectConstStrideAccesses`
-//!   would collect are never added, so an access whose stride needs an assumption
-//!   has stride 0 and joins no group.
+//! - IAI1 (owner llrm-arm64-vec, exit 2026-11-24): no
+//!   `PredicatedScalarEvolution` (LoopAccessAnalysis D24): the predicates
+//!   `collectConstStrideAccesses` would collect are never added, so an access
+//!   whose stride needs an assumption has stride 0 and joins no group.
 //! - IAI2 (same owner and exit): `MaxInterleaveGroupFactor` is its default, 8;
 //!   the `-max-interleave-group-factor` option does not exist.
 
@@ -351,13 +351,17 @@ impl InterleavedAccessInfo {
         // `collectDependences`: the source of each dependence and its
         // destinations, if LoopAccessInfo has them.
         let checker = lai.dep_checker();
-        let dependences: Option<IdMap<InstId, Vec<InstId>>> = checker.dependences().map(|deps| {
-            let mut found: IdMap<InstId, Vec<InstId>> = IdMap::new();
-            for dep in deps {
-                found.get_or_insert_with(checker.source(dep), Vec::new).push(checker.destination(dep));
-            }
-            found
-        });
+        let dependences: Option<IdMap<InstId, Vec<InstId>>> = checker
+            .dependences()
+            .map(
+                |deps| {
+                    let mut found: IdMap<InstId, Vec<InstId>> = IdMap::new();
+                    for dep in deps {
+                        found.get_or_insert_with(checker.source(dep), Vec::new).push(checker.destination(dep));
+                    }
+                    found
+                },
+            );
         let writes = |inst: InstId| matches!(cx.function.instruction(inst).opcode, Opcode::Store { .. });
         let reads = |inst: InstId| matches!(cx.function.instruction(inst).opcode, Opcode::Load { .. });
         // `canReorderMemAccessesForInterleavedGroups(A, B)`: A precedes B.
@@ -398,9 +402,7 @@ impl InterleavedAccessInfo {
             // we don't create a group for B, we continue with the bottom-up
             // algorithm to ensure we don't break any of B's dependences.
             let mut group_b: Option<GroupId> = None;
-            if Self::is_strided(des_b.stride)
-                && (!is_predicated(cx, lp, b) || enable_predicated)
-            {
+            if Self::is_strided(des_b.stride) && (!is_predicated(cx, lp, b) || enable_predicated) {
                 group_b = self.group_of.get(&b).copied();
                 if group_b.is_none() {
                     let id = self.create_group(b, des_b.stride, des_b.alignment);
@@ -422,7 +424,9 @@ impl InterleavedAccessInfo {
                 // the group.
                 let dependent_member = |this: &Self, group: GroupId, ai: usize| -> Option<InstId> {
                     let group = this.groups[group].as_ref()?;
-                    (0..group.factor()).filter_map(|index| group.member(index)).find(|member| !can_reorder(ai, at[&member]))
+                    (0..group.factor())
+                        .filter_map(|index| group.member(index))
+                        .find(|member| !can_reorder(ai, at[&member]))
                 };
 
                 let group_a = self.group_of.get(&a).copied();
@@ -505,7 +509,8 @@ impl InterleavedAccessInfo {
 
                 // All members of a predicated interleave-group must have the
                 // same predicate, and currently must reside in the same BB.
-                let (block_a, block_b) = (cx.function.parent(a).expect("a block"), cx.function.parent(b).expect("a block"));
+                let (block_a, block_b) =
+                    (cx.function.parent(a).expect("a block"), cx.function.parent(b).expect("a block"));
                 if (is_predicated_block(cx, lp, block_a) || is_predicated_block(cx, lp, block_b))
                     && (!enable_predicated || block_a != block_b)
                 {

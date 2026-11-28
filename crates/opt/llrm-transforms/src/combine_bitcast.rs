@@ -40,6 +40,7 @@ pub fn visit_bitcast(
     if c.function.instruction(inst).ty == c.type_of(src) {
         return Visit::Replace(src);
     }
-    // `return commonCastTransforms(CI)`: a cast of a cast, of a select, of a phi.
+    // `return commonCastTransforms(CI)`: a cast of a cast, of a select, of a
+    // phi.
     crate::combine_casts::common_cast_transforms(c, inst).unwrap_or(Visit::None)
 }

@@ -559,8 +559,8 @@ impl LiveIntervalCalc {
         let by_lane = operands.iter().any(|mo| mo.is_def && mo.lanes != Operand::ALL);
         if !by_lane {
             // Step 1: Create minimal live segments for every definition of Reg.
-            // Visit all def operands. If the same instruction has multiple defs of
-            // Reg, createDeadDef() will deduplicate.
+            // Visit all def operands. If the same instruction has multiple defs
+            // of Reg, createDeadDef() will deduplicate.
             for mo in operands {
                 if !mo.is_def && !mo.reads_reg {
                     continue;
@@ -569,8 +569,8 @@ impl LiveIntervalCalc {
                     Self::create_dead_def(ctx.indexes, &mut li.range, mo);
                 }
             }
-            // Step 2: Extend live segments to all uses, constructing SSA form as
-            // necessary.
+            // Step 2: Extend live segments to all uses, constructing SSA form
+            // as necessary.
             self.calc.reset_live_out_map(ctx.cfg.len());
             self.extend_to_uses(&mut li.range, operands, ctx);
         }
@@ -648,7 +648,8 @@ impl LiveIntervalCalc {
         let mut work: Vec<usize> = Vec::new();
         for def in range.valnos.iter().filter(|vn| !vn.is_unused()).map(|vn| vn.def()) {
             let block = ctx.indexes.get_mbb_from_index(&def);
-            let at = if def < ctx.indexes.get_mbb_start_idx(block) { ctx.indexes.get_mbb_start_idx(block) } else { def };
+            let at =
+                if def < ctx.indexes.get_mbb_start_idx(block) { ctx.indexes.get_mbb_start_idx(block) } else { def };
             if first_def[block].is_none_or(|was| at < was) {
                 first_def[block] = Some(at);
             }
@@ -674,14 +675,16 @@ impl LiveIntervalCalc {
                     let (start, end) = (segment.start.max(from), segment.end.min(block_end));
                     if start < end {
                         match kept.last_mut() {
-                            Some(last) if last.end == start && match (&last.valno, &segment.valno) {
-                                (Some(a), Some(b)) => Rc::ptr_eq(a, b),
-                                (None, None) => true,
-                                _ => false,
-                            } =>
+                            Some(last)
+                                if last.end == start
+                                    && match (&last.valno, &segment.valno) {
+                                        (Some(a), Some(b)) => Rc::ptr_eq(a, b),
+                                        (None, None) => true,
+                                        _ => false,
+                                    } =>
                             {
                                 last.end = end
-                            },
+                            }
                             _ => kept.push(Segment::new(start, end, segment.valno.clone())),
                         }
                     }

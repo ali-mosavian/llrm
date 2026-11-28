@@ -1,7 +1,7 @@
-//! `scc` leaves the condition codes alone, so the `move.w %d4, %ccr` after `scs` restored what
-//! the codes already held. `word_compare_branches` -Os kept five such pairs of `move to ccr`
-//! (2 bytes and 12 clk at 68000 each) where the emitter saved the codes round a setter that a
-//! later pass moved out.
+//! `scc` leaves the condition codes alone, so the `move.w %d4, %ccr` after
+//! `scs` restored what the codes already held. `word_compare_branches` -Os kept
+//! five such pairs of `move to ccr` (2 bytes and 12 clk at 68000 each) where
+//! the emitter saved the codes round a setter that a later pass moved out.
 
 use llrm_m68k::driver::{Level, assembly, cpu_of};
 

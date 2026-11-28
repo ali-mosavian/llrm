@@ -192,7 +192,8 @@ pub enum ISD {
 
     SetCC,
     Select,
-    /// `VSELECT`: a vector of booleans picks each lane of the first or the second operand.
+    /// `VSELECT`: a vector of booleans picks each lane of the first or the
+    /// second operand.
     VSelect,
     SelectCC,
     BrCC,

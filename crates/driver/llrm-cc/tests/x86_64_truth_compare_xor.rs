@@ -1,5 +1,6 @@
-//! `early_exit() != want` of two 0/1 values was `xor ecx,ecx; cmp; setne cl` (the pin keeps the
-//! compare); gcc's `simplify_truth_ops_using_ranges` makes it one `xor`. Needs `LLRM_LLC`.
+//! `early_exit() != want` of two 0/1 values was `xor ecx,ecx; cmp; setne cl`
+//! (the pin keeps the compare); gcc's `simplify_truth_ops_using_ranges` makes
+//! it one `xor`. Needs `LLRM_LLC`.
 
 use std::path::Path;
 use std::process::Command;
@@ -33,5 +34,9 @@ fn listing() -> String {
 fn a_not_equal_of_two_truth_values_is_one_xor() {
     let text = listing();
     assert!(!text.contains("setne"), "the compare stayed:\n{text}");
-    assert!(text.lines().any(|line| line.contains("xor ") && !line.contains("xor    eax,eax") && !line.contains("xor    ecx,ecx")), "{text}");
+    assert!(
+        text.lines()
+            .any(|line| line.contains("xor ") && !line.contains("xor    eax,eax") && !line.contains("xor    ecx,ecx")),
+        "{text}"
+    );
 }

@@ -43,10 +43,11 @@
 //!   one statement that feeds the phi. It applies only where the phi is on a
 //!   loop-carried recurrence (`on_recurrence`, a DEVIATE damage limiter, not a
 //!   priced criterion) and the branch condition is later than the phi's values
-//!   (`condition_is_later`: `X86CmovConversion::checkForProfitableCmovCandidates`'
-//!   test that a cmov waits longer for its condition than for its value, on
-//!   TTI latencies). sfm16_dbg m64 -37..-40% executed instructions; every other
-//!   bench cell unchanged.
+//!   (`condition_is_later`:
+//!   `X86CmovConversion::checkForProfitableCmovCandidates`' test that a cmov
+//!   waits longer for its condition than for its value, on TTI latencies).
+//!   sfm16_dbg m64 -37..-40% executed instructions; every other bench cell
+//!   unchanged.
 //!
 //! # Example
 //! The phi that a branch chooses between becomes a select in the branch's
@@ -69,7 +70,6 @@ use llrm_mir::module::{BlockId, Function, InstId, Operand, ValueDef};
 use llrm_mir::opcode::{FloatPredicate, IntPredicate, Opcode};
 use llrm_mir::passes::Outer;
 use llrm_mir::tti::{Cost, CostKind, Tti};
-
 
 use crate::edges;
 use crate::inlinemetadata::DECL;
@@ -178,9 +178,12 @@ fn empty_or_one_feeding_into(
     }
     let instruction = function.instruction(only);
     let Some(result) = instruction.result.filter(|_| instruction.opcode != Opcode::Phi) else { return false };
-    function.users(result).only().is_some_and(|one| {
-        function.instruction(one.user).opcode == Opcode::Phi && function.parent(one.user) == Some(join)
-    })
+    function
+        .users(result)
+        .only()
+        .is_some_and(
+            |one| function.instruction(one.user).opcode == Opcode::Phi && function.parent(one.user) == Some(join),
+        )
 }
 
 /// `X86CmovConversion`'s `LoopDepth` test, on the IR: whether the condition
@@ -223,15 +226,7 @@ fn depth(
     if let Some(&known) = memo.get(&inst) {
         return known;
     }
-    let own = instruction_cost(
-        spec.tti,
-        context,
-        spec.layout,
-        &spec.outer.globals,
-        function,
-        inst,
-        CostKind::Latency,
-    );
+    let own = instruction_cost(spec.tti, context, spec.layout, &spec.outer.globals, function, inst, CostKind::Latency);
     let own = if own.valid { own.value } else { 0 };
     let operands = function.instruction(inst).operands.clone();
     let below = operands.iter().map(|&one| depth(context, spec, function, one, level + 1, memo)).max().unwrap_or(0);
@@ -427,13 +422,13 @@ pub fn folded(
         return false;
     }
     // D6. gcc's phiopt (`match_simplify_replacement`) folds only a middle block
-    // that is empty or one statement feeding the phi (`empty_bb_or_one_feeding_into_p`):
-    // a nested diamond keeps its branches, which a loop-carried chain then does not
-    // wait on.
+    // that is empty or one statement feeding the phi
+    // (`empty_bb_or_one_feeding_into_p`): a nested diamond keeps its
+    // branches, which a loop-carried chain then does not wait on.
     // Only where the select would join a loop-carried recurrence: its latency
     // is then on the critical path of every iteration (`X86CmovConversion`'s
-    // `checkForProfitableCmovCandidates` prices exactly that, `LoopDepth`), and a
-    // branch the predictor takes costs nothing.
+    // `checkForProfitableCmovCandidates` prices exactly that, `LoopDepth`), and
+    // a branch the predictor takes costs nothing.
     // `X86CmovConversion`'s test as well (`checkForProfitableCmovCandidates`):
     // the branch only runs ahead of a condition that is later than the values
     // it chooses between (D6).
@@ -482,9 +477,15 @@ pub fn folded(
     // D5. The pin does not price the selects against the threshold; where a
     // select is a branch, folding runs the arms' code on both paths and still
     // branches, so the selects count.
-    let optsize = function.attrs.iter().any(
-        |attr| matches!(attr, llrm_mir::opcode::Attribute::Flag(name) if name == "optsize" || name == "minsize"),
-    );
+    let optsize = function
+        .attrs
+        .iter()
+        .any(
+            |attr| matches!(
+                attr,
+                llrm_mir::opcode::Attribute::Flag(name) if name == "optsize" || name == "minsize"
+            ),
+        );
     let extra = Cost::of(spec.tti.select_branch_extra(optsize));
     if (!spec.tti.has_cmov() || extra.value > 0) && !hoist.is_empty() {
         let selects = edges::phis(function, block).iter().fold(Cost::FREE, |all, &phi| {

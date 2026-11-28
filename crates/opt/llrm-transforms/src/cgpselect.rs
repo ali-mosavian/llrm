@@ -38,8 +38,8 @@
 //! `optimizeSelectInst` guards with `freeze`.
 //!
 //! # Example
-//! A `fptosi` of a select with a constant arm becomes a branch, the conversion made
-//! on the other arm only.
+//! A `fptosi` of a select with a constant arm becomes a branch, the conversion
+//! made on the other arm only.
 //!
 //! ```text
 //!  %s = select c, -3.0, %x            br c, %join, %other
@@ -664,7 +664,7 @@ fn sunk(
     let jump = function.terminator(home).expect("the jump the split made");
     let void = function.instruction(jump).ty;
     function.erase(jump).expect("nothing reads a jump");
-    let mut side_of = |function: &mut Function, arm: Option<InstId>| -> (BlockId, Operand) {
+    let side_of = |function: &mut Function, arm: Option<InstId>| -> (BlockId, Operand) {
         let Some(inst) = arm else { return (home, Operand::Block(join)) };
         let side = function.create_block(None);
         function.insert_block(side, Some(home)).expect("a new block");

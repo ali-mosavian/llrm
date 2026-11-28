@@ -28,7 +28,7 @@
 
 use llrm_mir::context::ConstantKind;
 use llrm_mir::edit::Position;
-use llrm_mir::module::{BlockId, InstId, Operand};
+use llrm_mir::module::{InstId, Operand};
 use llrm_mir::opcode::{BinaryOp, Flags, IntPredicate, Opcode};
 use llrm_mir::tti::{ArithOp, CostKind, OperandInfo, Ty};
 use llrm_mir::valuetracking::bittest::{BitTestOptions, decompose_bit_test};

@@ -596,8 +596,8 @@ pub fn jump_tables(
     for (number, procedure) in procedures.iter().enumerate() {
         let jumps =
             procedure.body.blocks.iter().flat_map(|block| block.insns.iter()).filter_map(|one| one.what.as_ref());
-        for what in jumps
-            .filter(|what| what.op == Operation::Jump && what.indirect && !what.computed && !what.table.is_empty())
+        for what in
+            jumps.filter(|what| what.op == Operation::Jump && what.indirect && !what.computed && !what.table.is_empty())
         {
             let index = match (what.sources.first(), what.table_id) {
                 (Some(Loc::Mem(ir::Mem { addr: Some(addr), .. })), _) => addr.index,
@@ -2005,7 +2005,7 @@ fn frame_held(procedure: &Procedure) -> bool {
 pub fn listing(
     procedure: &Procedure,
     number: usize,
-) -> Result<Vec<Item>, Unprintable> {
+) -> Result<Vec<Item<'_>>, Unprintable> {
     let mut items = listed(procedure, number)?;
     // A Windows 64-bit function (`probe_stack` marks one).
     if procedure.probe_stack.is_some() {
@@ -2113,7 +2113,7 @@ fn trailing_calls_padded(items: &mut Vec<Item>) {
 fn listed(
     procedure: &Procedure,
     number: usize,
-) -> Result<Vec<Item>, Unprintable> {
+) -> Result<Vec<Item<'_>>, Unprintable> {
     let registers = &procedure.registers;
     let held = frame_held(procedure);
     if procedure.body.frame_exit == Some(false) {
@@ -2391,7 +2391,7 @@ fn built(
     procedure: &Procedure,
     number: usize,
     omit: bool,
-) -> Result<Vec<Item>, Unprintable> {
+) -> Result<Vec<Item<'_>>, Unprintable> {
     let regs = procedure.body.regs();
     let sequences = Sequences::of(procedure, omit);
     let (wrap, enter, unwrapped_leave) = (&sequences.wrap, sequences.entry.clone(), sequences.exit.clone());
@@ -3089,7 +3089,7 @@ fn frame_omitted(
     procedure: &Procedure,
     number: usize,
     held: bool,
-) -> Option<Vec<Item>> {
+) -> Option<Vec<Item<'_>>> {
     let omitted = stack_addressed(procedure, number)?;
     // The exits were made instructions for an omitted frame (`exits_inserted`):
     // the size comparison below, asked again of the body that now holds them,
@@ -3437,9 +3437,10 @@ fn addressed_pass(
                         }
                         depth = None;
                     }
-                    // An indirect jump that names no table is an indirect sibling
-                    // call (`built` made its return a jump): its epilogue has
-                    // run, and it leaves the procedure as a return does.
+                    // An indirect jump that names no table is an indirect
+                    // sibling call (`built` made its return a jump): its
+                    // epilogue has run, and it leaves the procedure as a return
+                    // does.
                     Operation::Jump if what.indirect && what.table.is_empty() => {
                         if here != 0 && !in_dead {
                             return Err(stop(procedure, &format!("a sibling call at depth {here}")));

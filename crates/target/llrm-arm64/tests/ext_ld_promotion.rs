@@ -1,6 +1,7 @@
-//! CodeGenPrepare promotes `sext (add (load i8))` towards the load when the target says so
-//! (`EnableExtLdPromotion`, true on AArch64 at the pin): `ldrsb` + `add`. Without it the load
-//! zero-extends and the sign extension is a separate `sbfm`: `ldrb`, `add`, `sbfm`.
+//! CodeGenPrepare promotes `sext (add (load i8))` towards the load when the
+//! target says so (`EnableExtLdPromotion`, true on AArch64 at the pin): `ldrsb`
+//! + `add`. Without it the load zero-extends and the sign extension is a
+//! separate `sbfm`: `ldrb`, `add`, `sbfm`.
 
 use llrm_arm64::driver::{self, Level};
 use llrm_arm64::machine::Platform;

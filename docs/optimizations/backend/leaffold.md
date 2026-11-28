@@ -1,9 +1,10 @@
 > Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/leaffold.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/leaffold.rs); edit the header, not this file.
-<!-- src: crates/codegen/llrm-codegen/src/backend/leaffold.rs sha256:2a61e286d15ff87dff4e15abd01f0ea9982ba09b11293ed89e8279e7ab235618 -->
+<!-- src: crates/codegen/llrm-codegen/src/backend/leaffold.rs sha256:1f41eea6906687c6bc93eee3151607e62a7a1101f0760e76b621e69e25109dbd -->
 
 # leaffold
 
-A constant a leaf block makes for a join, made in the block that jumps to it.
+A constant a leaf block makes for a join, made in the block that jumps to
+it.
 
 ## How it works
 A block of one constant and a jump (`v := mov 3; jmp J`) that one branch
@@ -35,8 +36,8 @@ registers after it, so a module it folded is assembled again without it
 Phase 1 of the machine phases, after `SharedConstants`, before `SsaSpill`.
 
 ## Example
-At -Os on a target that enables it, a leaf block holding only a constant and a
-jump is removed and the constant is made in the block that branched to it.
+At -Os on a target that enables it, a leaf block holding only a constant and
+a jump is removed and the constant is made in the block that branched to it.
 
 ```text
 p:  cmp x, 7 ; je l    l: v := mov 3 ; jmp j   j: r = phi [l: v]

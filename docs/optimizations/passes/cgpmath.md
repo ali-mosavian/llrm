@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/cgpmath.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/cgpmath.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/cgpmath.rs sha256:2c20c1fca07170abfd5073ea420fab28af7b6c6599c1c4831390667aff72e6d0 -->
+<!-- src: crates/opt/llrm-transforms/src/cgpmath.rs sha256:18f12fa71933e08e5b7cbb454190acee6148b3e6cd04785fa89308bedccf32cf -->
 
 # cgpmath
 
@@ -31,9 +31,10 @@ was, and the compare and the math become its two results.
                                            %c = extractvalue {i16, i1} %o, 1
 ```
 
-MIRROR: `combineToUAddWithOverflow`, `matchUAddWithOverflowConstantEdgeCases`,
-`combineToUSubWithOverflow`, `replaceMathCmpWithIntrinsic`, `matchIncrement`,
-`getIVIncrement`, `isIVIncrement` and `m_UAddWithOverflow`.
+MIRROR: `combineToUAddWithOverflow`,
+`matchUAddWithOverflowConstantEdgeCases`, `combineToUSubWithOverflow`,
+`replaceMathCmpWithIntrinsic`, `matchIncrement`, `getIVIncrement`,
+`isIVIncrement` and `m_UAddWithOverflow`.
 
 ## Example
 `test_a_compare_with_the_add_of_its_negated_constant_is_a_usub_with_overflow`

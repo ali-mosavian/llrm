@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/narrowcycle.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/narrowcycle.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/narrowcycle.rs sha256:6a6baebcd93ab3dcbbf1d7b8b406f3037c16699844b58499b41db024f535e27e -->
+<!-- src: crates/opt/llrm-transforms/src/narrowcycle.rs sha256:a2a9deaadf144f2157c42fe3616da42e41dc856ee948d33849ff3513bd7d1b1e -->
 
 # narrowcycle
 
@@ -49,7 +49,8 @@ a `zext` of the narrow value; the `and` masks become a narrow `and` and a
 [`crate::narrowiv`](narrowiv.md), [`crate::trunc_inst_combine`](trunc_inst_combine.md).
 
 ## Example
-A 32-bit phi cycle that is only read in 16 bits is carried as a 16-bit cycle.
+A 32-bit phi cycle that is only read in 16 bits is carried as a 16-bit
+cycle.
 
 ```text
 %p = phi i32 [ %a, %e ], [ %r, %l ]       ; read only through & 0xFFFF

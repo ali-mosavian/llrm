@@ -336,13 +336,9 @@ fn test_a_fold_that_moved_no_edge_builds_no_predecessor_map() {
     let mut start = body(
         "f",
         1,
-        vec![
-            block(1, vec![_move(1, bx()), _jump(2, 9)], vec![9]).into(),
-            block(9, vec![_return(9)], vec![]).into(),
-        ],
+        vec![block(1, vec![_move(1, bx()), _jump(2, 9)], vec![9]).into(), block(9, vec![_return(9)], vec![]).into()],
     );
-    start.frequencies =
-        Some(Arc::new(crate::model::lir::BlockFrequencies([(1, 1.0), (9, 1.0)].into_iter().collect())));
+    start.frequencies = Some(Arc::new(crate::model::lir::BlockFrequencies([(1, 1.0), (9, 1.0)].into_iter().collect())));
     let mut after = start.clone();
     super::PREDECESSOR_MAPS.with(|count| count.set(0));
     _forget_moved_inflow(&start, &mut after);

@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/combiner.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/combiner.rs); edit the header, not this file.
-<!-- src: crates/codegen/llrm-codegen/src/backend/combiner.rs sha256:4fbb2d963ae92b32b68131a04ecf5125b0ec8d2356e57315062dd543fccc7755 -->
+<!-- src: crates/codegen/llrm-codegen/src/backend/combiner.rs sha256:a82039a51ea31d2c815300a46a282d0b26993d28f8f8abbd6b5774505f491b05 -->
 
 # combiner
 
@@ -53,11 +53,11 @@ pointer around calls does, as a chain of `CALL_FRAME_LATENCY` per call, so
 two calls arrive in order (still O(n)). A value made outside the block has
 depth 0 and the latency of its definition. Exit: a trace analysis on LIR.
 
-DEVIATE MC2 (owner llrm-target-x86-m64-c, exit 2026-11-24): the latency table is
-the default one written above, read from the operands (a memory source is a
-load); the pin asks the opcode's `mayLoad`. `imul` is 1 here, 3 in the
-pin's model, so `t = a * b; (t + c()) + d()` is left alone and the pin
-rebuilds it.
+DEVIATE MC2 (owner llrm-target-x86-m64-c, exit 2026-11-24): the latency
+table is the default one written above, read from the operands (a memory
+source is a load); the pin asks the opcode's `mayLoad`. `imul` is 1 here, 3
+in the pin's model, so `t = a * b; (t + c()) + d()` is left alone and the
+pin rebuilds it.
 
 DEVIATE MC3 (owner anyisa, exit 2026-11-13): reads of a value are
 counted from the operands and phis of the body (`hasOneNonDBGUse`), and a

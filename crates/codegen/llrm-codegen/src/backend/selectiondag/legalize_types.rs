@@ -544,15 +544,10 @@ impl<'a> TypeLegalizer<'a> {
                 let call = self.tli.libcall_name(op, vt).and_then(|name| self.soft_call(name, &args, int));
                 call.ok_or(LegalizeError::Unsupported { op, ty: vt, what: "soften: the target names no routine" })?
             }
-            op @ (ISD::FRint
-            | ISD::FSqrt
-            | ISD::FSin
-            | ISD::FCos
-            | ISD::FExp
-            | ISD::FExp2
-            | ISD::FLog
-            | ISD::FLog2) => {
-                // `SoftenFloatRes_Unary`: the C library's routine over the softened operand (`rint` for `FRINT`).
+            op
+            @ (ISD::FRint | ISD::FSqrt | ISD::FSin | ISD::FCos | ISD::FExp | ISD::FExp2 | ISD::FLog | ISD::FLog2) => {
+                // `SoftenFloatRes_Unary`: the C library's routine over the
+                // softened operand (`rint` for `FRINT`).
                 let args = [self.softened_float(self.dag.operand(value, 0))];
                 let call = self.tli.libcall_name(op, vt).and_then(|name| self.soft_call(name, &args, int));
                 call.ok_or(LegalizeError::Unsupported { op, ty: vt, what: "soften: the target names no routine" })?
@@ -603,15 +598,18 @@ impl<'a> TypeLegalizer<'a> {
                     )
                 } else {
                     let bits = from.size_in_bits();
-                    // DEVIATE SOFT-UITOFP-NONNEG: the signed routine for a value known non-negative (`nneg`, or
-                    // a clear sign bit), where the target asks (`TargetLowering::signed_conversion_of_nonneg`)
+                    // DEVIATE SOFT-UITOFP-NONNEG: the signed routine for a
+                    // value known non-negative (`nneg`, or
+                    // a clear sign bit), where the target asks
+                    // (`TargetLowering::signed_conversion_of_nonneg`)
                     let nonneg = op == ISD::UIntToFp
                         && self.tli.signed_conversion_of_nonneg()
                         && (self.dag.node(value).flags.0 & SDNodeFlags::NON_NEG.0 != 0
                             || bits < INT_BITS
                             || (bits <= INT_BITS
                                 && super::known_bits::masked_value_is_zero(self.dag, operand, 1u128 << (bits - 1))));
-                    // the operand is widened as its own type reads it, whichever routine takes it
+                    // the operand is widened as its own type reads it,
+                    // whichever routine takes it
                     let extension = if op == ISD::SIntToFp { ISD::SignExtend } else { ISD::ZeroExtend };
                     let op = if nonneg { ISD::SIntToFp } else { op };
                     let arg =
@@ -1615,11 +1613,16 @@ impl<'a> TypeLegalizer<'a> {
                     source
                 };
                 let (in_lane, out_lane) = (self.dag.value_type(source).element(), to.element());
-                let at = self.dag.constant(base).ok_or(LegalizeError::Unsupported {
-                    op: ISD::ExtractSubvector,
-                    ty: vt,
-                    what: "promote an extract at a variable index",
-                })?;
+                let at = self
+                    .dag
+                    .constant(base)
+                    .ok_or(
+                        LegalizeError::Unsupported {
+                            op: ISD::ExtractSubvector,
+                            ty: vt,
+                            what: "promote an extract at a variable index",
+                        },
+                    )?;
                 let ops: Vec<SDValue> = (0..vt.lanes())
                     .map(|lane| {
                         let index = self.dag.get_constant(at + u128::from(lane), self.dag.value_type(base));
@@ -1654,8 +1657,10 @@ impl<'a> TypeLegalizer<'a> {
                 let operand = self.promoted_integer(self.dag.operand(node, 1));
                 self.dag.get_atomic_store(chain, ptr, operand, info)
             }
-            // `PromoteIntOp_VECREDUCE` (`PromoteIntOpVectorReduction`): `add`, `mul`, `and`, `or`, `xor` of the
-            // promoted lanes, whose extra bits the truncate of the result drops.
+            // `PromoteIntOp_VECREDUCE`
+            // (`PromoteIntOpVectorReduction`): `add`, `mul`, `and`, `or`, `xor`
+            // of the promoted lanes, whose extra bits the truncate of the
+            // result drops.
             ISD::VecReduceAdd | ISD::VecReduceMul | ISD::VecReduceAnd | ISD::VecReduceOr | ISD::VecReduceXor => {
                 let operand = self.promoted_integer(self.dag.operand(node, at));
                 let lane = self.dag.value_type(operand).element();
@@ -1987,7 +1992,8 @@ impl<'a> TypeLegalizer<'a> {
                 self.dag.get_store(chain, promoted, ptr, info)
             }
             ISD::ConcatVectors => {
-                // `PromoteIntOp_CONCAT_VECTORS`: every lane of every promoted piece read out, narrowed to the result
+                // `PromoteIntOp_CONCAT_VECTORS`: every lane of every promoted
+                // piece read out, narrowed to the result
                 // lane, and built.
                 let result_vt = self.dag.value_type(node);
                 let lane_vt = result_vt.element();
@@ -2002,8 +2008,7 @@ impl<'a> TypeLegalizer<'a> {
                     let incoming_vt = self.dag.value_type(incoming);
                     for lane in 0..incoming_vt.lanes() {
                         let index = self.dag.get_constant(u128::from(lane), EVT::I64);
-                        let element =
-                            self.dag.get_node(ISD::ExtractElement, incoming_vt.element(), &[incoming, index]);
+                        let element = self.dag.get_node(ISD::ExtractElement, incoming_vt.element(), &[incoming, index]);
                         lanes.push(self.dag.get_any_ext_or_trunc(element, lane_vt));
                     }
                 }
@@ -2163,8 +2168,8 @@ impl<'a> TypeLegalizer<'a> {
                 if self.dag.value_type(self.dag.operand(value, 0)).is_floating_point()
                     || self.dag.value_type(self.dag.operand(value, 0)).is_vector() =>
             {
-                // `ExpandRes_BITCAST` of a float or a legal vector: stored to a stack slot, the
-                // halves loaded from it.
+                // `ExpandRes_BITCAST` of a float or a legal vector: stored to a
+                // stack slot, the halves loaded from it.
                 let src = self.dag.operand(value, 0);
                 let (slot, store, cell) = self.store_to_slot(src);
                 let info = super::dag::MemInfo {
@@ -3207,7 +3212,10 @@ impl<'a> TypeLegalizer<'a> {
         if super::known_bits::masked_value_is_zero(self.dag, lhs, high_mask)
             && super::known_bits::masked_value_is_zero(self.dag, rhs, high_mask)
             && !self.product_fits(lhs, rhs, bits)
-            && ![lhs, rhs].into_iter().filter_map(|one| self.dag.constant(one)).any(|c| self.tli.multiply_by_constant_stays_inline(c))
+            && ![lhs, rhs]
+                .into_iter()
+                .filter_map(|one| self.dag.constant(one))
+                .any(|c| self.tli.multiply_by_constant_stays_inline(c))
             && let Some(name) = self.tli.libcall_name(ISD::UMulLoHi, half)
         {
             let vt = self.dag.value_type(value);
@@ -3223,13 +3231,18 @@ impl<'a> TypeLegalizer<'a> {
         {
             return Ok(pair);
         }
-        // DEVIATE: the same call for two sign-extended operands, to the target's `SMulLoHi` routine (AVR libgcc's
-        // `__mulhisi3`). The pin has no routine to call; without this the product is the 32 x 32 `__mulsi3` (bench dot:
-        // 7.3M T against SDCC's 3.3M). Exit: none.
+        // DEVIATE: the same call for two sign-extended operands, to the
+        // target's `SMulLoHi` routine (AVR libgcc's `__mulhisi3`). The
+        // pin has no routine to call; without this the product is the 32 x 32
+        // `__mulsi3` (bench dot: 7.3M T against SDCC's 3.3M). Exit:
+        // none.
         if super::known_bits::max_significant_bits(self.dag, lhs) <= bits
             && super::known_bits::max_significant_bits(self.dag, rhs) <= bits
             && !self.product_fits(lhs, rhs, bits)
-            && ![lhs, rhs].into_iter().filter_map(|one| self.dag.constant(one)).any(|c| self.tli.multiply_by_constant_stays_inline(c))
+            && ![lhs, rhs]
+                .into_iter()
+                .filter_map(|one| self.dag.constant(one))
+                .any(|c| self.tli.multiply_by_constant_stays_inline(c))
             && let Some(name) = self.tli.libcall_name(ISD::SMulLoHi, half)
         {
             let vt = self.dag.value_type(value);
@@ -3514,8 +3527,9 @@ impl<'a> TypeLegalizer<'a> {
         };
         // A dword divisor's size form always does two `div`s: -Os only, -O1
         // keeps the clocks.
-        // DEVIATE DIV-HOT (owner x86-m32, exit 2026-11-24): in a block that runs more than once a
-        // call the speed routine, whose bytes the module pays once.
+        // DEVIATE DIV-HOT (owner x86-m32, exit 2026-11-24): in a block that
+        // runs more than once a call the speed routine, whose bytes the
+        // module pays once.
         let hot = self.tli.fast_divide_in_loops() && self.dag.config().block_frequency > 1.0;
         let small = (self.tli.small_divide() && (wide || self.tli.size_only()) && !hot)
             .then(|| arch.divide_routine_small(signed, wide, used).ok())
@@ -3609,8 +3623,9 @@ impl<'a> TypeLegalizer<'a> {
             && info.mem_vt.size_in_bits() > half.size_in_bits()
             && !self.dag.config().big_endian
         {
-            // `ExpandIntRes_LOAD`, an extending load from memory wider than the half: the low half
-            // is a plain load, the high an extending load of the bits left over at +half.
+            // `ExpandIntRes_LOAD`, an extending load from memory wider than the
+            // half: the low half is a plain load, the high an
+            // extending load of the bits left over at +half.
             let lo = self.dag.get_load(half, chain, ptr, super::dag::MemInfo { ext: None, mem_vt: half, ..info });
             let excess = EVT::integer(info.mem_vt.size_in_bits() - half.size_in_bits());
             let high_ptr = self.address_plus(ptr, u128::from(half.size_in_bits() / 8));

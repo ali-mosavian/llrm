@@ -11,8 +11,8 @@ use llrm_arm64::machine::Platform;
 /// it keeps a conditional branch (two before: the vector loop's too).
 #[test]
 fn a_vector_loop_with_a_compare_and_a_mask_extension_is_unrolled() {
-    let asm = driver::assembly(include_str!("data/vector_compare_unroll.ll"), Platform::Linux, Level::O2)
-        .expect("lowers");
+    let asm =
+        driver::assembly(include_str!("data/vector_compare_unroll.ll"), Platform::Linux, Level::O2).expect("lowers");
     let branches = asm.lines().filter(|line| line.starts_with("\tb.")).count();
     assert_eq!(branches, 1, "{asm}");
 }

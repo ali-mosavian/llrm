@@ -1,4 +1,5 @@
-//! Two functions of one body are one function at every level but -O0 (`MergeFunctions` at -Os/-Oz, the local drop elsewhere).
+//! Two functions of one body are one function at every level but -O0
+//! (`MergeFunctions` at -Os/-Oz, the local drop elsewhere).
 
 use llrm_z80::compile::text;
 use llrm_z80::driver::{Level, Request};
@@ -21,8 +22,9 @@ fn callees(level: Level) -> Vec<String> {
     out.lines().filter_map(|line| line.trim().strip_prefix("call ")).map(str::to_owned).collect()
 }
 
-/// shl_long_by_one -Os kept `twice` and `twice_signed`, two copies of `add hl, hl; rl e; rl d; ret`: 150 B against
-/// SDCC's 147. Both calls name one function.
+/// shl_long_by_one -Os kept `twice` and `twice_signed`, two copies of `add hl,
+/// hl; rl e; rl d; ret`: 150 B against SDCC's 147. Both calls name one
+/// function.
 #[test]
 fn two_functions_of_one_body_are_one_at_the_size_levels() {
     for level in [Level::Os, Level::Oz] {
@@ -33,8 +35,9 @@ fn two_functions_of_one_body_are_one_at_the_size_levels() {
     }
 }
 
-/// signbit_idioms -O2/-O3 kept `bit_i16` beside `ge_i16`, the same code (+162 B over -O1, no clocks gained): a copy is
-/// one call either way, so the speed levels drop a local duplicate as -O1 does.
+/// signbit_idioms -O2/-O3 kept `bit_i16` beside `ge_i16`, the same code (+162 B
+/// over -O1, no clocks gained): a copy is one call either way, so the speed
+/// levels drop a local duplicate as -O1 does.
 #[test]
 fn the_speed_levels_drop_a_local_duplicate_too() {
     for level in [Level::O2, Level::O3] {
@@ -45,8 +48,9 @@ fn the_speed_levels_drop_a_local_duplicate_too() {
     }
 }
 
-/// shl_long_by_one -O1 kept `twice` and `twice_signed` (151 B against SDCC's 147): a local function of the same body
-/// as another is dropped at -O1 too, where no thunk is written (a thunk saves bytes and costs a `jmp`).
+/// shl_long_by_one -O1 kept `twice` and `twice_signed` (151 B against SDCC's
+/// 147): a local function of the same body as another is dropped at -O1 too,
+/// where no thunk is written (a thunk saves bytes and costs a `jmp`).
 #[test]
 fn at_o1_a_local_duplicate_is_dropped_and_an_external_one_is_not_thunked() {
     let calls = callees(Level::O1);

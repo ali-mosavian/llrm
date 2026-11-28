@@ -1957,10 +1957,10 @@ fn test_a_tied_instruction_reads_the_copy_for_every_use_of_its_source() {
     assert_eq!(add.operands, vec![Operand::Def(v(1)), Operand::Use(v(1)), Operand::Use(v(1))], "{:?}", add.operands);
 }
 
-/// A value copied from another and live across a call is stored from the other's
-/// register; the copy goes (`TargetInstrInfo::foldMemoryOperand`: "straight COPY
-/// may fold as load/store"). arm64 `jpeg_single` -Os kept `mov x10, x9; str x10,
-/// [sp, #88]` fifteen times where the pin stores `x9`.
+/// A value copied from another and live across a call is stored from the
+/// other's register; the copy goes (`TargetInstrInfo::foldMemoryOperand`:
+/// "straight COPY may fold as load/store"). arm64 `jpeg_single` -Os kept `mov
+/// x10, x9; str x10, [sp, #88]` fifteen times where the pin stores `x9`.
 #[test]
 fn test_a_copy_whose_value_is_spilled_is_folded_into_the_store() {
     let mut f = MFunction::<()>::new("fold");
@@ -2092,7 +2092,8 @@ fn test_a_tie_is_numbered_after_a_dropped_reserved_operand() {
     write_back.ties = vec![(0, 2)];
     let mut f = MFunction::<()>::new("wb");
     f.classes = vec![(); 2];
-    f.blocks = vec![Block { id: 0, insts: vec![op("load", vec![Operand::Def(v(1))]), write_back, ret()], ..Block::default() }];
+    f.blocks =
+        vec![Block { id: 0, insts: vec![op("load", vec![Operand::Def(v(1))]), write_back, ret()], ..Block::default() }];
     let converted = to_lir::<Flat>(&f, regs()).expect("converts");
     let what = converted.body.blocks[0].insns[1].what.as_ref().expect("semantics");
     assert_eq!(what.sources.len(), 1, "the reserved register is no source");
@@ -2107,7 +2108,11 @@ fn test_a_tie_with_nothing_dropped_keeps_its_operand_numbers() {
     add.ties = vec![(0, 2)];
     let mut f = MFunction::<()>::new("add");
     f.classes = vec![(); 3];
-    f.blocks = vec![Block { id: 0, insts: vec![op("load", vec![Operand::Def(v(1))]), op("load", vec![Operand::Def(v(2))]), add, ret()], ..Block::default() }];
+    f.blocks = vec![Block {
+        id: 0,
+        insts: vec![op("load", vec![Operand::Def(v(1))]), op("load", vec![Operand::Def(v(2))]), add, ret()],
+        ..Block::default()
+    }];
     let converted = to_lir::<Flat>(&f, regs()).expect("converts");
     let what = converted.body.blocks[0].insns[2].what.as_ref().expect("semantics");
     assert_eq!(what.tied, Some(vec![(1, 0)]));
@@ -2117,8 +2122,8 @@ fn test_a_tie_with_nothing_dropped_keeps_its_operand_numbers() {
     assert_eq!(converted.body.blocks[0].insns[2].what.as_ref().expect("semantics").tied, None, "no ties: the rows say");
 }
 
-/// A diamond whose head writes ebx, an arm that also writes it when `arm_writes`,
-/// and a join that reads it.
+/// A diamond whose head writes ebx, an arm that also writes it when
+/// `arm_writes`, and a join that reads it.
 fn ebx_across_a_diamond(arm_writes: bool) -> MFunction<()> {
     let mut f = MFunction::<()>::new("diamond");
     f.classes = vec![(); 1];
@@ -2176,14 +2181,19 @@ fn compare_then(read: bool) -> MFunction<()> {
     } else {
         op("copy_of", vec![Operand::Def(v(1)), Operand::Use(v(0))])
     };
-    f.blocks = vec![Block { id: 0, insts: vec![op("load", vec![Operand::Def(v(0))]), compare, save, ret()], ..Block::default() }];
+    f.blocks = vec![Block {
+        id: 0,
+        insts: vec![op("load", vec![Operand::Def(v(0))]), compare, save, ret()],
+        ..Block::default()
+    }];
     f
 }
 
 /// An instruction that `sets_flags` leaves the flags register a value where a
 /// later instruction of its block reads that register by name: the read saw
-/// none and was refused as crossing blocks (`CCR_SAVE` in word_compare_branches,
-/// at three levels). The value is last in the lists, after the instruction's own.
+/// none and was refused as crossing blocks (`CCR_SAVE` in
+/// word_compare_branches, at three levels). The value is last in the lists,
+/// after the instruction's own.
 #[test]
 fn test_a_flag_setter_leaves_the_value_a_named_read_sees() {
     let converted = llrm_spike_mf::tolir::to_ssa_lir::<Flat>(&compare_then(true), regs()).expect("converts");

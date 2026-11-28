@@ -1059,7 +1059,6 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             }
             // `SDLoc(N)`: what the combine makes takes the node's order.
             self.dag.cur_order = self.dag.node(SDValue { node: n, res: 0 }).order;
-            let before = self.dag.node_count();
             let result = self.combine(SDValue { node: n, res: 0 });
             self.queue_survivors();
             for (old, new) in self.dag.take_replacements() {

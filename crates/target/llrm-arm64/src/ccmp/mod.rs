@@ -253,7 +253,7 @@ impl CmpConv {
     }
 
     /// `canConvert`: whether the sub-CFG headed by `head` can be converted.
-    pub fn can_convert(
+    pub(crate) fn can_convert(
         function: &MFunc,
         cfg: &Cfg,
         head: usize,
@@ -334,7 +334,7 @@ impl CmpConv {
     }
 
     /// `convert`: the cmp block goes into the head. The block removed.
-    pub fn convert(
+    pub(crate) fn convert(
         &self,
         function: &mut MFunc,
         cfg: &mut Cfg,
@@ -422,8 +422,8 @@ impl CmpConv {
     }
 }
 
-/// `shouldConvert`: whether the model says the `ccmp` is worth the branch it
-/// takes out.
+// `shouldConvert`: whether the model says the `ccmp` is worth the branch it
+// takes out.
 thread_local! {
     static METRICS_BUILT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }

@@ -493,8 +493,7 @@ impl<'a, L: Layout> Placer<'a, L> {
         // 2026-11-28. Off unless the layout asks.
         let removes_jumps = self.layout.gains_remove_jumps();
         let saves = |block: usize| !removes_jumps || self.layout.successors(block).len() == 1;
-        let back_edge =
-            if saves(new_top) { self.edge_frequency(new_top, old_top) } else { BlockFrequency(0) };
+        let back_edge = if saves(new_top) { self.edge_frequency(new_top, old_top) } else { BlockFrequency(0) };
         let mut best_pred = None;
         let mut from_pred = BlockFrequency(0);
         for &pred in self.layout.predecessors(new_top) {

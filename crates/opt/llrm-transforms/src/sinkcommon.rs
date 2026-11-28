@@ -9,11 +9,12 @@
 //! columns whose sinking would need more than one new phi stay, from the first
 //! that does. Where the target prices a phi (`Tuning::sink_common_phi_cost`,
 //! `sink_pays`) the sink is made only if the instructions it drops outnumber
-//! the moves of its phis, one per predecessor each. If some predecessor does not end in a jump the predecessors that
-//! do are first given a block of their own to sink into (`.sink.split`), and
-//! that only when a column holds something that cannot be run speculatively.
-//! Each column is then one instruction at the start of the block, its
-//! differing operands phis (`sink_last_instruction`).
+//! the moves of its phis, one per predecessor each. If some predecessor does
+//! not end in a jump the predecessors that do are first given a block of their
+//! own to sink into (`.sink.split`), and that only when a column holds
+//! something that cannot be run speculatively. Each column is then one
+//! instruction at the start of the block, its differing operands phis
+//! (`sink_last_instruction`).
 //!
 //! # Example
 //! The add both arms end with runs once in the join:
@@ -46,9 +47,10 @@
 //!   attribute; the intrinsic cases for variadic parameters, `gcroot` and
 //!   `threadlocal_address` are not in the MIR.
 //! - D4. No `llvm.experimental.deoptimize`.
-//! - D5. Priced (M16-KEEPDISP-1, closed): on a target whose accesses fold a constant offset
-//!   (`constant_offset_phi_is_cheap` false) a phi of such offsets is priced
-//!   (`displacement_sink_pays`), not sunk always as the pin does.
+//! - D5. Priced (M16-KEEPDISP-1, closed): on a target whose accesses fold a
+//!   constant offset (`constant_offset_phi_is_cheap` false) a phi of such
+//!   offsets is priced (`displacement_sink_pays`), not sunk always as the pin
+//!   does.
 //! - D6. The pin sinks only after SROA. Where the target sinks at size in the
 //!   early slots too (`Tuning::sink_common_at_size`), a load or store whose
 //!   pointer needs a phi and is an alloca's is left (`points_into_alloca`):
@@ -225,7 +227,11 @@ pub(crate) fn can_replace_operand_with_variable(
 }
 
 /// Whether `operand` is an alloca, through casts and all-zero GEPs (D6).
-fn points_into_alloca(context: &Context, function: &Function, mut operand: Operand) -> bool {
+fn points_into_alloca(
+    context: &Context,
+    function: &Function,
+    mut operand: Operand,
+) -> bool {
     loop {
         let Operand::Value(value) = operand else { return false };
         let ValueDef::Instruction(def) = function.value(value).def else { return false };
@@ -234,9 +240,12 @@ fn points_into_alloca(context: &Context, function: &Function, mut operand: Opera
             Opcode::Alloca { .. } => return true,
             Opcode::Cast(CastOp::BitCast) => instruction.operands[0],
             Opcode::GetElementPtr { .. }
-                if instruction.operands[1..].iter().all(
-                    |&one| matches!(one, Operand::Constant(id) if matches!(context.get(id).kind, ConstantKind::Int(0))),
-                ) =>
+                if instruction.operands[1..].iter().all(|&one| {
+                    matches!(
+                        one,
+                        Operand::Constant(id) if matches!(context.get(id).kind, ConstantKind::Int(0))
+                    )
+                }) =>
             {
                 instruction.operands[0]
             }
@@ -321,7 +330,10 @@ fn can_sink(
             continue;
         }
         // D6: SROA cannot speculate through a select of allocas.
-        if matches!(function.instruction(first).opcode, Opcode::Load { .. } | Opcode::Store { .. })
+        if matches!(
+            function.instruction(first).opcode,
+            Opcode::Load { .. } | Opcode::Store { .. }
+        )
             && insts
                 .iter()
                 .any(|&inst| points_into_alloca(context, function, function.instruction(inst).operands[index]))
@@ -543,8 +555,7 @@ fn sink_pays(
     for column in columns {
         to_sink.extend(column.iter().copied());
     }
-    let phis: usize =
-        columns.iter().map(|column| column_phis(function, phi_operands, column, &to_sink).0).sum();
+    let phis: usize = columns.iter().map(|column| column_phis(function, phi_operands, column, &to_sink).0).sum();
     (arms - 1) * columns.len() > phi_cost * arms * phis
 }
 

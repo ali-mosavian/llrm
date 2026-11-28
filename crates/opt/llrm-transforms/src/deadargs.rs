@@ -122,11 +122,13 @@ fn removed_among(
     for &id in only.iter().filter(|id| !refused.contains(id)) {
         let Some(calls) = sites.get(&id) else { continue };
         let own_calls = calls.iter().filter(|&&(caller, _)| caller == id).count();
-        if own_calls < match calls_of {
-            SelfCalls::No => 0,
-            SelfCalls::Any => 1,
-            SelfCalls::Tree => 2,
-        } {
+        if own_calls
+            < match calls_of {
+                SelfCalls::No => 0,
+                SelfCalls::Any => 1,
+                SelfCalls::Tree => 2,
+            }
+        {
             continue;
         }
         let gone = dead(module, id);
@@ -182,10 +184,13 @@ fn removed_among(
         unsound.insert(id);
         changed.insert(id);
     }
-    // The new function takes the uses of the old one's other parameters one at a
-    // time, so each list comes out reversed, once however much was removed.
+    // The new function takes the uses of the old one's other parameters one at
+    // a time, so each list comes out reversed, once however much was
+    // removed.
     for id in rebuilt {
-        let GlobalKind::Function(function) = &mut module.globals[id.0 as usize].kind else { unreachable!("a function") };
+        let GlobalKind::Function(function) = &mut module.globals[id.0 as usize].kind else {
+            unreachable!("a function")
+        };
         for parameter in function.parameters().to_vec() {
             function.reverse_uses(parameter);
         }
@@ -254,8 +259,10 @@ fn dead_returns(module: &Module) -> BTreeSet<GlobalId> {
         let mut through = Some(BTreeSet::new());
         'sites: for &(caller, call) in &sites[&id] {
             let function = module.global(caller).function().expect("a caller");
-            if matches!(&function.instruction(call).opcode, Opcode::Call(info) if info.tail == llrm_mir::opcode::Tail::MustTail)
-            {
+            if matches!(
+                &function.instruction(call).opcode,
+                Opcode::Call(info) if info.tail == llrm_mir::opcode::Tail::MustTail
+            ) {
                 through = None;
                 break;
             }
@@ -282,20 +289,30 @@ fn dead_returns(module: &Module) -> BTreeSet<GlobalId> {
     candidates.difference(&live).copied().collect()
 }
 
-/// `HasLiveReturnedArg` (DeadArgumentElimination.cpp, `removeDeadStuffFromFunction`):
-/// a function whose live parameter is `returned` keeps its return value, as
-/// `returned` is meaningless on a function returning void (the pin's verifier
-/// rejects it) and code generation may use it across calls.
+/// `HasLiveReturnedArg` (DeadArgumentElimination.cpp,
+/// `removeDeadStuffFromFunction`): a function whose live parameter is
+/// `returned` keeps its return value, as `returned` is meaningless on a
+/// function returning void (the pin's verifier rejects it) and code generation
+/// may use it across calls.
 fn has_live_returned_argument(
     module: &Module,
     id: GlobalId,
 ) -> bool {
     let function = module.global(id).function().expect("a function");
     let unread = dead(module, id);
-    function.parameter_attrs.iter().enumerate().any(|(index, attrs)| {
-        !unread.contains(&index)
-            && attrs.iter().any(|attr| matches!(attr, llrm_mir::opcode::Attribute::Flag(name) if name == "returned"))
-    })
+    function
+        .parameter_attrs
+        .iter()
+        .enumerate()
+        .any(
+            |(index, attrs)| !unread.contains(&index)
+                && attrs.iter().any(|attr| {
+                    matches!(
+                        attr,
+                        llrm_mir::opcode::Attribute::Flag(name) if name == "returned"
+                    )
+                }),
+        )
 }
 
 /// The parameters of `id` nothing reads but its own calls to itself, each as

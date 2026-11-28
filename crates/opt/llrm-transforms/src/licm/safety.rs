@@ -16,8 +16,8 @@ use super::calls;
 /// What [`LoopSafety`] has found of one loop, kept across its queries: the pin
 /// computes one `ICFLoopSafetyInfo` per `runOnLoop` and updates it as
 /// instructions move (`insertInstructionTo`, `removeInstruction`). Nothing here
-/// is updated, so the owner calls [`clear`](Self::clear) after every edit of the
-/// function or of its accesses.
+/// is updated, so the owner calls [`clear`](Self::clear) after every edit of
+/// the function or of its accesses.
 #[derive(Default)]
 pub struct SafetyMemo {
     first_icf: RefCell<IdMap<BlockId, Option<usize>>>,
@@ -71,17 +71,7 @@ impl<'a> LoopSafety<'a> {
         shape: &'a Shape,
         memo: &'a SafetyMemo,
     ) -> Self {
-        let safety = Self {
-            context,
-            layout,
-            function,
-            accesses,
-            outer,
-            loop_,
-            shape,
-            memo,
-            allow_speculation: true,
-        };
+        let safety = Self { context, layout, function, accesses, outer, loop_, shape, memo, allow_speculation: true };
         if memo.may_throw.get().is_none() {
             memo.scans.set(memo.scans.get() + 1);
             memo.may_throw.set(Some(loop_.body.iter().any(|&at| safety.block_may_throw(cfg::block(at)))));
