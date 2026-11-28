@@ -676,7 +676,7 @@ impl super::splitkit::SplitEnv for BodySplitEnv<'_> {
         beside: Option<&Insn>,
         entering: bool,
     ) -> Option<Arc<Insn>> {
-        use crate::model::ir::{Held, Loc, Operation, Semantics};
+        use crate::model::ir::{Loc, Operation};
         if !self.tii.remat_shape(def) || !def.uses.is_empty() {
             return None;
         }
