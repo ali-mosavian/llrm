@@ -38,3 +38,23 @@ fn the_object_writers_refuse_a_register_of_the_other_bank() {
     assert!(encode_final(&compare(reg::D6)).is_ok());
     assert!(encode_final(&compare(reg::A6)).is_err(), "%a6 was written as %d6");
 }
+
+/// A compare's register widened for `cmpa.l` stayed either-class when
+/// `scale_indexes` made the compare a scaled form, which has no `cmpa` row:
+/// it was allocated `%a1` and the object writer refused the function
+/// (Huffman decode loop, 68020 -O0; before the refusal, wrong code).
+#[test]
+fn a_compare_made_scaled_keeps_its_register_in_a_data_register() {
+    let ir = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/data/scaled_compare.ll");
+    for kind in ["-S", "-c"] {
+        let out = Command::new(env!("CARGO_BIN_EXE_llrm-m68k-llc"))
+            .args([kind, "-O0", "-mcpu=68020", "-o", "-", ir])
+            .output()
+            .expect("runs");
+        assert!(out.status.success(), "{kind}: {}", String::from_utf8_lossy(&out.stderr));
+        if kind == "-S" {
+            let text = String::from_utf8_lossy(&out.stdout);
+            assert!(text.contains("*4"), "premise: a scaled compare:\n{text}");
+        }
+    }
+}

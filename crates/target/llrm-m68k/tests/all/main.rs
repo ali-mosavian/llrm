@@ -287,6 +287,7 @@ mod returns_twice;
 mod rint_libcall;
 mod rmw_indexed;
 mod rmw_register;
+mod scaled_compare_bank;
 mod scaled_index;
 mod scaled_rows;
 mod scc_bool_byte;
