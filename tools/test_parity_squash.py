@@ -1558,8 +1558,10 @@ def test_a_stale_generated_page_is_synced_and_committed_not_refused(tmp_path):
     assert "docs/a.md" in refused("5131") and ps.docs_stale(tmp_path) == {"docs/a.md"} and not refused.synced, "a failed sync still refuses and resets"
 
 
-def test_the_append_only_rows_table_merges_without_a_conflict_when_two_prs_add_rows(tmp_path):
-    """Two PRs each adding a row at the end of docs/working/above-main-rows.md conflicted (#5282, #5156, #5242, #5294): the repo's .gitattributes says merge=union for it."""
+def test_two_prs_adding_rows_at_one_place_conflict_and_rows_apart_merge_clean(tmp_path):
+    """The rows table merged by union, which brought back rows a merged PR had deleted (#10966 removed it). Two PRs adding a row at one place now conflict, as
+    any same-line edit does; rows added apart still merge clean."""
+
     def git(*args):
         return subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", *args], cwd=tmp_path, capture_output=True, text=True)
 
@@ -1567,17 +1569,22 @@ def test_the_append_only_rows_table_merges_without_a_conflict_when_two_prs_add_r
     (tmp_path / "docs/working").mkdir(parents=True)
     (tmp_path / ".gitattributes").write_text((ps.ROOT / ".gitattributes").read_text())
     table = tmp_path / "docs/working/above-main-rows.md"
-    table.write_text("| row | n |\n| a | 1 |\n")
+    table.write_text("| row | n |\n| a | 1 |\n| m | 5 |\n| n | 6 |\n| o | 7 |\n| z | 9 |\n")
     git("add", ".")
     git("commit", "-qm", "base")
-    for name, row in (("one", "| b | 2 |\n"), ("two", "| c | 3 |\n")):
-        git("checkout", "-q", "-b", name, "main")
-        table.write_text(table.read_text() + row)
-        git("commit", "-qam", name)
-    git("checkout", "-q", "one")
-    merged = git("merge", "--no-edit", "two")
-    assert merged.returncode == 0, merged.stdout + merged.stderr
-    assert "| b | 2 |" in table.read_text() and "| c | 3 |" in table.read_text()
+
+    def merged(edits):
+        for name, (after, row) in edits.items():
+            git("checkout", "-q", "-B", name, "main")
+            table.write_text(table.read_text().replace(after, after + row))
+            git("commit", "-qam", name)
+        git("checkout", "-q", "one")
+        done = git("merge", "--no-edit", "two")
+        git("merge", "--abort")
+        return done.returncode == 0
+
+    assert not merged({"one": ("| a | 1 |\n", "| b | 2 |\n"), "two": ("| a | 1 |\n", "| c | 3 |\n")}), "one place: a conflict"
+    assert merged({"one": ("| a | 1 |\n", "| b | 2 |\n"), "two": ("| z | 9 |\n", "| c | 3 |\n")}), "apart: clean"
 
 
 def test_a_head_that_leaves_a_page_stale_is_synced_on_its_branch_before_the_squash(tmp_path):
