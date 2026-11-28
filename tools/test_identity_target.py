@@ -4,6 +4,7 @@ import os
 import subprocess
 import tempfile
 import unittest
+import unittest.mock
 
 TOOLS = os.path.dirname(os.path.abspath(__file__))
 
@@ -32,7 +33,8 @@ class IdentityTarget(unittest.TestCase):
         return subprocess.run(
             [os.path.join(TOOLS, "identity.sh"), "c", os.path.join(self.d, "base", "llrm-cc"), os.path.join(self.d, "new", "llrm-cc"), *flag],
             capture_output=True, text=True, cwd=self.d,
-            env={**os.environ, "LLRM_EXPECT_BASE_SHA": "aaaa1111", "LLRM_EXPECT_SHA": "aaaa1111", "IDENTITY_SAME_LLC": same_llc, "TARGET_LOG": self.log, "AB_ALLOW_ENV": "TARGET_LOG"},
+            # Only what a shell needs: the caller's pipeline settings (the runner's LLRM_OW) are refused by ab_env.
+            env={"PATH": os.environ["PATH"], "HOME": os.environ.get("HOME", self.d), "LLRM_EXPECT_BASE_SHA": "aaaa1111", "LLRM_EXPECT_SHA": "aaaa1111", "IDENTITY_SAME_LLC": same_llc, "TARGET_LOG": self.log, "AB_ALLOW_ENV": "TARGET_LOG"},
         )
 
     def targets(self):
@@ -61,6 +63,13 @@ class IdentityTarget(unittest.TestCase):
         """Only -m16/-m32/-m64 were accepted: a dos, bcc or m68k identity run had no way to name its target."""
         done = self.identity("x86_32-dos")
         self.assertEqual(self.targets(), {"x86_32-dos"}, done.stdout + done.stderr)
+
+    def test_the_callers_pipeline_settings_do_not_reach_the_run(self):
+        """The landing runner exports LLRM_OW and LLRM_MEASURE_REF; ab_env refused them before the stub compiled, and #10970 was refused for a missing `targets` log."""
+        with unittest.mock.patch.dict(os.environ, {"LLRM_OW": "/nowhere", "LLRM_MEASURE_REF": "origin/release/next"}):
+            done = self.identity("x86_32-dos")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertEqual(self.targets(), {"x86_32-dos"})
 
     def test_an_unknown_row_is_refused(self):
         done = self.identity("x86_99-nowhere")
