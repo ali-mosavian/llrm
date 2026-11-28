@@ -36,7 +36,7 @@ const NARROWEST: u32 = 16;
 
 /// The widest result a chain is narrowed to: an operation whose result fits 16
 /// or 32 bits is done at that width (the module's rule); a wider one keeps the
-/// counter's type.
+/// counter's type. No pin twin: part of DEVIATE LV-NARROW-IV.
 const WIDEST: u32 = 32;
 
 /// The lane a chain of `bits` is narrowed to: not under the narrowest access of
