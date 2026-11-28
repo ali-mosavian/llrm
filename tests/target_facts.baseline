@@ -3,6 +3,7 @@
 # 2026-11-08, exit 2026-11-22 (owner moves each):
 # masm.rs +4 body.bits == 32: m32 (#8347).
 # 2026-11-18, exit 2026-11-24 (owner w9, moves each): copies landed without a bump: constrain, codetables, objbuild, checkedconv, statustest, knownzero, floatslotcopy, fixupbw +2, peephole +1, tii +1, vectorlower, loopvectorize, rangesplit, slpreduction, aarch64 predicates/apple_m1, tools/{ab/object_bytes,dagisel/schedtable,m68k_corpus_matrix,objcmp}.py.
+# 2026-11-28, exit 2026-12-12 (owner w9): came in through oversight's old lanes, which skipped this check. intrinsics.rs: Asm check's block.bits >= 32 (MIR has no target handle; #10818). tools/bench/modelclk.py: iced_x86 decoder (#10764).
 1 crates/backend/llrm-dagisel-gen/src/inc.rs
 8 crates/backend/llrm-dagisel-gen/src/main.rs
 4 crates/backend/llrm-dagisel/src/aarch64_predicates.rs
@@ -82,6 +83,7 @@
 1 crates/ir/llrm-lir/src/flag.rs
 3 crates/ir/llrm-lir/src/registers.rs
 1 crates/ir/llrm-mir/src/interpret.rs
+1 crates/ir/llrm-mir/src/intrinsics.rs
 1 crates/ir/llrm-mir/src/libfunc.rs
 1 crates/opt/llrm-analysis/src/generated.rs
 1 crates/opt/llrm-transforms/src/loopvectorize.rs
@@ -100,6 +102,7 @@
 7 tools/analysis/runtime_writes.py
 1 tools/bench/flatcount.py
 3 tools/bench/maps.py
+1 tools/bench/modelclk.py
 2 tools/dagisel/schedtable.py
 2 tools/debug-matrix.py
 9 tools/e2e/mkgolden.py
