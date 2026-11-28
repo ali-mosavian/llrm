@@ -46,6 +46,12 @@ class Counts:
     # `pad_nops` are the executed ones, read from the bytes (`0E E8 rel16 90`); `clocks` stays raw, `layout_clocks` is it without them.
     pad_nops: int = 0
     pad_clocks: int = 0
+    # Executed operands that cross a dword boundary: the 486 adds 3 clocks to each (i486 data sheet 240440-002, 10.1, assumption 2).
+    # Not in `clocks`, which assumes every access aligned as vsgcc's table does.
+    misaligned: int = 0
+    # The same on the P5's 64-bit bus, 3 clocks each too (Pentium Developer's Manual Vol. 3, 24.2.2): a 2- or 4-byte operand across
+    # a 4-byte boundary, an 8-byte one across an 8-byte boundary (p. 3-6); a 10-byte one as its 8 and 2 bytes.
+    misaligned_p5: int = 0
 
     @property
     def layout_clocks(self) -> int:
@@ -81,16 +87,42 @@ class Run:
 _NAME = {value: name for name, value in vars(Register).items() if name.isupper() and isinstance(value, int)}  # iced's Register is a module of ints
 
 
-def _segmented(uc, one):
-    """The multiplier of a MUL/IMUL whose operand is memory, read the way real mode addresses it: the effective segment register's base plus the
-    16-bit (or, with an address-size prefix, 32-bit) offset, and the operand's own width (vsgcc's reader takes 4 flat bytes of a 32-bit form)."""
+def _linear(uc, one):
+    """The linear address of `one`'s memory operand, the way real mode addresses it: the effective segment register's base plus the 16-bit
+    (or, with an address-size prefix, 32-bit) offset."""
     offset = one.memory_displacement
     for register, scale in ((one.memory_base, 1), (one.memory_index, one.memory_index_scale)):
         if register != Register.NONE:
             offset += uc.reg_read(getattr(x86_const, f"UC_X86_REG_{_NAME[register]}")) * scale
     wide = any(RegisterExt.is_gpr32(r) for r in (one.memory_base, one.memory_index))
     segment = uc.reg_read(getattr(x86_const, f"UC_X86_REG_{_NAME[one.memory_segment]}"))
-    return int.from_bytes(bytes(uc.mem_read(segment * 16 + (offset & (0xFFFFFFFF if wide else 0xFFFF)), MemorySizeExt.size(one.memory_size))), "little")
+    return segment * 16 + (offset & (0xFFFFFFFF if wide else 0xFFFF))
+
+
+def _segmented(uc, one):
+    """The multiplier of a MUL/IMUL whose operand is memory, read through its segment (_linear) at the operand's own width (vsgcc's reader
+    takes 4 flat bytes of a 32-bit form)."""
+    return int.from_bytes(bytes(uc.mem_read(_linear(uc, one), MemorySizeExt.size(one.memory_size))), "little")
+
+
+def _crosses(at: int, size: int, unit: int) -> bool:
+    """Whether `size` bytes at `at` touch more `unit`-byte units than their size needs."""
+    at %= unit
+    return (at + size + unit - 1) // unit > (size + unit - 1) // unit
+
+
+def _misaligned(uc, one) -> tuple[bool, bool]:
+    """Whether `one`'s explicit memory operand is misaligned on the 486 (more dwords than its size needs) and on the P5 (an 8-byte
+    part across an 8-byte boundary, or what is left of it, under 8 bytes, across a 4-byte one)."""
+    if one.mnemonic == Mnemonic.LEA or not any(one.op_kind(at) == OpKind.MEMORY for at in range(one.op_count)):
+        return False, False
+    size = MemorySizeExt.size(one.memory_size)
+    if size < 2:
+        return False, False
+    at = _linear(uc, one)
+    eights, rest = divmod(size, 8)
+    p5 = any(_crosses(at + 8 * part, 8, 8) for part in range(eights)) or (rest > 1 and _crosses(at + 8 * eights, rest, 4))
+    return _crosses(at, size, 4), p5
 
 
 def _multiplier(multiplier_of, uc, one):
@@ -207,6 +239,10 @@ def run(exe: Path, entry: int | None, cwd: Path, limit: int = LIMIT, watch: set 
         state["before"] = (address, one, memory, factor, prefixes[address])
         counts.instructions += 1
         counts.memory_operands += memory
+        if memory:
+            on486, onp5 = _misaligned(uc, one)
+            counts.misaligned += on486
+            counts.misaligned_p5 += onp5
         if address in pads:
             counts.pad_nops += 1
             counts.pad_clocks += price(one, False, True, 0, None, prefixes[address])

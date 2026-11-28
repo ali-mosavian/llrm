@@ -292,3 +292,79 @@ class FarCallPadTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+MISALIGNED = """\
+.model small
+.386
+.387
+.stack 256
+D segment para public 'FAR_DATA'
+buf db 32 dup (0)
+D ends
+.code
+start:
+    mov ax, D
+    mov ds, ax
+    mov eax, dword ptr ds:[buf+2]
+    mov eax, dword ptr ds:[buf+4]
+    mov ax, word ptr ds:[buf+3]
+    mov ax, word ptr ds:[buf+1]
+    fld qword ptr ds:[buf+2]
+    fld qword ptr ds:[buf+4]
+    fld tbyte ptr ds:[buf+8]
+    mov ah, 4Ch
+    int 21h
+end start
+"""
+
+
+@unittest.skipUnless((BIN / "jwasm").exists(), "needs jwasm and jwlink beside llrm's binaries (cargo build)")
+class MisalignedTests(unittest.TestCase):
+    def test_an_operand_that_crosses_a_dword_boundary_is_counted(self):
+        """The counts could not see a misaligned operand, so a word-aligned double cost the same as an 8-aligned one (the m16
+        global-alignment ruling, 2026-11-28). Of a paragraph-aligned buffer: the dword at +2, the word at +3 and the qword at +2
+        cross a 4-byte boundary; the dword at +4, the word at +1, the qword at +4 and the tbyte at +8 do not."""
+        with tempfile.TemporaryDirectory() as temp:
+            directory = Path(temp)
+            (directory / "M.ASM").write_text(MISALIGNED)
+            subprocess.run([str(BIN / "jwasm"), "-q", "-c", "-Cp", "-Zg", "-omf", f"-Fo{directory}/M.OBJ", str(directory / "M.ASM")], check=True)
+            subprocess.run([str(BIN / "jwlink"), "option", "quiet", "format", "dos", "name", str(directory / "M.EXE"), "file", str(directory / "M.OBJ")], check=True)
+            result = icount.run(directory / "M.EXE", None, directory, whole=True)
+        self.assertEqual((result.error, result.region.memory_operands, result.region.misaligned), ("", 7, 3))
+
+
+ACROSS_EIGHT = """\
+.model small
+.386
+.387
+.stack 256
+D segment para public 'FAR_DATA'
+buf db 32 dup (0)
+D ends
+.code
+start:
+    mov ax, D
+    mov ds, ax
+    fld qword ptr ds:[buf+4]
+    fld qword ptr ds:[buf+8]
+    mov eax, dword ptr ds:[buf+2]
+    mov ah, 4Ch
+    int 21h
+end start
+"""
+
+
+@unittest.skipUnless((BIN / "jwasm").exists(), "needs jwasm and jwlink beside llrm's binaries (cargo build)")
+class AcrossEightTests(unittest.TestCase):
+    def test_a_double_at_four_mod_eight_is_misaligned_on_the_p5_only(self):
+        """The 486 counter could not price a double at 4 mod 8 on the P5's 64-bit bus, which splits it (Pentium Developer's
+        Manual Vol. 3, p. 3-6: an 8-byte operand that crosses an 8-byte boundary). At +4: 0 on the 486, 1 on the P5; at +8: 0 on both. A
+        dword at +2, m16's word-aligned case, crosses a dword boundary on both."""
+        with tempfile.TemporaryDirectory() as temp:
+            directory = Path(temp)
+            (directory / "E.ASM").write_text(ACROSS_EIGHT)
+            subprocess.run([str(BIN / "jwasm"), "-q", "-c", "-Cp", "-Zg", "-omf", f"-Fo{directory}/E.OBJ", str(directory / "E.ASM")], check=True)
+            subprocess.run([str(BIN / "jwlink"), "option", "quiet", "format", "dos", "name", str(directory / "E.EXE"), "file", str(directory / "E.OBJ")], check=True)
+            result = icount.run(directory / "E.EXE", None, directory, whole=True)
+        self.assertEqual((result.error, result.region.misaligned, result.region.misaligned_p5), ("", 1, 2))
