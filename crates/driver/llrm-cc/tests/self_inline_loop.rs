@@ -1,7 +1,8 @@
 //! A recursion with one call of itself in a loop is copied into itself at -O3
-//! when asked with `-fipa-cp-clone` (a search that recurses on `row + 1`); x86-m32 -O3 makes no copy
-//! by default, as the pin (IPACP-O3 ended 2026-11-26). Needs the Open Watcom
-//! tree (tools/ow-fetch.sh) and the m16 clang (`LLRM_CLANG_M16`).
+//! when asked with `-fipa-cp-clone` (a search that recurses on `row + 1`);
+//! x86-m32 -O3 makes no copy by default, as the pin (IPACP-O3 ended
+//! 2026-11-26). Needs the Open Watcom tree (tools/ow-fetch.sh) and the m16
+//! clang (`LLRM_CLANG_M16`).
 
 use std::path::Path;
 use std::process::Command;
@@ -72,11 +73,11 @@ fn listing_lines(
     std::fs::read_to_string(dir.join("q.s")).unwrap().lines().count()
 }
 
-/// A recursion calling itself once in a loop was no tree, and the bar was read again on the loop
-/// that tail-call elimination leaves (22 -> 27 `gcc_insns`). With
-/// `-fipa-cp-clone` the listing is 2,583 lines, with the copy missing about
-/// 130; by default (no clone, as the pin) -O3 makes no copy and is no longer
-/// than -O2 (243).
+/// A recursion calling itself once in a loop was no tree, and the bar was read
+/// again on the loop that tail-call elimination leaves (22 -> 27 `gcc_insns`).
+/// With `-fipa-cp-clone` the listing is 2,583 lines, with the copy missing
+/// about 130; by default (no clone, as the pin) -O3 makes no copy and is no
+/// longer than -O2 (243).
 #[test]
 fn a_recursion_with_one_call_in_a_loop_is_copied_into_itself_at_o3_only_when_asked() {
     let (o2, o3, asked) =

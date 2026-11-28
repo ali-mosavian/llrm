@@ -406,7 +406,7 @@ fn plan_loop(
     // order; a driver compiles the module under it where the two differ.
     let mut alternate = (tti.lsr_alternate_order() && !crate::trial::lsr_alternate_order()).then(|| lsr.fork());
     let (mut solution, cost) = lsr.solve_with_cost(se);
-    if let Some(mut other) = alternate.take() {
+    if let Some(other) = alternate.take() {
         let (other_solution, _) = crate::trial::with_lsr_alternate_order(|| other.solve_with_cost(se));
         if other_solution != solution {
             crate::trial::note_lsr_order();

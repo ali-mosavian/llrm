@@ -43,19 +43,22 @@ pub fn scratch(text: &str) -> Vec<String> {
     order(text, "@scratch")
 }
 
-/// Whether a `@lanes bytes` line says the file's lanes are the bytes of each root.
+/// Whether a `@lanes bytes` line says the file's lanes are the bytes of each
+/// root.
 pub fn byte_lanes(text: &str) -> bool {
     order(text, "@lanes").iter().any(|word| word == "bytes")
 }
 
-/// Whether the file says its lanes are x86's table: `@lanes x86`. A file with integer views under 32 bits and
-/// none of `@lanes bytes`, `@lanes x86` and `@lanes none` is refused (`lanes::table_of`).
+/// Whether the file says its lanes are x86's table: `@lanes x86`. A file with
+/// integer views under 32 bits and none of `@lanes bytes`, `@lanes x86` and
+/// `@lanes none` is refused (`lanes::table_of`).
 pub fn lanes_x86(text: &str) -> bool {
     order(text, "@lanes").iter().any(|word| word == "x86")
 }
 
-/// Whether the file says `@lanes none`: its target reads no lanes yet, and a read (`lanes::enter`) is refused by
-/// name until the file states the lanes it needs.
+/// Whether the file says `@lanes none`: its target reads no lanes yet, and a
+/// read (`lanes::enter`) is refused by name until the file states the lanes it
+/// needs.
 pub fn lanes_none(text: &str) -> bool {
     order(text, "@lanes").iter().any(|word| word == "none")
 }

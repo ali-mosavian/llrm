@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/internalize.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/internalize.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/internalize.rs sha256:c63d89890cbe109dd59bcab9264e57a025e96307a7a14bf6fb70975cbbc4eedd -->
+<!-- src: crates/opt/llrm-transforms/src/internalize.rs sha256:6b8b067c4c3e7506d8dbfe65f6c84dd2932d0015d55b3672e745a3310b4d10db -->
 
 # internalize
 
@@ -16,7 +16,8 @@ to the pass. [`crate::globaldce`](globaldce.md) then deletes what no live code n
 which is what a linker's `--gc-sections` does for a whole program.
 
 ## Runs
-As a program pass, before GlobalDCE, where a driver compiles a whole program (the 6502 driver adds it with `main` preserved).
+As a program pass, before GlobalDCE, where a driver compiles a whole program
+(the 6502 driver adds it with `main` preserved).
 
 ## Example
 With `main` preserved, `@scale` and `@table` become internal and the next

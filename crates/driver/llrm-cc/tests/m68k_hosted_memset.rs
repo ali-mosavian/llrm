@@ -1,5 +1,6 @@
-//! m68k rows passed `-ffreestanding`, which sets `no-builtins` and turns the loop idioms off: a plain fill
-//! loop stayed a store loop (hosted-default builds form `memset`, as clang does on every hosted target).
+//! m68k rows passed `-ffreestanding`, which sets `no-builtins` and turns the
+//! loop idioms off: a plain fill loop stayed a store loop (hosted-default
+//! builds form `memset`, as clang does on every hosted target).
 
 use std::path::Path;
 use std::process::Command;

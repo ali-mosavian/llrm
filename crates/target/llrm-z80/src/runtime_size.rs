@@ -232,6 +232,7 @@ const TRAMPOLINES: [(&str, u32); 1] = [("__call_iy", 8)];
 
 /// Runtime routines compiled code never calls: other routines of the runtime
 /// reach them.
+#[cfg(test)]
 const INTERNAL: [&str; 9] =
     ["__dvr_core", "__dvr_ep", "__s_dvcore", "__s_slow", "__udivmodsi4", "absal", "abshlde", "negde", "__rt_end"];
 

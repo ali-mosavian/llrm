@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/fixednarrow.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/fixednarrow.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/fixednarrow.rs sha256:9aefb8c07c4235f6de0d295f5d72df37c5d2959c678948ad19d5e20935c6e14f -->
+<!-- src: crates/opt/llrm-transforms/src/fixednarrow.rs sha256:2900bebdd01c4d1f063ab5dbc525f1d676317fd16cd9f0d2889e7fadbe9f6fad -->
 
 # fixednarrow
 
@@ -44,10 +44,10 @@ dropped).
 ```
 
 A constant factor that is a whole `K << scale` needs no range: the product
-`x * K * 2^scale` fits 64 bits and shifts back to `x * K`, which is `mul x, K`
-at 32 bits, wrapping as the wide form's low half does.
-The pin folds only `X * (1 << scale) -> X` (`simplifyIntrinsic`) and a zero or
-undef factor; no InstCombine or DAGCombiner `smul.fix` fold takes a whole
+`x * K * 2^scale` fits 64 bits and shifts back to `x * K`, which is `mul x,
+K` at 32 bits, wrapping as the wide form's low half does.
+The pin folds only `X * (1 << scale) -> X` (`simplifyIntrinsic`) and a zero
+or undef factor; no InstCombine or DAGCombiner `smul.fix` fold takes a whole
 multiple. `smul.fix.sat` is another intrinsic and keeps its call.
 
 DEVIATE LP-3 (no pin pass: SelectionDAG expands `smul.fix`

@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/arithmetic.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/arithmetic.rs); edit the header, not this file.
-<!-- src: crates/codegen/llrm-codegen/src/backend/arithmetic.rs sha256:1607fb7d41df65c3f11904eb18940554bc7392e8f764d7cb5b97f6292c35a422 -->
+<!-- src: crates/codegen/llrm-codegen/src/backend/arithmetic.rs sha256:f217d84e2520eccf01d173ac6e684f6218f07df4bd7de1685114d1ce5e64063b -->
 
 # arithmetic
 
@@ -14,8 +14,8 @@ table's range by the multiplier's bits, else the flat `imul_r32` price.
 
 `cheapest_chain` is the cheapest sequence of `shl`, `add`, `sub`, `lea`
 and copies. Horner chains over binary and signed digits give a first
-bound. Then `synth` searches (Bernstein 1986, branch and bound): an even `t` is
-a shift of `t >> m`; an odd `t` is `t-1` or `t+1` plus or minus the
+bound. Then `synth` searches (Bernstein 1986, branch and bound): an even `t`
+is a shift of `t >> m`; an odd `t` is `t-1` or `t+1` plus or minus the
 source; a factor `2^m +- 1` is `cur + cur<<m` or `cur<<m - cur`, one
 `lea` for a scale of 2, 4 or 8. The search stops at the best cost so far
 and remembers what it found per `t`. A negative multiplier is the chain
@@ -34,8 +34,8 @@ a dword.
 Results are kept in the profile, as a multiply is asked about again and
 again.
 
-DEVIATE M1 (owner anyisa/w10, exit 2026-12-01; AM-M1, priced): the pin's X86 does a scalar constant multiply
-by `combineMul`
+DEVIATE M1 (owner anyisa/w10, exit 2026-12-01; AM-M1, priced): the pin's X86
+does a scalar constant multiply by `combineMul`
 ([X86ISelLowering.cpp#L51191](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelLowering.cpp#L51191))
 and `decomposeMulByConstant` (#L3636): a `lea` for 3, 5 and 9 (times a power
 of two) and shifts and adds for 2^n +- 1, otherwise `imul`; ours searches

@@ -43,7 +43,10 @@ fn allocations(n: usize) -> usize {
     allocations_of(n, "  %t{k} = trunc i32 %l{k} to i16\n  store i16 %t{k}, ptr %q\n")
 }
 
-fn allocations_of(n: usize, tail: &str) -> usize {
+fn allocations_of(
+    n: usize,
+    tail: &str,
+) -> usize {
     let mut text = String::from("define void @f(ptr %p, ptr %q) {\nentry:\n");
     for k in 0..n {
         text += &format!("  %l{k} = load i32, ptr %p\n{}", tail.replace("{k}", &k.to_string()));
@@ -62,7 +65,8 @@ fn test_a_trunc_costs_the_evaluator_no_allocation() {
     allocations(1);
     let (few, many) = (allocations(100), allocations(300));
     let each = (many as f64 - few as f64) / 200.0;
-    let (few, many) = (allocations_of(100, "  store i32 %l{k}, ptr %q\n"), allocations_of(300, "  store i32 %l{k}, ptr %q\n"));
+    let (few, many) =
+        (allocations_of(100, "  store i32 %l{k}, ptr %q\n"), allocations_of(300, "  store i32 %l{k}, ptr %q\n"));
     let plain = (many as f64 - few as f64) / 200.0;
     eprintln!("each {each} plain {plain}");
     assert!(each - plain < 5.0, "{} allocations per trunc beyond a plain store", each - plain);

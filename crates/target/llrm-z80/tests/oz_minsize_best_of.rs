@@ -1,10 +1,12 @@
-//! DEVIATE z80-oz-best-of: the -Os the choice weighs -Oz against is -Os as clang makes it, without `minsize`.
+//! DEVIATE z80-oz-best-of: the -Os the choice weighs -Oz against is -Os as
+//! clang makes it, without `minsize`.
 
 use llrm_z80::compile::{prepare, text_in};
 use llrm_z80::driver::{Level, Request};
 
-/// A switch with a dominant 22-case run. `minsize` stops the pin peeling it, so the whole range was one 28-entry jump
-/// table (56 B of `.dw`); -Os peels the run and tables 5. -Oz kept the table, 26 B above its own -Os, because the
+/// A switch with a dominant 22-case run. `minsize` stops the pin peeling it, so
+/// the whole range was one 28-entry jump table (56 B of `.dw`); -Os peels the
+/// run and tables 5. -Oz kept the table, 26 B above its own -Os, because the
 /// -Os it weighed carried `minsize` too.
 const IR: &str = include_str!("data/minsize_switch_table.ll");
 

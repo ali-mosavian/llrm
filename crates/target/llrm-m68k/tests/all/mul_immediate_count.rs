@@ -44,7 +44,8 @@ fn a_multiply_by_memory_is_exact_once_the_trace_fixed_its_source() {
 
 #[test]
 fn a_multiply_or_divide_bound_is_a_maximum_and_a_register_shift_is_not() {
-    // memmove_overlap 68020 O2 held two `muls.l`: the bound read `4668*` and hid a win over gcc's 8548
+    // memmove_overlap 68020 O2 held two `muls.l`: the bound read `4668*` and
+    // hid a win over gcc's 8548
     let multiply = cost_on(Cpu::M68020, "muls.l %d1, %d0", 4, false).unwrap();
     assert!(multiply.partial && multiply.maximum);
     let shift = cost_on(Cpu::M68000, "asr.l %d1, %d0", 2, false).unwrap();

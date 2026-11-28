@@ -14,7 +14,8 @@ fn at(level: Level) -> String {
 #[test]
 fn a_size_build_keeps_the_loop_compare_and_has_no_guard() {
     let out = at(Level::Os);
-    // The argument's offset depends on the registers the function saves (8 with a pushed `%d2`, 4 without).
+    // The argument's offset depends on the registers the function saves (8 with
+    // a pushed `%d2`, 4 without).
     let compares_with_the_argument =
         out.lines().any(|line| line.starts_with("\tcmp.l\t(") && line.contains(",%sp), %d"));
     assert!(compares_with_the_argument, "the loop does not compare with the argument:\n{out}");

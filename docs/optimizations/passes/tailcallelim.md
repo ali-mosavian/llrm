@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/tailcallelim.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/tailcallelim.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/tailcallelim.rs sha256:8f69e4d61c6e6616ea1f516d9995500a6d463863a1e91cd0402a47848f89d7a2 -->
+<!-- src: crates/opt/llrm-transforms/src/tailcallelim.rs sha256:1cd671ea3bb20c31a0885e25405021aaf4055f2d7c2a35a5c34ee17cdd4fa42a -->
 
 # tailcallelim
 
@@ -58,9 +58,9 @@ DEVIATE (anything MIR or Rust lacks):
     operation, an accumulator. `t = c ? a : f(..); s = c ? d : n; return t +
     s` is a loop; the pin keeps the recursion. Only where the copied
     operation reads the call's result and has no other use. Per target
-    (`Tti::eliminates_accumulator_through_join`): on where GCC is in the
-    bar (m68k, x86, arm64, 6502, z80); off for wasm, whose bar is the pin
-    alone (`recursive_stack_args` O2 388 B against 165, 2026-11-22).
+    (`Tti::eliminates_accumulator_through_join`): on where GCC is in the bar
+    (m68k, x86, arm64, 6502, z80); off for wasm, whose bar is the pin alone
+    (`recursive_stack_args` O2 388 B against 165, 2026-11-22).
 
 ## Example
 `sumto(n, x) = n == 0 ? x : sumto(n - 1, x + n)` becomes a loop that

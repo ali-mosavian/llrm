@@ -112,8 +112,8 @@
 //!   (`FoldInstsToUnreachable`): the `noreturn` call is ported
 //!   (`insts_folded_to_unreachable`); `assume(false)` and the store to null are
 //!   not. Exit 2026-12-01. The store reads the target's `NullPointerIsDefined`,
-//!   which the MIR has no flag for. `invoke`, `catchswitch` does not
-//!   exist in the MIR.
+//!   which the MIR has no flag for. `invoke`, `catchswitch` does not exist in
+//!   the MIR.
 //! - D4. No branch weights: the MIR has none, so the case weights
 //!   `ConstantFoldTerminator` merges and the `!prof` it sets are not kept.
 //!   `!make.implicit` is not a MIR kind. There is no `DomTreeUpdater`; as at

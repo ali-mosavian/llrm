@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/codetables.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/codetables.rs); edit the header, not this file.
-<!-- src: crates/codegen/llrm-codegen/src/backend/codetables.rs sha256:c2e8cd2ead621d99ad5e1752d15b9e7c2a525f001c772fb6302e7f7d83cafb5a -->
+<!-- src: crates/codegen/llrm-codegen/src/backend/codetables.rs sha256:1284761019cf0b69cab63f0e4cc317f973605d1aca904f95012e8899dcda0abb -->
 
 # codetables
 
@@ -28,7 +28,8 @@ Each reference then reads through `cs:`.
 ```
 
 ## Example
-A table read by one procedure, only through loads, moves into the code after that procedure and is read through `cs:`.
+A table read by one procedure, only through loads, moves into the code after
+that procedure and is read through `cs:`.
 
 ```text
 mov al, byte ptr T[di]          mov al, byte ptr cs:T[di]

@@ -4,13 +4,13 @@
 //!
 //! # How it works
 //! The pin's rows are read off its `opt -passes='print<cost-model>'` for every
-//! shape the planner forms (`tti_vector_oracle.py` writes `tti_vector_oracle.txt`):
-//! a cast between integer and float lanes, an integer width change, `fadd`,
-//! `fsub`, `fmul`, `fdiv`, `fneg`, and a load or store of float lanes, per cost
-//! kind. A type that is wider than a register is the pin's own split: the
-//! rows hold the answer for it, so no splitting is redone here. A shape with
-//! no row is not priced (`None`), which the planner reads as "do not
-//! vectorize".
+//! shape the planner forms (`tti_vector_oracle.py` writes
+//! `tti_vector_oracle.txt`): a cast between integer and float lanes, an integer
+//! width change, `fadd`, `fsub`, `fmul`, `fdiv`, `fneg`, and a load or store of
+//! float lanes, per cost kind. A type that is wider than a register is the
+//! pin's own split: the rows hold the answer for it, so no splitting is redone
+//! here. A shape with no row is not priced (`None`), which the planner reads as
+//! "do not vectorize".
 //!
 //! # Example
 //! `sitofp <2 x i32> to <2 x double>` is 4 at throughput, `fadd <2 x double>`
@@ -56,9 +56,10 @@ fn kind_name(kind: CostKind) -> &'static str {
 fn type_name(ty: VectorTy) -> Option<String> {
     let lane = match ty.lane {
         Ty::Int(bits @ (1 | 8 | 16 | 32 | 64)) => format!("i{bits}"),
-        // DEVIATE X86V4 (owner x87-cordic-2, exit 2026-12-05): a float vector of half a register (`<2 x float>`) has
-        // no selection (its lane extract, conversions and arithmetic widen to `v4f32` in the pin), so it is not
-        // priced and no planner forms it.
+        // DEVIATE X86V4 (owner x87-cordic-2, exit 2026-12-05): a float vector
+        // of half a register (`<2 x float>`) has no selection (its lane
+        // extract, conversions and arithmetic widen to `v4f32` in the pin), so
+        // it is not priced and no planner forms it.
         Ty::Float if ty.count < 4 => return None,
         Ty::Float => "float".to_owned(),
         Ty::Pointer => "ptr".to_owned(),
@@ -79,12 +80,14 @@ pub(crate) fn cast_cost(
     src: VectorTy,
     cost_kind: CostKind,
 ) -> Option<Cost> {
-    // Only the conversions the selector has (`cvtdq2ps`, `cvtdq2pd`, `cvtpd2ps`, `uitofp` of `v4i32`): a loop the planner widens must
+    // Only the conversions the selector has (`cvtdq2ps`, `cvtdq2pd`,
+    // `cvtpd2ps`, `uitofp` of `v4i32`): a loop the planner widens must
     // compile, so a cast it cannot select is not priced.
     let selected = match (kind, dst.lane, src.lane) {
         (CastKind::SIToFP, Ty::Float, Ty::Int(32)) => dst.count == 4,
         (CastKind::SIToFP, Ty::Double, Ty::Int(32)) => matches!(dst.count, 2 | 4),
-        // `LowerUINT_TO_FP`: `cvtdq2ps` for a clear sign bit, the mantissa-halves sequence otherwise.
+        // `LowerUINT_TO_FP`: `cvtdq2ps` for a clear sign bit, the
+        // mantissa-halves sequence otherwise.
         (CastKind::UIToFP, Ty::Float, Ty::Int(32)) => dst.count == 4,
         (CastKind::FPTrunc, Ty::Float, Ty::Double) => dst.count == 4,
         (CastKind::Trunc | CastKind::ZExt | CastKind::SExt, _, _) => true,
@@ -124,7 +127,8 @@ pub(crate) fn float_arithmetic_cost(
     lookup(format!("{} {op} {}", kind_name(cost_kind), type_name(ty)?))
 }
 
-/// `getVectorInstrCost` of one `insertelement` or `extractelement` of float lanes at a constant index.
+/// `getVectorInstrCost` of one `insertelement` or `extractelement` of float
+/// lanes at a constant index.
 pub(crate) fn float_lane_cost(
     op: LaneOp,
     ty: VectorTy,
@@ -132,19 +136,23 @@ pub(crate) fn float_lane_cost(
     into_poison: bool,
     cost_kind: CostKind,
 ) -> Option<Cost> {
-    // `<4 x i32>` rows only (the SSE2 gather of an integer counter that feeds a convert); other integer lanes stay unpriced.
+    // `<4 x i32>` rows only (the SSE2 gather of an integer counter that feeds a
+    // convert); other integer lanes stay unpriced.
     if !matches!(ty.lane, Ty::Float | Ty::Double | Ty::Int(32)) {
         return None;
     }
     let kind = kind_name(cost_kind);
     let ty = type_name(ty)?;
     match op {
-        LaneOp::Insert => lookup(format!("{kind} insert {ty} {index} {}", if into_poison { "poison" } else { "vector" })),
+        LaneOp::Insert => {
+            lookup(format!("{kind} insert {ty} {index} {}", if into_poison { "poison" } else { "vector" }))
+        }
         LaneOp::Extract => lookup(format!("{kind} extract {ty} {index}")),
     }
 }
 
-/// `getVectorInstrCost` of an `extractelement` of a float or pointer lane at a constant index.
+/// `getVectorInstrCost` of an `extractelement` of a float or pointer lane at a
+/// constant index.
 fn lane_extract_cost(
     ty: VectorTy,
     index: u32,
@@ -156,8 +164,9 @@ fn lane_extract_cost(
     float_lane_cost(LaneOp::Extract, ty, index, false, cost_kind)
 }
 
-/// `getScalarizationOverhead` of every lane of a float vector (`ForPoisonSrc`: the inserts start from poison, so
-/// lane 0 is free): the lanes' inserts that build it, the extracts that take it apart.
+/// `getScalarizationOverhead` of every lane of a float vector (`ForPoisonSrc`:
+/// the inserts start from poison, so lane 0 is free): the lanes' inserts that
+/// build it, the extracts that take it apart.
 pub(crate) fn float_scalarization_overhead(
     ty: VectorTy,
     insert: bool,

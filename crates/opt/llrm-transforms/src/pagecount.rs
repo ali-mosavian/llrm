@@ -1,6 +1,7 @@
 //! A counted loop that walks by page ends on its index and a page count, not
-//! on a second counter. The mechanism is `IndVarSimplify::linearFunctionTestReplace`
-//! (`FindLoopCounter`, `genLoopLimit`) applied to the walk's own counter.
+//! on a second counter. The mechanism is
+//! `IndVarSimplify::linearFunctionTestReplace` (`FindLoopCounter`,
+//! `genLoopLimit`) applied to the walk's own counter.
 //!
 //! # How it works
 //! A loop that walks by page (see [`crate::pageindex`]) has a trip count
@@ -284,9 +285,11 @@ fn redirect(
     for phi in crate::edges::phis(function, target) {
         let arms: Vec<_> = crate::pageindex::arms(function, phi)
             .into_iter()
-            .flat_map(|(value, one)| {
-                if one == from { to.iter().map(|at| (value, *at)).collect() } else { vec![(value, one)] }
-            })
+            .flat_map(
+                |(value, one)| {
+                    if one == from { to.iter().map(|at| (value, *at)).collect() } else { vec![(value, one)] }
+                },
+            )
             .collect();
         crate::pageindex::set_arms(function, phi, &arms);
     }
@@ -377,28 +380,10 @@ pub(crate) fn apply(
         Reach::Alone => block,
         Reach::After(_) => place(function, "page-low", block)?,
     };
-    let hit = put(
-        function,
-        Position::End(high_block),
-        Opcode::ICmp(IntPredicate::Eq),
-        flag,
-        vec![page, zero],
-    )?;
-    make(
-        function,
-        Position::End(high_block),
-        Opcode::Br,
-        void,
-        vec![hit, Operand::Block(exit), Operand::Block(stay)],
-    )?;
+    let hit = put(function, Position::End(high_block), Opcode::ICmp(IntPredicate::Eq), flag, vec![page, zero])?;
+    make(function, Position::End(high_block), Opcode::Br, void, vec![hit, Operand::Block(exit), Operand::Block(stay)])?;
     function.erase(counter.branch).map_err(|why| why.to_string())?;
-    let low_hit = put(
-        function,
-        Position::End(low_block),
-        Opcode::ICmp(IntPredicate::Eq),
-        flag,
-        vec![index, low],
-    )?;
+    let low_hit = put(function, Position::End(low_block), Opcode::ICmp(IntPredicate::Eq), flag, vec![index, low])?;
     let low_branch = make(
         function,
         Position::End(low_block),

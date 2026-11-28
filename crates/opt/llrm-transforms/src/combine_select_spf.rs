@@ -27,7 +27,8 @@
 //! (the range half of `foldSelectInstWithICmpConst`, `canonicalizeClampLike`,
 //! `tryToReuseConstantFromSelectInComparison`, `foldSelectICmpEq`) are not
 //! translated; `foldSelectICmpMinMax` runs here, ahead of them.
-//! Exit: translated by their own strips, by 2026-12-06 (owner x87, from wasm-3).
+//! Exit: translated by their own strips, by 2026-12-06 (owner x87, from
+//! wasm-3).
 //!
 //! # Used by
 //! `visitSelectInst`.

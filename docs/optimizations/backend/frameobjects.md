@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/frameobjects.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/frameobjects.rs); edit the header, not this file.
-<!-- src: crates/codegen/llrm-codegen/src/backend/frameobjects.rs sha256:1f1143dc80fd31f6dac931cc017e94047f1339b84751d7f8640fcda3b2fb640e -->
+<!-- src: crates/codegen/llrm-codegen/src/backend/frameobjects.rs sha256:f71504e344ea4c2a8e384a99341993f998e815837ce3a83fb1045007f89dfb2a -->
 
 # frameobjects
 
@@ -31,10 +31,10 @@ The stack size is `Offset` less the local area.
   a call with 12 outgoing bytes: 24 + 12 = 36 -> 48 (16), size 44
 ```
 
-DEVIATE FO-1 (exit: frame indices, owner llrm-target-x86-m16, 2026-11-20): nothing calls
-this yet. `frame::Frame` hands out a slot when the spiller asks and the
-displacement goes into the instruction at once; the pin names a frame index
-and `replaceFrameIndices` fills the offset after this runs.
+DEVIATE FO-1 (exit: frame indices, owner llrm-target-x86-m16, 2026-11-20):
+nothing calls this yet. `frame::Frame` hands out a slot when the spiller
+asks and the displacement goes into the instruction at once; the pin names a
+frame index and `replaceFrameIndices` fills the offset after this runs.
 
 DEVIATE FO-1 also covers `order_frame_objects`
 (`X86FrameLowering::orderFrameObjects`): translated, used by

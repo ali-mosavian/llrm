@@ -97,7 +97,7 @@ fn memcpys_length_is_pushed_with_pea() {
 fn pushed_constants_arrive_with_their_signs_under_qemu() {
     use llrm_m68k::compile::{Options, items_with};
     use llrm_m68k::dagisel::hooks::Cpu;
-    use llrm_m68k::object::{executable, start, write_executable};
+    use llrm_m68k::object::{executable, start};
     let Some(qemu) = support::qemu() else { return };
     let text = "target datalayout = \"E-m:e-p:32:16:32-i8:8:8-i16:16:16-i32:16:32-n8:16:32-a:0:16-S16\"
 define internal i32 @g(i32 %a, i32 %b, i32 %c) #0 {

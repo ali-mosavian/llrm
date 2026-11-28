@@ -26,10 +26,10 @@
 //!   a call with 12 outgoing bytes: 24 + 12 = 36 -> 48 (16), size 44
 //! ```
 //!
-//! DEVIATE FO-1 (exit: frame indices, owner llrm-target-x86-m16, 2026-11-20): nothing calls
-//! this yet. `frame::Frame` hands out a slot when the spiller asks and the
-//! displacement goes into the instruction at once; the pin names a frame index
-//! and `replaceFrameIndices` fills the offset after this runs.
+//! DEVIATE FO-1 (exit: frame indices, owner llrm-target-x86-m16, 2026-11-20):
+//! nothing calls this yet. `frame::Frame` hands out a slot when the spiller
+//! asks and the displacement goes into the instruction at once; the pin names a
+//! frame index and `replaceFrameIndices` fills the offset after this runs.
 //!
 //! DEVIATE FO-1 also covers `order_frame_objects`
 //! (`X86FrameLowering::orderFrameObjects`): translated, used by
@@ -280,7 +280,8 @@ mod tests {
     fn denser_objects_lie_nearest_the_frame_pointer() {
         let object = |size, align, uses| Sorting { size, align, uses };
         let objects = [object(4, 4, 1), object(16, 4, 5), object(4, 4, 2), object(8, 8, 2), object(8, 4, 2)];
-        // Uses per byte: .25, .31, .5, .25, .25; the 8-aligned of the ties last.
+        // Uses per byte: .25, .31, .5, .25, .25; the 8-aligned of the ties
+        // last.
         assert_eq!(order_frame_objects(&objects, false), [0, 4, 3, 1, 2]);
         assert_eq!(order_frame_objects(&objects, true), [2, 1, 3, 4, 0]);
     }

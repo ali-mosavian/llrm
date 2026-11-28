@@ -72,9 +72,9 @@
 //!
 //! ADDED beyond LLVM (GCC ranger, `gimple-range-edge`/`tree-vrp` edge
 //! simplification; no exit, LLVM has no such arm):
-//! 13. `min_max_value_on_edge`: `getValueOnEdge` also looks through a
-//!     min/max call, as it does a select; the phi takes the operand the ranges
-//!     on the edge decide.
+//! 13. `min_max_value_on_edge`: `getValueOnEdge` also looks through a min/max
+//!     call, as it does a select; the phi takes the operand the ranges on the
+//!     edge decide.
 //!
 //! # Example
 //! In the block entered when `%x u< 10`, `udiv i32 %x, 16` is `0`: the range

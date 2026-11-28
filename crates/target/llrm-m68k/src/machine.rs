@@ -136,7 +136,6 @@ impl Machine for M68kMachine {
 /// tables: clocks first, then the extension word's bytes at the CPU's price
 /// (`timing::order`). On the 68000 it is 14 clk against 8 for a long.
 pub fn index_is_dearer_than_plain(cpu: crate::dagisel::hooks::Cpu) -> bool {
-    use crate::dagisel::hooks::Cpu;
     static DEARER: crate::percpu::PerCpu<bool> = crate::percpu::PerCpu::new();
     *DEARER.get(cpu, |cpu| {
         let price = |text: &str, bytes: u32| {

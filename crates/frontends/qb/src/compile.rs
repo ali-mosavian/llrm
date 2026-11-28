@@ -175,9 +175,10 @@ fn _segment(
     }
 }
 
-/// Whether the module's zero variables go in `_BSS`. The llrm runtime's start-up zeroes the BSS
-/// class, so there always. The Microsoft runtimes' do not (and CLEAR zeroes BC_DATA only): the
-/// module zeroes `_BSS` itself, a routine and its calls, which saves bytes only past what they cost.
+/// Whether the module's zero variables go in `_BSS`. The llrm runtime's
+/// start-up zeroes the BSS class, so there always. The Microsoft runtimes' do
+/// not (and CLEAR zeroes BC_DATA only): the module zeroes `_BSS` itself, a
+/// routine and its calls, which saves bytes only past what they cost.
 fn _zeroed_by_start_up(
     program: &model::Program,
     near_bytes: u32,
@@ -346,7 +347,8 @@ fn _header(
     // copies (16-bit objects).
     if words.width == 2 {
         let at = words.segments[3] + 2;
-        let size: usize = _placed(module).filter(|one| _segment(one, false) == "COMMON").map(|one| one.bytes.len()).sum();
+        let size: usize =
+            _placed(module).filter(|one| _segment(one, false) == "COMMON").map(|one| one.bytes.len()).sum();
         out[at..at + 2].copy_from_slice(&(size as u16).to_le_bytes());
     }
     // The addends live in the image. The remaining words are zero.
@@ -556,8 +558,9 @@ fn rich_assembled(
             ],
         ),
     ];
-    // Each object with near uninitialised data opens it with an empty BSSB: the first the linker meets
-    // fixes it before every `_BSS`, and the start-up zeroes from it (runtime/qb/dos/m16/start.asm).
+    // Each object with near uninitialised data opens it with an empty BSSB: the
+    // first the linker meets fixes it before every `_BSS`, and the start-up
+    // zeroes from it (runtime/qb/dos/m16/start.asm).
     if bss {
         segments.push(("BSSB", vec![]));
         segments.push(("_BSS", placed.swap_remove("_BSS").unwrap_or_default()));

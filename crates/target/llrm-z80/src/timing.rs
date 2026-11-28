@@ -10,8 +10,9 @@
 //! they belong to the machine, not the CPU. Exit: a per-machine surcharge when
 //! a machine target needs it.
 
-use llrm_support::hash::HashMap;
 use std::sync::LazyLock;
+
+use llrm_support::hash::HashMap;
 
 /// What one instruction form costs.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

@@ -1,14 +1,17 @@
-//! A call with stack arguments in a function whose stack pointer moves, on the DAG path alone.
+//! A call with stack arguments in a function whose stack pointer moves, on the
+//! DAG path alone.
 
 use llrm_arm64::driver;
 use llrm_arm64::machine::Platform;
 
 const LAYOUT: &str = "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i8:8:32-i16:16:32-i64:64-i128:128-n32:64-S128-Fn32\"\n";
 
-/// "a call with stack arguments in a function that moves the stack pointer" refused it, so `tests/darwin/vla` (a
-/// `vla` inlined into `main`, which calls `many` with eleven arguments) fell back to the hand selector at O1-Os. The
-/// pin (`hasReservedCallFrame` false) lowers the call frame pseudos to `sub sp, sp, #16` and `add sp, sp, #16`
-/// around the call, so the arguments are not stored over the dynamic `alloca`.
+/// "a call with stack arguments in a function that moves the stack pointer"
+/// refused it, so `tests/darwin/vla` (a `vla` inlined into `main`, which calls
+/// `many` with eleven arguments) fell back to the hand selector at O1-Os. The
+/// pin (`hasReservedCallFrame` false) lowers the call frame pseudos to `sub sp,
+/// sp, #16` and `add sp, sp, #16` around the call, so the arguments are not
+/// stored over the dynamic `alloca`.
 #[test]
 fn a_stack_argument_call_after_a_dynamic_alloca_makes_room_around_the_call() {
     let ir = format!(
@@ -18,7 +21,8 @@ define i64 @f(i64 %n) {{\n  %v = alloca i32, i64 %n, align 4\n  call void @use(p
 ret i64 %r\n}}\n"
     );
     let asm = driver::assembly(&ir, Platform::Linux, true).unwrap_or_else(|why| panic!("{why}"));
-    // The room opens as `sub sp, sp, #16` or, folded into the first argument store, `[sp, #-16]!`.
+    // The room opens as `sub sp, sp, #16` or, folded into the first argument
+    // store, `[sp, #-16]!`.
     let down = asm
         .find("sub sp, sp, #16")
         .or_else(|| asm.find("[sp, #-16]!"))

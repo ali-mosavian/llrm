@@ -820,7 +820,6 @@ fn eliminate_dead(function: &mut MFunction) {
                     && inst.operands.iter().all(|o| match o {
                         Operand::Def(Reg::Virt(v)) => !read.contains(v),
                         Operand::Def(Reg::Phys(p)) => judged(*p) && !live[slot(*p)],
-                        Operand::Def(_) => false,
                         _ => true,
                     })
                     && !(inst.sets_flags() && live[slot(FLAGS)])
@@ -1034,7 +1033,7 @@ fn price_key(
     one: &Allocated,
     level: Level,
 ) -> (u64, u64) {
-    use std::hash::{Hash, Hasher};
+    use std::hash::Hash;
     let (function, assignment, slots, reads, frequencies) = one;
     let mut both = Both::new();
     let _ = std::fmt::Write::write_fmt(&mut both, format_args!("{level:?}|"));
@@ -1596,7 +1595,7 @@ fn reads_its_cell(inst: &Inst) -> bool {
 }
 
 thread_local! {
-    /// Whether `allocate_once` joins the guard and latch of the loops that
+    /// Whether `allocate_once_with` joins the guard and latch of the loops that
     /// repeat ([`repeating_loops`]).
     static HOT_LOOP_FOLD: std::cell::Cell<bool> = const { std::cell::Cell::new(true) };
     /// Whether the last allocations folded a repeating loop's guard and latch.
@@ -1669,17 +1668,8 @@ pub fn take_forms_built() -> usize {
     FORMS_BUILT.with(|one| one.replace(0))
 }
 
-/// One allocation, and whether `strict` held a byte back from `a`.
-fn allocate_once(
-    function: MFunction,
-    name: &str,
-    strict: bool,
-    level: Level,
-) -> Result<(Allocated, bool), String> {
-    allocate_once_with(function, name, strict, level, false).map(|(best, held, _)| (best, held))
-}
-
-/// [`allocate_once`], and with `want_apart` also the function finished without
+/// One allocation, and whether `strict` held a byte back from `a`; with
+/// `want_apart` also the function finished without
 /// the hot loops' tail merge where that merge changed it: one allocation
 /// serves both finishes, as the fold decision needs them
 /// (`repeating_loop_fold_wins`).
@@ -1764,7 +1754,7 @@ fn allocation_key(
     want_apart: bool,
 ) -> (u64, u64) {
     use std::fmt::Write;
-    use std::hash::Hasher;
+
     // The scalars as text, the function as its fields: `Debug` of a function is
     // the cost of the key (`int64_divmod_edges`: a fifth of the compile),
     // and most of it is the selector's `form` of each instruction.

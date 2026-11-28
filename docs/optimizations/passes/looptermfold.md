@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/looptermfold.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/looptermfold.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/looptermfold.rs sha256:890ed0a87af6c1c5cc675f0f1e8173259cd96a68f5417ee27078b24b379b1e0a -->
+<!-- src: crates/opt/llrm-transforms/src/looptermfold.rs sha256:8c44b870e913e6bac71457d03c63438e32b527597ed7f2560cc7e9a648920141 -->
 
 # looptermfold
 
@@ -38,8 +38,8 @@ pass here writes it. Owner m68k. Exit: when a pass writes the attribute.
 `canFoldTermCondOfLoop`, `RunTermFold`, `isAlmostDeadIV`.
 
 ## Example
-The exit compare of a loop moves from a counter to another induction variable,
-and the counter dies.
+The exit compare of a loop moves from a counter to another induction
+variable, and the counter dies.
 
 ```text
  loop:  %i = phi [0, pre], [%i.next, loop]        loop:  %p = phi [%a, pre], [%p.next, loop]

@@ -192,7 +192,7 @@ impl Late {
         for_size: bool,
     ) -> Self {
         let mut blocks: Vec<Block> = Vec::new();
-        let mut open = |label: Option<usize>, blocks: &mut Vec<Block>| {
+        let open = |label: Option<usize>, blocks: &mut Vec<Block>| {
             blocks.push(Block { id: blocks.len(), label, insts: Vec::new(), rows: Vec::new() });
         };
         open(None, &mut blocks);

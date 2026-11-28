@@ -1,10 +1,12 @@
-//! DEVIATE Z80-BYTE-SHIFT: a word whose high byte is zero, shifted right by less than 8, is shifted as a byte.
+//! DEVIATE Z80-BYTE-SHIFT: a word whose high byte is zero, shifted right by
+//! less than 8, is shifted as a byte.
 
 use llrm_z80::compile::{prepare, text_in};
 use llrm_z80::driver::{Level, Request};
 
-/// huffman_decode's `getbit`: `stream[i] >> (7 - n)` with the byte promoted to int. The shift ran on the word, a
-/// `srl h; rr l` loop (`__lshrhi3`), two instructions a step; the byte loop is one.
+/// huffman_decode's `getbit`: `stream[i] >> (7 - n)` with the byte promoted to
+/// int. The shift ran on the word, a `srl h; rr l` loop (`__lshrhi3`), two
+/// instructions a step; the byte loop is one.
 const IR: &str = include_str!("data/byte_shift.ll");
 
 #[test]
@@ -19,8 +21,9 @@ fn a_promoted_byte_shifted_by_less_than_eight_is_a_byte_shift() {
     }
 }
 
-/// A mask that fits the byte a word was extended from: `zext(x) & 1` left a `ld c,a; ld b,#0; ld a,c` round trip
-/// through a pair (+1 B in huffman_decode `getbit`).
+/// A mask that fits the byte a word was extended from: `zext(x) & 1` left a `ld
+/// c,a; ld b,#0; ld a,c` round trip through a pair (+1 B in huffman_decode
+/// `getbit`).
 #[test]
 fn a_mask_within_an_extended_byte_is_a_byte_and() {
     for level in [Level::Os, Level::O2] {

@@ -19,9 +19,14 @@ fn rint_of_a_float_and_a_double_calls_the_c_routine() {
     // to the program's `_rint`.
     for (name, callee) in [("rf", "_rintf"), ("rd", "_rint")] {
         let asm = text(&ir, name, 0, &Request::new(Level::O2)).unwrap_or_else(|why| panic!("{name}: {why}"));
-        let called = asm.lines().any(|line| {
-            matches!(line.trim().split_once(' '), Some(("call" | "jp", to)) if to.trim() == callee)
-        });
+        let called = asm
+            .lines()
+            .any(
+                |line| matches!(
+                    line.trim().split_once(' '),
+                    Some(("call" | "jp", to)) if to.trim() == callee
+                ),
+            );
         assert!(called, "{name}: no call to {callee}:\n{asm}");
     }
 }

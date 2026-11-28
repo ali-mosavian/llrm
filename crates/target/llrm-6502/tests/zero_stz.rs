@@ -32,8 +32,8 @@ fn a_zero_stored_and_not_read_again_is_stz() {
 }
 
 /// The zero comes through `y` or `x` (bit_setclear: the high word of a `long`
-/// made from a short before `jsr report`, `ldy #0; sty rc2; sty rc3` four times, 6
-/// B each, 151 B against a bar of 147 on the 65C02): `stz` each, 4 B.
+/// made from a short before `jsr report`, `ldy #0; sty rc2; sty rc3` four
+/// times, 6 B each, 151 B against a bar of 147 on the 65C02): `stz` each, 4 B.
 #[test]
 fn a_zero_made_in_y_or_x_and_stored_is_stz() {
     assert_eq!(stz("  ldy #0\n  sty rc2\n  sty rc3\n  jsr report\n", true), "  stz rc2\n  stz rc3\n  jsr report\n");
@@ -55,7 +55,8 @@ fn a_zero_stored_before_a_branch_always_is_stz() {
 }
 
 /// `a` is read after the store (the function returns it, or a branch reads the
-/// flags `lda #0` set): the load stays. So it does on the 6502, which has no `stz`.
+/// flags `lda #0` set): the load stays. So it does on the 6502, which has no
+/// `stz`.
 #[test]
 fn a_zero_that_is_read_again_or_has_no_stz_stays() {
     for text in ["  lda #0\n  sta rc6\n  rts\n", "  lda #0\n  sta rc6\n  beq L\nL:\n  rts\n"] {

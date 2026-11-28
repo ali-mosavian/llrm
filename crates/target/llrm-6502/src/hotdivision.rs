@@ -9,13 +9,13 @@
 //! `timeit.py`, new against old: 3000009 / 1000003 saves 609, 70000 / 300 costs
 //! 169, 4000000000 / 65537 saves 0, the ten sum to 1824), so a site repays the
 //! bytes from `423 / 182`, 3 runs. The cold calls of the speed levels link the
-//! lean body (`udivmod32_fast_lean`, 31 B under the small one): the wide path is
-//! 172 B over it and repays from 3 runs too (`172 x 3 / 182` = 2.8). A site
-//! counts as `staticlocals` counts: 10 per level of loop depth, times the runs of its function (the call sites in
-//! the module, one where it has none). A divisor known to be a byte has its own
-//! entry that never links either wide path, and counts for nothing. The compact
-//! `__divsi3` is no cold choice: it has no byte-divisor path and one
-//! `40000 / -3` costs it 3195 clocks more.
+//! lean body (`udivmod32_fast_lean`, 31 B under the small one): the wide path
+//! is 172 B over it and repays from 3 runs too (`172 x 3 / 182` = 2.8). A site
+//! counts as `staticlocals` counts: 10 per level of loop depth, times the runs
+//! of its function (the call sites in the module, one where it has none). A
+//! divisor known to be a byte has its own entry that never links either wide
+//! path, and counts for nothing. The compact `__divsi3` is no cold choice: it
+//! has no byte-divisor path and one `40000 / -3` costs it 3195 clocks more.
 //!
 //! DEVIATE (6502-DIV-1): not in the pin, whose `__udivXi3` is one routine.
 //! Reason: `compound_assignment_types` divides once, cold, and the new wide

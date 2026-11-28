@@ -913,8 +913,8 @@ mod tests {
     }
 
     /// The pin runs `DeadMachineInstructionElim` twice, the second after
-    /// `PeepholeOptimizer` and before PHI elimination; ours ran it once, so what
-    /// sinking and the peephole left unread reached the coalescer.
+    /// `PeepholeOptimizer` and before PHI elimination; ours ran it once, so
+    /// what sinking and the peephole left unread reached the coalescer.
     #[test]
     fn test_dead_instruction_elimination_runs_again_after_the_peephole() {
         let o2 = crate::backend::cpu::named("486").unwrap().clone();

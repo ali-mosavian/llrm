@@ -23,7 +23,8 @@
 //! ```
 //!
 //! # Example
-//! A table read by one procedure, only through loads, moves into the code after that procedure and is read through `cs:`.
+//! A table read by one procedure, only through loads, moves into the code after
+//! that procedure and is read through `cs:`.
 //!
 //! ```text
 //! mov al, byte ptr T[di]          mov al, byte ptr cs:T[di]

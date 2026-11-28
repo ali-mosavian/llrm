@@ -1,11 +1,11 @@
 //! The pieces of the C -> ours pipeline the benchmarks and the differential
 //! tests share.
 
-use llrm_support::hash::HashMap;
 use std::path::Path;
 use std::process::Command;
 
 use llrm_6502::RUNTIME;
+use llrm_support::hash::HashMap;
 
 /// The 6502 description's datalayout: n8 and 16-bit pointers.
 pub fn datalayout() -> String {
@@ -73,7 +73,8 @@ pub fn reachable_runtime(text: &str) -> String {
     let by_name: HashMap<&str, usize> = blocks.iter().enumerate().map(|(i, (n, _))| (n.as_str(), i)).collect();
     let mut wanted = vec![false; blocks.len()];
     let mut queue: Vec<usize> = Vec::new();
-    // a name in a comment is not a reference: the comment that introduces the memory routines named them in `__ashrsi3_fast`'s block
+    // a name in a comment is not a reference: the comment that introduces the
+    // memory routines named them in `__ashrsi3_fast`'s block
     let tokens = |s: &str| -> Vec<usize> {
         s.lines()
             .flat_map(|line| line.split(';').next().unwrap_or("").split(|c: char| !(c.is_alphanumeric() || c == '_')))
@@ -172,7 +173,11 @@ pub fn llrm_cc() -> std::path::PathBuf {
     let path = std::env::var_os("LLRM_CC")
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|| llrm_cc_beside(&std::env::current_exe().expect("the test's own path")));
-    assert!(path.exists(), "no llrm-cc at {}: build it with the same --profile and CARGO_TARGET_DIR as this test", path.display());
+    assert!(
+        path.exists(),
+        "no llrm-cc at {}: build it with the same --profile and CARGO_TARGET_DIR as this test",
+        path.display()
+    );
     path
 }
 

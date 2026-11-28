@@ -736,6 +736,7 @@ mod tests {
     /// `FBB`, so it passes. Ours required a branch we could analyze, and the
     /// blocks after a switch loop landed in another order (tail_calls -Os
     /// `__main_void`, known_loads_walks -O2 +32 instructions).
+    #[test]
     fn a_branch_table_block_is_moved_after_its_predecessor_like_any_other() {
         let mut f = Function::default();
         let c = f.new_vreg(ValType::I32);

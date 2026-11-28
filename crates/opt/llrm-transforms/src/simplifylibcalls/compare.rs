@@ -8,9 +8,8 @@ use std::cmp::Ordering;
 
 use llrm_mir::constantfolding::constant_fold_load_from_const_ptr;
 use llrm_mir::context::ConstantKind;
-use llrm_mir::edit::Position;
 use llrm_mir::module::Operand;
-use llrm_mir::opcode::{Attribute, BinaryOp, CastOp, Flags, IntPredicate, Opcode};
+use llrm_mir::opcode::{Attribute, BinaryOp, CastOp, IntPredicate, Opcode};
 use llrm_mir::passes::{Outer, Unit};
 use llrm_mir::types::TypeId;
 use llrm_mir::valuetracking::{self, Query, Sizes};

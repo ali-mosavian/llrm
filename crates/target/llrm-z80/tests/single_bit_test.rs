@@ -1,5 +1,6 @@
-//! `(x & (1 << n)) == 0` was a load, an `and`, a copy and an `or a, a` (a long's bit 8: `ld c, #0; ld a, h; and a, #1;
-//! ld b, a; or a, a`, 7 B); it is `bit n, r`, 2 B.
+//! `(x & (1 << n)) == 0` was a load, an `and`, a copy and an `or a, a` (a
+//! long's bit 8: `ld c, #0; ld a, h; and a, #1; ld b, a; or a, a`, 7 B); it is
+//! `bit n, r`, 2 B.
 
 use llrm_z80::compile::{prepare, text_in};
 use llrm_z80::driver::{Level, Request};

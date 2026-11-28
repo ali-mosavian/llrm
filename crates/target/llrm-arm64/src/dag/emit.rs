@@ -1413,9 +1413,6 @@ struct Emitter<'a> {
     /// `llvm.stackrestore`): the outgoing area is no longer reserved in the
     /// frame (`hasReservedCallFrame`), each call makes room for it.
     moves_sp: bool,
-    /// The register each phi's edges copy into, by the phi's register
-    /// (`PHIElimination`'s `IncomingReg`): the block's first copies read it.
-    incoming: HashMap<u32, Reg>,
 }
 
 /// A block split in two where a pseudo-instruction is expanded to control flow
@@ -3007,7 +3004,6 @@ pub fn emit(
         cuts: Vec::new(),
         splits: 0,
         sp_copies: rustc_hash::FxHashSet::default(),
-        incoming: HashMap::default(),
         moves_sp: writes_stack_pointer(blocks),
     };
     for &(size, align) in &first.frame {

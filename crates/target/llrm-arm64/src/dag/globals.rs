@@ -2,12 +2,12 @@
 //! `GlobalAddress` node carries: the linker's name, whether the address comes
 //! from the GOT, and the alignment a pointer to it has.
 
-use llrm_support::hash::HashMap;
 use std::rc::Rc;
 
 use llrm_mir::context::GlobalId;
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::module::{GlobalKind, Module};
+use llrm_support::hash::HashMap;
 
 use crate::machine::Platform;
 

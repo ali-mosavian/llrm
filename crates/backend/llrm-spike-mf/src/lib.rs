@@ -31,8 +31,8 @@ pub use commute::{commute_accumulator, commute_tied};
 pub use deadmi::dead_machine_instruction_elim;
 pub use fold::{
     branch_fold, branch_fold_hoisting, branch_fold_hoisting_across_hot_loops, branch_fold_hoisting_across_loops,
-    branch_fold_hoisting_keeping_call_areas,
-    remove_identity_copies, remove_redundant_copies, remove_redundant_copies_between,
+    branch_fold_hoisting_keeping_call_areas, remove_identity_copies, remove_redundant_copies,
+    remove_redundant_copies_between,
 };
 pub use mfunc::{Block, Inst, Kind, MFunction, Operand, Phi, Reg, Variable, VariablePlace};
 pub use regalloc::{Allocate, Assignment, GraphColoring, Join, Side, Target};

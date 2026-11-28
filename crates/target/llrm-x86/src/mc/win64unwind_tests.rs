@@ -130,7 +130,10 @@ fn a_function_without_a_prologue_has_no_unwind_data() {
     assert!(object.sections.iter().all(|one| one.name != ".xdata" && one.name != ".pdata"));
     // control: with a prologue it has both
     let framed = expanded(&with(&[0x55, 0xC3])).unwrap();
-    assert!(framed.sections.iter().any(|one| one.name == ".xdata") && framed.sections.iter().any(|one| one.name == ".pdata"));
+    assert!(
+        framed.sections.iter().any(|one| one.name == ".xdata")
+            && framed.sections.iter().any(|one| one.name == ".pdata")
+    );
 }
 
 #[test]

@@ -1,7 +1,8 @@
-//! A 65 KB local put the incoming argument at `(65048,%sp)` and the address of the buffer at
-//! `(-65032,%a6)`: displacements the 68000 cannot encode, and the object writer stopped (`MOV16rp:
-//! operand 1 = 65362 does not fit its 16-bit field`, QuickrBasic `indent.c`, refused at every
-//! 68000 and 68020 cell). A frame past 32 KiB takes `%a6`, links without the size and opens it with
+//! A 65 KB local put the incoming argument at `(65048,%sp)` and the address of
+//! the buffer at `(-65032,%a6)`: displacements the 68000 cannot encode, and the
+//! object writer stopped (`MOV16rp: operand 1 = 65362 does not fit its 16-bit
+//! field`, QuickrBasic `indent.c`, refused at every 68000 and 68020 cell). A
+//! frame past 32 KiB takes `%a6`, links without the size and opens it with
 //! `suba.l`; an address past 16 bits is the base plus the displacement.
 
 use llrm_m68k::dagisel::hooks::Cpu;

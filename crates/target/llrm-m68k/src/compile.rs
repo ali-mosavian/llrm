@@ -532,8 +532,7 @@ fn items_trials(
     } else {
         tuning.trial_insts_max
     };
-    if cap.is_some_and(|most| kept.iter().filter(|item| matches!(item, Item::Inst(_))).count() > most)
-    {
+    if cap.is_some_and(|most| kept.iter().filter(|item| matches!(item, Item::Inst(_))).count() > most) {
         prefixes.capped.set(true);
         return Ok((kept, false, options, (false, false)));
     }
@@ -1207,7 +1206,7 @@ fn items_once(
     let (mut function, mut touched) =
         prefixes.late.get_or((selection, format!("{:?}", before_late_stage(options))), || {
             counted(|runs| runs.late += 1);
-            let (mut function, mut touched) = (function, touched);
+            let (mut function, touched) = (function, touched);
             machine_sink(&mut function);
             // The pin's second `DeadMachineInstructionElim`, after sinking and
             // before PHI elimination: what they left unread.
