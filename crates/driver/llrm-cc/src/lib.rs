@@ -1326,6 +1326,10 @@ fn build(
                     }
                     .map_err(|why| fail(format!("{path}: {why}")))?;
                     std::fs::write(&ir, translated).map_err(|error| fail(format!("{}: {error}", ir.display())))?;
+                } else if text.contains(" asm sideeffect ") {
+                    let source = std::fs::read_to_string(&ir).map_err(|e| fail(e.to_string()))?;
+                    std::fs::write(&ir, inline_asm::without_empty_asm(&source))
+                        .map_err(|error| fail(format!("{}: {error}", ir.display())))?;
                 }
                 let object = want(if build.stop == Stop::Assembly { "s" } else { "o" });
                 // A switch clang got as well is taken there.

@@ -770,6 +770,14 @@ fn register_block(
     Ok((call, format!("declare {ret} @\"{name}\"({types})")))
 }
 
+/// `text` without its empty asm calls: all a target without inline-assembly
+/// facts takes of its asm.
+pub fn without_empty_asm(text: &str) -> String {
+    let mut kept = text.lines().filter(|line| !is_empty_asm(line)).collect::<Vec<_>>().join("\n");
+    kept.push('\n');
+    kept
+}
+
 /// `asm volatile ("" : : "g" (p) : "memory")`: no instruction, only an
 /// optimisation barrier. It is dropped: the operands need not be memory places,
 /// and what it would have kept alive is the optimiser's to fold (the program's
