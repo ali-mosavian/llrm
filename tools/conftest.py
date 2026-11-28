@@ -22,6 +22,8 @@ RUNNER_ENV = (
     "PRIORITY",
     "WAITS",
     "BATCH_CAP",
+    "LLRM_OW",  # runner.env: the Watcom tree and the measure ref; ab_env refuses both as pipeline switches
+    "LLRM_MEASURE_REF",
     "BUILDSLOT_LANDING",  # parity_squash runs the whole batch inside buildslot.landing(); its tool tests inherit it
 )
 

@@ -6,6 +6,8 @@ set -u
 same=; [ "${1:-}" = --same-ok ] && { same=--same-ok; shift; }  # a head that changes only the frontend
 base=${1:?base llrm-cc}; new=${2:?new llrm-cc}; target=${3:?target}; level=${4:?level}; shift 4
 root=$(cd "$(dirname "$0")/.." && pwd)
+# Each side is the commit LLRM_EXPECT_BASE_SHA / LLRM_EXPECT_SHA names, built clean (stamp.py require_named).
+python3 "$root/tools/stamp.py" --require-clean base_sha "$(dirname "$base")" && python3 "$root/tools/stamp.py" --require-clean sha "$(dirname "$new")" || exit 2
 # The segmented rows need the fork clang of toolchain/clang/pin (line 2, as tools/llrmbin.py finds it); without it llrm-cc refuses every program
 # (x86_16-dos refused=215 on #10190 and #10193, read as "unmeasurable").
 case $target in

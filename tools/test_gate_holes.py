@@ -109,10 +109,12 @@ class GateHoles(unittest.TestCase):
         for side in ("base", "new"):
             os.makedirs(f"{self.d}/{side}")
             for name in ("llrm-cc", "llrm-llc"):
-                script(f"{self.d}/{side}/{name}", f"# {side} {name}\nexit 1\n")
+                # Stamped (stamp.py): cells.sh refuses a dist that is not the commit it is told.
+                version = '[ "$1" = --version ] && { echo "llrm-llc aaaa1111"; exit 0; }\n' if name == "llrm-llc" else ""
+                script(f"{self.d}/{side}/{name}", f"# {side} {name}\n{version}exit 1\n")
         cell = os.path.join(self.d, "list")
         open(cell, "w").write(f"x x86_32-linux -O2 {self.d}/hello.c\n")
-        r = run(["bash", f"{TOOLS}/ab/cells.sh", self.d, cell])
+        r = run(["bash", f"{TOOLS}/ab/cells.sh", self.d, cell], LLRM_EXPECT_BASE_SHA="aaaa1111", LLRM_EXPECT_SHA="aaaa1111")
         self.assertIn("EMPTY", r.stdout)
         self.assertNotEqual(r.returncode, 0, r.stdout)
 

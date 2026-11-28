@@ -23,7 +23,7 @@ class IdentityTarget(unittest.TestCase):
             )
             os.chmod(cc, 0o755)
             llc = os.path.join(self.d, side, "llrm-llc")
-            open(llc, "w").write(f"#!/bin/bash\n# {side} llc\n")
+            open(llc, "w").write(f"#!/bin/bash\n# {side} llc\n" + '[ "$1" = --version ] && { echo "llrm-llc aaaa1111"; exit 0; }\n')
             os.chmod(llc, 0o755)
 
     def tearDown(self):
@@ -34,7 +34,7 @@ class IdentityTarget(unittest.TestCase):
             [os.path.join(TOOLS, "identity.sh"), "c", os.path.join(self.d, "base", "llrm-cc"), os.path.join(self.d, "new", "llrm-cc"), *flag],
             capture_output=True, text=True, cwd=self.d,
             # Only what a shell needs: the caller's pipeline settings (the runner's LLRM_OW) are refused by ab_env.
-            env={"PATH": os.environ["PATH"], "HOME": os.environ.get("HOME", self.d), "IDENTITY_SAME_LLC": same_llc, "TARGET_LOG": self.log, "AB_ALLOW_ENV": "TARGET_LOG"},
+            env={"PATH": os.environ["PATH"], "HOME": os.environ.get("HOME", self.d), "LLRM_EXPECT_BASE_SHA": "aaaa1111", "LLRM_EXPECT_SHA": "aaaa1111", "IDENTITY_SAME_LLC": same_llc, "TARGET_LOG": self.log, "AB_ALLOW_ENV": "TARGET_LOG"},
         )
 
     def targets(self):
@@ -81,7 +81,7 @@ class IdentityTarget(unittest.TestCase):
         """Only llrm-llc was compared: two dists sharing llrm-m68k-llc read SAME on every m68k row whatever changed."""
         for side in ("base", "new"):
             llc = os.path.join(self.d, side, "llrm-m68k-llc")
-            open(llc, "w").write("#!/bin/bash\n# one m68k llc\n")
+            open(llc, "w").write("#!/bin/bash\necho llrm-m68k-llc aaaa1111  # one m68k llc, stamped\n")
             os.chmod(llc, 0o755)
         done = self.identity("m68k-68000", same_llc="")
         self.assertEqual(done.returncode, 2, done.stdout + done.stderr)

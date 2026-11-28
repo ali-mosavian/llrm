@@ -21,6 +21,7 @@ llrm-debug = { workspace = true }
 llrm-dwarf = { workspace = true }
 
 [build-dependencies]
+llrm-buildstamp = { workspace = true }
 llrm-target = { workspace = true }
 llrm-lir = { workspace = true }
 

@@ -317,7 +317,11 @@ def test_llrm_llc_in_the_environment_makes_two_sides_one_backend_and_is_refused(
     out = capsys.readouterr().err
     assert "base:" in out and "head:" in out and "llc" in out, out
     monkeypatch.setenv("LLRM_LLC", str(base / "llrm-llc"))
+    # An A/B refuses LLRM_LLC itself (ab_env.sh); allowed, the two sides still resolve one llc and are refused.
     monkeypatch.setenv("AB_ALLOW_ENV", "")
+    with pytest.raises(SystemExit, match="LLRM_LLC"):
+        llrmbin.assert_distinct_llc(base / "llrm-cc", head / "llrm-cc")
+    monkeypatch.setenv("AB_ALLOW_ENV", "LLRM_LLC")
     with pytest.raises(SystemExit, match="same llrm-llc"):
         llrmbin.assert_distinct_llc(base / "llrm-cc", head / "llrm-cc")
     llrmbin.assert_distinct_llc(base / "llrm-cc", head / "llrm-cc", same_llc=True)

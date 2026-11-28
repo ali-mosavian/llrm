@@ -197,6 +197,7 @@ dependencies = [
  "llrm-alloc",
  "llrm-analysis",
  "llrm-bcdriver",
+ "llrm-buildstamp",
  "llrm-cc",
  "llrm-codegen",
  "llrm-debug",
@@ -222,6 +223,7 @@ version = "0.1.0"
 dependencies = [
  "llrm-alloc",
  "llrm-analysis",
+ "llrm-buildstamp",
  "llrm-codegen",
  "llrm-dagisel",
  "llrm-debug",
@@ -262,6 +264,7 @@ version = "0.1.0"
 dependencies = [
  "llrm-alloc",
  "llrm-analysis",
+ "llrm-buildstamp",
  "llrm-codegen",
  "llrm-dagisel",
  "llrm-debug",
@@ -311,6 +314,10 @@ dependencies = [
  "llrm-x86-m16",
  "toml",
 ]
+
+[[package]]
+name = "llrm-buildstamp"
+version = "0.1.0"
 
 [[package]]
 name = "llrm-cc"
@@ -491,6 +498,7 @@ version = "0.1.0"
 dependencies = [
  "llrm-alloc",
  "llrm-analysis",
+ "llrm-buildstamp",
  "llrm-cgen",
  "llrm-codegen",
  "llrm-dagisel",
@@ -715,6 +723,7 @@ version = "0.1.0"
 dependencies = [
  "llrm-alloc",
  "llrm-analysis",
+ "llrm-buildstamp",
  "llrm-codegen",
  "llrm-dagisel",
  "llrm-debug",
@@ -868,6 +877,7 @@ version = "0.1.0"
 dependencies = [
  "llrm-alloc",
  "llrm-analysis",
+ "llrm-buildstamp",
  "llrm-codegen",
  "llrm-dagisel",
  "llrm-debug",

@@ -16,6 +16,7 @@ mimalloc = { version = "0.1", default-features = false }
 llrm-alloc = { path = "crates/support/llrm-alloc" }
 llrm-cgen = { path = "crates/support/llrm-cgen" }
 llrm-env = { path = "crates/support/llrm-env" }
+llrm-buildstamp = { path = "crates/support/llrm-buildstamp" }
 num-bigint = "0.4"
 num-traits = "0.2"
 rustc-hash = "2"
@@ -73,6 +74,9 @@ rust-version.workspace = true
 description = "Low Level Real Machine: compiler suite for 16-bit real-mode DOS with GCC/LLVM-quality code generation"
 default-run = "llrm-qb"
 license = "GPL-3.0-or-later"
+
+[build-dependencies]
+llrm-buildstamp = { workspace = true }
 
 [dependencies]
 llrm-alloc = { workspace = true }
