@@ -138,6 +138,32 @@ pub fn hidden(module: &mut Module) -> Result<(), String> {
     Ok(())
 }
 
+/// The call target that stands for `info` on `signature`, made if the module
+/// has none: the name's `t{n}` is the first that no other signature holds.
+pub fn hidden_callee(
+    module: &mut Module,
+    info: AtomicInfo,
+    signature: TypeId,
+) -> Result<Operand, String> {
+    let mut n = 0;
+    let callee = loop {
+        let name = name_of(info, n);
+        match module.named(&name) {
+            None => break module.add_function(&name, signature, Linkage::External)?,
+            Some(id)
+                if matches!(
+                    &module.globals[id.0 as usize].kind,
+                    GlobalKind::Function(f) if f.ty == signature
+                ) =>
+            {
+                break id;
+            }
+            Some(_) => n += 1,
+        }
+    };
+    Ok(Operand::Constant(module.reference(callee)))
+}
+
 /// The inverse of [`hidden`]: every call of a `llrm.atomic.*` function is the
 /// atomic instruction again. For printing a module the pin's `llc` reads.
 pub fn restored(module: &mut Module) -> Result<(), String> {
@@ -183,6 +209,7 @@ pub fn lowered(
     tso: bool,
     locked: bool,
     rmw: bool,
+    cas: bool,
 ) -> Result<(), String> {
     let mut found: Vec<(usize, InstId, AtomicInfo)> = Vec::new();
     let mut kept = vec![false; module.globals.len()];
@@ -215,6 +242,12 @@ pub fn lowered(
         let exchange = matches!(info.kind, AtomicKind::Rmw(RmwOp::Xchg))
             || (info.kind == AtomicKind::Store && info.ordering == AtomicOrdering::SeqCst);
         if locked && exchange {
+            kept[callee] = true;
+            continue;
+        }
+        // `cas`: a target with a compare-and-swap instruction and no other
+        // read-modify-write (a 68020's `cas`)
+        if cas && matches!(info.kind, AtomicKind::CmpXchg { .. }) {
             kept[callee] = true;
             continue;
         }
@@ -485,13 +518,15 @@ fn sync_name(
 
 /// Every read-modify-write and compare-exchange of at most `native` bits
 /// `hidden` made calls of, as the `__sync_*` call a target with no such
-/// instruction makes of it; run before [`lowered`]. A compare-exchange's
+/// instruction makes of it (`cas`: the compare-exchange it has an instruction
+/// for is left); run before [`lowered`]. A compare-exchange's
 /// `{ T, i1 }` is the old value and whether it was the expected one. The
 /// operations the runtime has no `__sync_` function for (`max`, `min`, `umax`,
 /// `umin`) are refused.
 pub fn sync_libcalled(
     module: &mut Module,
     native: u32,
+    cas: bool,
 ) -> Result<(), String> {
     let mut found: Vec<(usize, InstId, AtomicInfo)> = Vec::new();
     for (at, global) in module.globals.iter().enumerate() {
@@ -499,7 +534,8 @@ pub fn sync_libcalled(
         for (_, inst) in function.walk() {
             let Some(callee) = crate::memory::callee(&module.context, function, inst) else { continue };
             if let Some(info) = module.globals[callee.0 as usize].name.as_deref().and_then(decode)
-                && matches!(info.kind, AtomicKind::Rmw(_) | AtomicKind::CmpXchg { .. })
+                && (matches!(info.kind, AtomicKind::Rmw(_))
+                    || (!cas && matches!(info.kind, AtomicKind::CmpXchg { .. })))
             {
                 found.push((at, inst, info));
             }

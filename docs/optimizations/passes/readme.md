@@ -2,7 +2,7 @@
 
 # Passes
 
-From the `//!` headers of `crates/opt/llrm-transforms/src`: 326 documented, 0 undocumented.
+From the `//!` headers of `crates/opt/llrm-transforms/src`: 327 documented, 0 undocumented.
 
 The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipeline every driver runs: the order of the passes, the per-body fixed point, and which options switch them off.
 
@@ -14,6 +14,7 @@ The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipel
 | alwaysinline | `AlwaysInlinerPass(InsertLifetimeIntrinsics=true)`: every call of an `alwaysinline` callee is replaced by a copy of it, before the inliner prices anything. | Once per compile, before `Walk`. | [alwaysinline](alwaysinline.md) |
 | alwaysundef | Whether passing a constant into a phi is undefined behavior at a use of the phi: SimplifyCFG's `passingValueIsAlwaysUndefined`. | Named by `hoistcommon`, `speculate`, `undefpred`. | [alwaysundef](alwaysundef.md) |
 | argpromotion | Argument promotion (LLVM's ArgumentPromotion): a pointer parameter a function only reads at fixed offsets is replaced by the fields read. | In the interprocedural step, once, after its inlining loop and before | [argpromotion](argpromotion.md) |
+| atomicexpand | A read-modify-write the target has no instruction for, as a compare-exchange loop: LLVM's `AtomicExpandPass` (`expandAtomicRMWToCmpXchg`). | In the m68k driver for a 68020 and later (`shouldExpandAtomicRMWInIR` is | [atomicexpand](atomicexpand.md) |
 | availableexternally | LLVM's EliminateAvailableExternally: a body held only to inline from becomes a declaration again once inlining is done. | A program pass. At -O1 and above it runs after the interprocedural step and | [availableexternally](availableexternally.md) |
 | backwardthreading | Backward jump threading: a branch whose outcome one path into its block decides is threaded for that path, though the block's other paths leave it unknown. | Named by `pipeline`. | [backwardthreading](backwardthreading.md) |
 | bdce | Bit-tracking dead code elimination: a translation of LLVM's BDCE (`BDCE.cpp` at d1106deb71cc). | LLVM runs it after SCCP, before ADCE (slot 34 of the pipeline). Not in | [bdce](bdce.md) |

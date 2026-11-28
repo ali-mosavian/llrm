@@ -249,6 +249,7 @@ pub mod divrempairs;
 pub mod dropunnecessaryassumes;
 pub mod earlycse;
 pub use llrm_analysis::edges;
+pub mod atomicexpand;
 pub mod backwardthreading;
 #[cfg(test)]
 mod backwardthreading_tests;
