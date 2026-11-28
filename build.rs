@@ -29,4 +29,3 @@ fn toolchain(script: &str) {
         Command::new("sh").arg(format!("toolchain/{script}")).arg(&profile).status().expect("could not start sh");
     assert!(status.success(), "toolchain/{script} failed: {status}");
 }
-

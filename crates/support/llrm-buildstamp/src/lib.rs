@@ -1,5 +1,6 @@
-//! The build script half of `--version` (`llrm_support::version`): every compiler binary's package calls `emit` from its
-//! build script, so llrm-llc and each backend's llc print one stamp from one reading of the tree.
+//! The build script half of `--version` (`llrm_support::version`): every
+//! compiler binary's package calls `emit` from its build script, so llrm-llc
+//! and each backend's llc print one stamp from one reading of the tree.
 
 use std::process::Command;
 
@@ -32,7 +33,8 @@ pub fn emit() {
             println!("cargo:rerun-if-changed={}", String::from_utf8_lossy(&out).trim());
         }
     }
-    // Any tracked file of the workspace changes the dirty flag, whichever package this is.
+    // Any tracked file of the workspace changes the dirty flag, whichever
+    // package this is.
     if let Some(top) = git(&["rev-parse", "--show-toplevel"]) {
         let top = String::from_utf8_lossy(&top).trim().to_owned();
         for dir in ["src", "crates", "Cargo.toml"] {
