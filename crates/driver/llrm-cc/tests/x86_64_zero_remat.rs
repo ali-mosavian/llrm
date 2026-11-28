@@ -2,13 +2,16 @@
 //! of it was wanted, as the pin's `isReMaterializable` zero idioms are. The
 //! remat predicate had no zero idiom, so each accumulator a loop starts at
 //! zero took `movaps xmm2, xmm1` of one shared zero
-//! (mem_length_boundaries_m32 `main`, twice). Needs `LLRM_LLC`.
+//! (mem_length_boundaries_m32 `main`, twice).
+
+#[path = "common/target_dir.rs"]
+mod target_dir;
 
 use std::path::Path;
 use std::process::Command;
 
 fn assembly(source: &Path) -> String {
-    let llc = std::env::var_os("LLRM_LLC").expect("LLRM_LLC is not set: this test needs it and does not skip");
+    let llc = target_dir::llc(&Path::new(env!("CARGO_MANIFEST_DIR")).join("../../.."));
     let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("zero-remat-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let asm = dir.join("a.s");
