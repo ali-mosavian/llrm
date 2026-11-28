@@ -1754,7 +1754,7 @@ fn allocation_key(
     want_apart: bool,
 ) -> (u64, u64) {
     use std::fmt::Write;
-    
+
     // The scalars as text, the function as its fields: `Debug` of a function is
     // the cost of the key (`int64_divmod_edges`: a fifth of the compile),
     // and most of it is the selector's `form` of each instruction.
