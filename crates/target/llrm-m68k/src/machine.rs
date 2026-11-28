@@ -554,8 +554,8 @@ impl Tti for M68k {
         true
     }
 
-    /// The SZ1 rule holds -O1 too: a small platform pays for bytes at every
-    /// level.
+    /// DEVIATE SZ1-O1 (row SZ1-O1): the SZ1 rule holds -O1 too; a small
+    /// platform pays for bytes at every level.
     fn opt_size_inline_rule_at_o1(&self) -> bool {
         true
     }
