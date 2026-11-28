@@ -28,11 +28,11 @@ class IdentityTarget(unittest.TestCase):
     def tearDown(self):
         self.dir.cleanup()
 
-    def identity(self, *flag):
+    def identity(self, *flag, same_llc="1"):
         return subprocess.run(
             [os.path.join(TOOLS, "identity.sh"), "c", os.path.join(self.d, "base", "llrm-cc"), os.path.join(self.d, "new", "llrm-cc"), *flag],
             capture_output=True, text=True, cwd=self.d,
-            env={**os.environ, "IDENTITY_SAME_LLC": "1", "TARGET_LOG": self.log, "AB_ALLOW_ENV": "TARGET_LOG"},
+            env={**os.environ, "IDENTITY_SAME_LLC": same_llc, "TARGET_LOG": self.log, "AB_ALLOW_ENV": "TARGET_LOG"},
         )
 
     def targets(self):
@@ -56,6 +56,28 @@ class IdentityTarget(unittest.TestCase):
             self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
             self.assertIn(flag, done.stderr)
             self.assertFalse(os.path.exists(self.log), "nothing compiles for a target that cannot be named")
+
+    def test_a_row_name_compiles_for_that_row(self):
+        """Only -m16/-m32/-m64 were accepted: a dos, bcc or m68k identity run had no way to name its target."""
+        done = self.identity("x86_32-dos")
+        self.assertEqual(self.targets(), {"x86_32-dos"}, done.stdout + done.stderr)
+
+    def test_an_unknown_row_is_refused(self):
+        done = self.identity("x86_99-nowhere")
+        self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
+        self.assertIn("x86_99-nowhere", done.stderr)
+        self.assertFalse(os.path.exists(self.log))
+
+    def test_a_row_whose_own_backend_is_shared_is_refused(self):
+        """Only llrm-llc was compared: two dists sharing llrm-m68k-llc read SAME on every m68k row whatever changed."""
+        for side in ("base", "new"):
+            llc = os.path.join(self.d, side, "llrm-m68k-llc")
+            open(llc, "w").write("#!/bin/bash\n# one m68k llc\n")
+            os.chmod(llc, 0o755)
+        done = self.identity("m68k-68000", same_llc="")
+        self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
+        self.assertIn("same llrm-m68k-llc", done.stderr)
+        self.assertFalse(os.path.exists(self.log))
 
     def test_the_run_says_its_target_and_what_it_did_not_test(self):
         done = self.identity("-m64")
