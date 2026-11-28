@@ -169,14 +169,10 @@ pub fn remat_shape(one: &Insn) -> bool {
         && one.clobbers_high.is_empty()
         && one.symbol != Some(true)
         && one.what.as_ref().is_some_and(|w| {
-            matches!(
+            let plain = matches!(
                 w.op,
                 Operation::Move | Operation::Address | Operation::FloatLoad
             )
-                && matches!(
-                    w.dests.as_slice(),
-                    [Loc::Held(held)] if held.value == one.defines[0]
-                )
                 && (w.sources.len() == 1
                     // a cheap operation on registers: the registers it reads,
                     // then the identity of the operation (`isReMaterializable`
@@ -188,7 +184,16 @@ pub fn remat_shape(one: &Insn) -> bool {
                         ))
                     || (w.op == Operation::FloatLoad
                         && w.sources.is_empty()
-                        && matches!(w.name.as_deref(), Some("fld1" | "fldz"))))
+                        && matches!(w.name.as_deref(), Some("fld1" | "fldz"))));
+            // the zero idiom `xorps r, r` (`V_SET0`): it names only its own
+            // result, so it reads nothing
+            let zero = w.op == Operation::Binary
+                && w.name.as_deref() == Some("xorps")
+                && w.sources.iter().all(|loc| matches!(loc, Loc::Held(held) if held.value == one.defines[0]));
+            matches!(
+                w.dests.as_slice(),
+                [Loc::Held(held)] if held.value == one.defines[0]
+            ) && (plain || zero)
         })
 }
 
@@ -562,10 +567,7 @@ impl<'a> InlineSpiller<'a> {
                 at: beside.at,
                 covers: Some((at, at)),
                 defines: vec![value],
-                what: Some(Semantics {
-                    dests: vec![Loc::Held(Held { value, width: defined.width, offset: 0 })],
-                    ..what.clone()
-                }),
+                what: Some(super::remat::remade(&what, value)),
                 spill_reload: true,
                 rematerialized: true,
                 ..(*def).clone()

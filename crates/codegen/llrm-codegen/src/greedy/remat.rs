@@ -31,7 +31,7 @@ use std::sync::Arc;
 
 use llrm_lir::registers::RegId;
 
-use crate::model::ir::{Held, Loc, Operation, Space};
+use crate::model::ir::{Held, Loc, Operation, Semantics, Space};
 use crate::model::lir::{Insn, LirBody};
 use crate::support::hash::IndexMap;
 
@@ -123,6 +123,24 @@ pub fn is_trivially_re_materializable(
         // (X86InstrFPStack.td#L526): `isReMaterializable`.
         (Operation::FloatLoad, Some("fld1" | "fldz"), []) => def.uses.is_empty() && !def.volatile,
         _ => false,
+    }
+}
+
+/// The semantics of `what`, a definition made again, writing `to`: its one
+/// destination, and the sources of a zero idiom, which name that destination.
+pub fn remade(
+    what: &Semantics,
+    to: u32,
+) -> Semantics {
+    let [Loc::Held(old)] = what.dests.as_slice() else { return what.clone() };
+    let renamed = |loc: &Loc| match loc {
+        Loc::Held(held) if held.value == old.value => Loc::Held(Held { value: to, ..*held }),
+        other => other.clone(),
+    };
+    Semantics {
+        dests: vec![Loc::Held(Held { value: to, width: old.width, offset: 0 })],
+        sources: what.sources.iter().map(renamed).collect(),
+        ..what.clone()
     }
 }
 

@@ -995,9 +995,16 @@ impl licm::Policy<Wrapped> for X86<'_> {
             && (if self.classes.hoist_by_pressure { !self.pressure.high(facts, at, one) } else { self.named < limit }
                 || invariant_load)
             && (invariant_load || facts_every_trip || self.peak_pressure(facts) < limit);
-        // `IsProfitableToHoist`: "Trivially rematerializable instructions
-        // should always be hoisted providing the register allocator can just
-        // pull them down again", unless a copy in the loop takes the value.
+        // `IsProfitableToHoist`
+        // ([MachineLICM.cpp#L1300](https://github.com/llvm/llvm-project/blob/29eff20316c550d8e689a318c614e40186107820/llvm/lib/CodeGen/MachineLICM.cpp#L1300)):
+        // "Trivially rematerializable instructions should always be hoisted
+        // providing the register allocator can just pull them down again",
+        // unless a copy in the loop takes the value. An xmm value (`V_SET0`)
+        // is a register like any. DEVIATE ML3 (owner x87, exit 2026-12-31: the
+        // stack allocator copes with a hoisted constant as the pin's
+        // stackifier does): an x87 value is not, the pin's RFP registers are
+        // virtual until X86FloatingPoint; x87 constants take the stack-room
+        // path above (ML2).
         let flagged =
             one.what.as_ref().and_then(|what| what.name.as_deref()).is_none_or(self.classes.rematerializable_opcode);
         let constant = flagged
@@ -1005,7 +1012,7 @@ impl licm::Policy<Wrapped> for X86<'_> {
                 one.uses.is_empty()
                     && facts.defs.get(&value) == Some(&1)
                     && !facts.copied.contains(&value)
-                    && !self.floating.contains(&value)
+                    && (!self.floating.contains(&value) || self.xmm.contains(&value))
                     && one.defines.len() == 1
                     && one.call.is_none()
                     && one.group.is_none()
