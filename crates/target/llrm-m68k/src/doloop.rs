@@ -71,9 +71,10 @@ pub fn doloops(
     cpu: Cpu,
     returns_value: bool,
 ) -> usize {
-    // priced per CPU by the manuals' tables: `dbf` taken against `addq.w` and a taken `bne` is 10 against 14 clocks
-    // (68000, 68010), 6 against 8 (68020, 68030, but 4 more at the exit); the 68040 (3 against 3) and the 68060 (1
-    // against 1) gain nothing
+    // priced per CPU by the manuals' tables: `dbf` taken against `addq.w` and a
+    // taken `bne` is 10 against 14 clocks (68000, 68010), 6 against 8
+    // (68020, 68030, but 4 more at the exit); the 68040 (3 against 3) and the
+    // 68060 (1 against 1) gain nothing
     if cpu > Cpu::M68030 {
         return 0;
     }
@@ -93,7 +94,8 @@ pub fn doloops(
         if body.len() > MOST_INSTS || branch.kind != Kind::Op("Bne8") {
             continue;
         }
-        let [Operand::Block(target)] = branch.operands.iter().filter(|o| matches!(o, Operand::Block(_))).cloned().collect::<Vec<_>>()[..]
+        let [Operand::Block(target)] =
+            branch.operands.iter().filter(|o| matches!(o, Operand::Block(_))).cloned().collect::<Vec<_>>()[..]
         else {
             continue;
         };
@@ -114,10 +116,14 @@ pub fn doloops(
         }
         // nothing else of the loop touches the counter or calls
         let touches = |one: &Inst| {
-            one.operands.iter().any(|operand| match operand {
-                Operand::Use(reg) | Operand::Def(reg) => root(assignment, reg) == register,
-                _ => false,
-            })
+            one.operands
+                .iter()
+                .any(
+                    |operand| match operand {
+                        Operand::Use(reg) | Operand::Def(reg) => root(assignment, reg) == register,
+                        _ => false,
+                    },
+                )
         };
         let at = body.len() - 2;
         if body.iter().enumerate().any(|(other, one)| (touches(one) && other != at) || one.call) {
@@ -130,19 +136,41 @@ pub fn doloops(
         }
         let mut starts = Vec::new();
         for &entry in &entries {
-            let start = function.blocks[entry].insts.iter().enumerate().rev().find(|(_, one)| {
-                one.call
-                    || one.operands.iter().any(|operand| matches!(operand, Operand::Def(reg) if root(assignment, reg) == register))
-            });
-                let Some((index, Inst { kind: Kind::Op("MOV32ri" | "MOVI32ri"), operands, .. })) = start else { break };
+            let start = function
+                .blocks[entry]
+                .insts
+                .iter()
+                .enumerate()
+                .rev()
+                .find(
+                    |(_, one)| one.call
+                        || one.operands.iter().any(|operand| {
+                            matches!(
+                                operand,
+                                Operand::Def(reg) if root(assignment, reg) == register
+                            )
+                        }),
+                );
+            let Some((index, Inst { kind: Kind::Op("MOV32ri" | "MOVI32ri"), operands, .. })) = start else { break };
             let [Operand::Def(_), Operand::Imm(k)] = operands[..] else { break };
-            // -n for an `addq`, n for a `subq`: 1 to 65536 trips, the most a word counter runs
+            // -n for an `addq`, n for a `subq`: 1 to 65536 trips, the most a
+            // word counter runs
             if k == 0 || k.abs() > 0x10000 || k.abs() < fewest || (k > 0) != (direction < 0) {
                 break;
             }
             starts.push((entry, index, k));
         }
-        if starts.len() != entries.len() || read_after_with(function, assignment, &following, register, &leaves, returns_value && is_result(register), true) {
+        if starts.len() != entries.len()
+            || read_after_with(
+                function,
+                assignment,
+                &following,
+                register,
+                &leaves,
+                returns_value && is_result(register),
+                true,
+            )
+        {
             continue;
         }
         for (entry, index, k) in starts {

@@ -486,7 +486,7 @@ impl<'a> Compute<'a> {
 #[cfg(test)]
 thread_local!(pub(crate) static STEPS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) });
 
-/// How many re-entry pairs the last `compute` on this thread kept to sort.
+// How many re-entry pairs the last `compute` on this thread kept to sort.
 #[cfg(test)]
 thread_local!(pub(crate) static RECORDED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) });
 

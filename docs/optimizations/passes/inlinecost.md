@@ -96,25 +96,6 @@ each site's cost and threshold beside the existing decision; with
   (`trial::with_kept_hinted_calls`, `driver/trial.rs`); the finished object
   decides, because the units cannot see what the copies fold to (QB
   `sfm16_dbg` -Os: `sf_clz32` inlined at six calls, +388 B).
-  arm64 runs the same trial in its own driver (`llrm-arm64/src/driver.rs`,
-  `trial::keeps_unhinted`; owner m16-b, exit 2026-12-20): QB -Os array.c
-  `arry_esize` copied into four callers, 3,264 -> 2,996 B (gcc 3,036).
-  Its price pays each function's work once, not by call reach as the m32/m64
-  trials do (ARM64-TRIAL-CALL-REACH, owner w9, exit 2026-12-22): the byte wins
-  stay, at a measured clock cost (see the row).
-  The same trial reverses the negative-cost yield (`yields_to_negative_cost`,
-  `trial::with_kept_negative_calls`, a second stage priced on top of the first):
-  `code_byte` (a bounds check and a store, cost below zero) was copied into
-  every caller; codegen.c 7,008 -> 6,156 B (gcc 6,832), code.c 1,680 -> 1,380.
-- INLINEHINT-LOOP-TRIAL (beyond the pin, which has no loop exemption without
-  PSI; owner w9, exit 2026-12-01): a site in a loop (`relative_frequency > 1`)
-  takes both yields above, as the speed side's. Where a yield passed a growing
-  call there, the caller is noted separately and the module compiled again with
-  the guard binding loop sites too (`trial::with_kept_loop_calls`,
-  `Dimension::KeepLoopCalls`; arm64 and m68k in their drivers). It is its own
-  bundle under the same clock cap: a refused loop bundle leaves the cold
-  bundle kept. m64 and m68k have no clock cap, so loop sites there decide by
-  bytes alone.
 - SZ1-SITE (owner m68k-b, exit 2026-11-24): the size rule (D11) prices a
   callee's instruction with the call site's constant arguments, not only a
   GEP as `isGEPFree` does (z80 `rotate_small` -O1 922 -> 576 B).

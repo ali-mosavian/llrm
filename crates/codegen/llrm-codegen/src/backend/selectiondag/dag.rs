@@ -131,6 +131,18 @@ pub struct MemInfo {
     pub ordering: Option<llrm_mir::opcode::AtomicOrdering>,
 }
 
+impl MemInfo {
+    /// `MemSDNode::isSimple`: neither volatile nor ordered past unordered.
+    pub fn is_simple(&self) -> bool {
+        !self.volatile && self.ordering.is_none_or(|one| one == llrm_mir::opcode::AtomicOrdering::Unordered)
+    }
+
+    /// `MemSDNode::isAtomic`.
+    pub fn is_atomic(&self) -> bool {
+        self.ordering.is_some()
+    }
+}
+
 /// `MachinePointerInfo`'s value: what the access is relative to.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum MemBase {

@@ -3,9 +3,10 @@
 use llrm_z80::compile::text;
 use llrm_z80::driver::{Level, Request};
 
-/// byval_inline at -Os printed `ld -43(ix), hl`: a 16-bit store through ix, which sdasz80 rejects
-/// ("Invalid Addressing Mode"). #7802 folds a spilled copy into the store; the cell showed as a link
-/// failure in every sweep from 11-07. A pair goes through ix as two byte `ld`s.
+/// byval_inline at -Os printed `ld -43(ix), hl`: a 16-bit store through ix,
+/// which sdasz80 rejects ("Invalid Addressing Mode"). #7802 folds a spilled
+/// copy into the store; the cell showed as a link failure in every sweep from
+/// 11-07. A pair goes through ix as two byte `ld`s.
 #[test]
 fn a_pair_is_never_stored_or_loaded_through_ix_whole() {
     let asm = text(include_str!("data/byval_inline_main.ll"), "main", 0, &Request::new(Level::Os)).expect("compiles");

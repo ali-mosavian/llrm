@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/loopvectorizelegality.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/loopvectorizelegality.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/loopvectorizelegality.rs sha256:d33072fa9d38f9fa63b3410e86bf4709865181ef29314374f800e6ff1432d94a -->
+<!-- src: crates/opt/llrm-transforms/src/loopvectorizelegality.rs sha256:86a6c386b0769f4fcc09d6af759ffce7d8dcd543542847d1c3d7f8d4d22ee2f7 -->
 
 # loopvectorizelegality
 
@@ -32,8 +32,8 @@ legal with primary induction `%i`; the same loop with a `call` in it is not.
 - LV-D3 early-exit loops (`isVectorizableEarlyExitLoop`): read-only loops
   whose loads are dereferenceable in the loop only; no stores (the pin's
   `-enable-early-exit-vectorization-with-side-effects` is off), no
-  fault-only-first loads (`-enable-early-exit-with-ffload` is off), no
-  SCEV predicates. The planner takes them through `loopvectorizeearlyexit`.
+  fault-only-first loads (`-enable-early-exit-with-ffload` is off), no SCEV
+  predicates. The planner takes them through `loopvectorizeearlyexit`.
 - LV-D4 calls: an intrinsic `getVectorIntrinsicIDForCall` takes is legal (a
   scalar operand loop invariant, L965); a call the `VFDatabase` or
   `isTLIScalarize` would take is refused. The transform widens fewer.

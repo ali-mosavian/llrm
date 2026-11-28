@@ -46,8 +46,9 @@ done:
   ret i32 %s
 }";
 
-/// The count is the one the promotion gives (one more without it). `shl`, not `mul 100`: #9197 prices a constant
-/// multiply by its cheapest chain, 6 instructions at the 68000 where the count once held 4 (33 -> 35).
+/// The count is the one the promotion gives (one more without it). `shl`, not
+/// `mul 100`: #9197 prices a constant multiply by its cheapest chain, 6
+/// instructions at the 68000 where the count once held 4 (33 -> 35).
 #[test]
 fn a_sign_extension_is_made_where_the_promoted_load_is_used() {
     for (cpu, sunk) in [("68000", 30), ("68020", 28)] {

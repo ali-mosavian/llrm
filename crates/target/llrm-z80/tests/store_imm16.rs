@@ -153,8 +153,9 @@ done:
 }
 "#;
 
-/// Bytes decide at -O2 too since #9872: fill -O2 is 13 B with the immediates in the loop against 15 B with the pair held
-/// across it (-2 B); the loop runs 58 T a trip against 52 T (+6 T; fill_nest +22144 T). The held pair was the
+/// Bytes decide at -O2 too since #9872: fill -O2 is 13 B with the immediates in
+/// the loop against 15 B with the pair held across it (-2 B); the loop runs 58
+/// T a trip against 52 T (+6 T; fill_nest +22144 T). The held pair was the
 /// speed-first premise.
 #[test]
 fn at_speed_a_constant_stored_in_a_loop_stays_an_immediate_too() {

@@ -24,11 +24,11 @@
 //! After `br (icmp ult %i, %n), loop, exit`, `%i u< %n` is guarded at the
 //! loop's entry.
 
-use super::ConstantRange;
 use llrm_mir::module::{BlockId, GlobalKind, InstId, Operand};
 use llrm_mir::opcode::{IntPredicate, Opcode};
 use llrm_mir::valuetracking::pattern;
 
+use super::ConstantRange;
 use super::ap::Ap;
 use super::expr::{Kind, Scev, Use, flags};
 use super::predicate::{is_equality, is_false_when_equal, is_relational, is_signed, is_true_when_equal, is_unsigned};

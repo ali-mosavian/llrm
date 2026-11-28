@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/rangesplit.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/rangesplit.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/rangesplit.rs sha256:12f3ab7b15788defa139f2e73af9dca6072d26997e64d61031e88787d68dd9ad -->
+<!-- src: crates/opt/llrm-transforms/src/rangesplit.rs sha256:fe069d5a7bdcfe2a440f50c5ac3771eb7da0fdb7aeb6759c37e820829291c005 -->
 
 # rangesplit
 
@@ -15,13 +15,15 @@ join for the branches whose subtract feeds nothing else; the driver prices
 the function with and without it and keeps the cheaper.
 
 DEVIATE 6502-RANGE (owner llrm-target-6502, exit 2026-12-15): it is not
-LLVM's. The pin has the join (`foldRangeChecks`, `SimplifyBranchOnICmpChain`)
-and no inverse; llvm-mos keeps the two compares of `c >= 'a' && c <= 'z'`
-(k_strupper, 47 B / 412 clocks). Exit: the target's own cost for the join in
-SimplifyCFG's `FoldBranchToCommonDest`, once it can tell a branch from a value.
+LLVM's. The pin has the join (`foldRangeChecks`,
+`SimplifyBranchOnICmpChain`) and no inverse; llvm-mos keeps the two compares
+of `c >= 'a' && c <= 'z'` (k_strupper, 47 B / 412 clocks). Exit: the
+target's own cost for the join in SimplifyCFG's `FoldBranchToCommonDest`,
+once it can tell a branch from a value.
 
 ## Runs
-In the 6502 driver, per function, priced with and without the split (`rangesplit::unmerged`).
+In the 6502 driver, per function, priced with and without the split
+(`rangesplit::unmerged`).
 
 ## Example
 ```text

@@ -8,8 +8,9 @@
 //! by the frequency of its block.
 //!
 //! # Example
-//! A start value `i * i` of an inner loop, a recurrence of the outer loop, is left
-//! as the written multiply instead of becoming an outer phi stepped on every trip.
+//! A start value `i * i` of an inner loop, a recurrence of the outer loop, is
+//! left as the written multiply instead of becoming an outer phi stepped on
+//! every trip.
 //!
 //! ```text
 //! outer: for i:  if (flag[i]) { for (j = i*i; j < n; j += i) mark(j); }

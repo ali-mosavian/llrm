@@ -336,7 +336,16 @@ fn the_default_order_ranks_registers_before_instructions() {
 fn what_an_address_mode_folds_by_kind() {
     let tti = X86::of_cpu("core2").unwrap();
     let fold = |kind, gv, offset, base, scale| {
-        is_am_completely_folded_at(&tti, kind, MemAccessTy::unknown(0), gv, Immediate(offset), base, scale, Default::default())
+        is_am_completely_folded_at(
+            &tti,
+            kind,
+            MemAccessTy::unknown(0),
+            gv,
+            Immediate(offset),
+            base,
+            scale,
+            Default::default(),
+        )
     };
     assert!(fold(Kind::Address, false, 8, true, 4));
     assert!(!fold(Kind::Address, false, 1 << 40, true, 1), "a displacement is 32 bits");
@@ -940,9 +949,11 @@ fn a_frame_slot_takes_the_base_register_and_leaves_one_for_an_index() {
     assert_eq!(global.mode(), Some(Mode { global: false, has_base_reg: true, scale: 2, bits: Default::default() }));
 }
 
-/// DEVIATE LSR-SIZE at m16: two solutions of the same instructions and registers, one holding two address registers where the other
-/// holds one for more bytes of setup. Ranked by bytes alone the two-register one won, and QCport render/d_alias grew 159 B at -Os
-/// (the allocator then spills the restricted base/index registers).
+/// DEVIATE LSR-SIZE at m16: two solutions of the same instructions and
+/// registers, one holding two address registers where the other holds one for
+/// more bytes of setup. Ranked by bytes alone the two-register one won, and
+/// QCport render/d_alias grew 159 B at -Os (the allocator then spills the
+/// restricted base/index registers).
 #[test]
 fn fewer_address_registers_win_before_fewer_bytes_when_sized() {
     let real = RealMode {
@@ -971,7 +982,8 @@ fn fewer_address_registers_win_before_fewer_bytes_when_sized() {
     };
     let (one_register, two_registers) = (sized(&[1], 9), sized(&[1, 2], 6));
     assert!(one_register.is_less(&tti, &two_registers) && !two_registers.is_less(&tti, &one_register));
-    // Flat addressing takes any register: the count is no key and the fewer bytes win.
+    // Flat addressing takes any register: the count is no key and the fewer
+    // bytes win.
     let flat = X86::of_cpu("i486")
         .unwrap()
         .with_tuning(llrm_mir::target::Tuning { lsr_size_order: true, ..llrm_mir::target::Tuning::PIN });
@@ -989,11 +1001,15 @@ fn the_loop_as_written_pays_no_setup_for_a_recurrence_it_derives_from_its_counte
         let step = se.get_constant_of_type(cx, Ty::Int(32), 16);
         let row = se.get_add_rec_expr(cx, vec![Operand32::of(a), Operand32::of(step)], header, Flags::default()).scev;
         let f = Formula { base_regs: vec![row], has_base_reg: true, ..Formula::default() };
-        let tti = X86::of_cpu("core2").unwrap().with_tuning(llrm_mir::target::Tuning {
-            lsr_size_order: true,
-            lsr_derived_setup_free: true,
-            ..llrm_mir::target::Tuning::PIN
-        });
+        let tti = X86::of_cpu("core2")
+            .unwrap()
+            .with_tuning(
+                llrm_mir::target::Tuning {
+                    lsr_size_order: true,
+                    lsr_derived_setup_free: true,
+                    ..llrm_mir::target::Tuning::PIN
+                },
+            );
         let bytes = |as_written: bool, se: &mut ScalarEvolution| {
             let mut rating = Rating {
                 se,
@@ -1017,8 +1033,9 @@ fn the_loop_as_written_pays_no_setup_for_a_recurrence_it_derives_from_its_counte
     });
 }
 
-/// A target that did not state the fact keeps the pin's count: m16 -Os grew 28 QCport modules by
-/// 302 B and `huge` by 27% with the discount (#9587), its setup being real bytes.
+/// A target that did not state the fact keeps the pin's count: m16 -Os grew 28
+/// QCport modules by 302 B and `huge` by 27% with the discount (#9587), its
+/// setup being real bytes.
 #[test]
 fn a_target_without_the_fact_pays_setup_for_a_derived_recurrence() {
     with_loop(|cx, se, a, _, header, _| {

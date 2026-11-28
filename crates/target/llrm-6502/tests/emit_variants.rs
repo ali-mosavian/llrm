@@ -34,8 +34,8 @@ use llrm_6502::driver::{Level, Request, assembly};
 /// stepped; `long_step_trial`): the same 16 emissions again, 32 in
 /// all. That one is paid for: it is the text kept.
 ///
-/// Both compiles have two dead carry saves dropped before allocation, so each is
-/// compiled again with them dropped after it (`save_drop_trial`): 64.
+/// Both compiles have two dead carry saves dropped before allocation, so each
+/// is compiled again with them dropped after it (`save_drop_trial`): 64.
 #[test]
 fn a_function_with_spills_and_calls_pays_for_no_variant_that_changes_nothing() {
     let before = emit_runs();

@@ -13,11 +13,10 @@
 //! DEVIATE CC2: `mayAlias` has no `MachineMemOperand` offset or base
 //! alignment: the relatively-aligned-offsets test is not run. The alias
 //! analysis (`useAA`) runs only where the builder records the IR pointer
-//! ([`MemBase::Value`], wasm), on whole accesses; there are no atomics; and a
-//! lifetime marker is the whole frame object of unknown size (it aliases an
-//! access of that object, none of another). A pair the address analysis cannot
-//! decide is a may-alias. Exit: `MemInfo` carrying the pointer info. Owner:
-//! w12.
+//! ([`MemBase::Value`], wasm), on whole accesses; and a lifetime marker is the
+//! whole frame object of unknown size (it aliases an access of that object,
+//! none of another). A pair the address analysis cannot decide is a may-alias.
+//! Exit: `MemInfo` carrying the pointer info. Owner: w12.
 //!
 //! DEVIATE CC1: the pin skips all of this when optimising nothing
 //! (`OptLevel == None`); no opt level reaches the combiner, so it runs at
@@ -107,6 +106,10 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
         if info0.volatile && info1.volatile {
             return true;
         }
+        // Two atomic accesses cannot be reordered either.
+        if info0.is_atomic() && info1.is_atomic() {
+            return true;
+        }
         // A load of invariant memory and a store do not alias.
         let invariant = |op: SDValue| self.dag.invariant_loads.contains(&op.node);
         let is_store = |op: SDValue| self.dag.opcode(op) == ISD::Store;
@@ -138,7 +141,7 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
         let mut aliases = Vec::new();
         let mut visited: HashSet<u32> = HashSet::default();
         let is_load =
-            self.dag.opcode(node) == ISD::Load && self.access(node).is_some_and(|(_, _, info)| !info.volatile);
+            self.dag.opcode(node) == ISD::Load && self.access(node).is_some_and(|(_, _, info)| info.is_simple());
         let mut chains = vec![original];
         let mut depth = 0;
         while let Some(chain) = chains.pop() {
@@ -167,7 +170,7 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
                 ISD::EntryToken => Some(None),
                 ISD::Load | ISD::Store => {
                     let op_is_load = self.dag.opcode(chain) == ISD::Load
-                        && self.access(chain).is_some_and(|(_, _, info)| !info.volatile);
+                        && self.access(chain).is_some_and(|(_, _, info)| info.is_simple());
                     (is_load && op_is_load || !self.may_alias(node, chain)).then(|| Some(self.dag.operand(chain, 0)))
                 }
                 // Always forward past a CopyFromReg.
@@ -267,7 +270,7 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
                 break;
             }
             let (_, length, chain_info) = self.access(chain)?;
-            if chain_info.volatile {
+            if !chain_info.is_simple() {
                 break;
             }
             let ptr = BaseIndexOffset::matching(self.dag, chain);

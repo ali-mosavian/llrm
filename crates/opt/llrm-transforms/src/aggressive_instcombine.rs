@@ -1398,7 +1398,7 @@ fn fold_mul_high(
     };
     let Some((x, y)) = found else { return false };
     let wide = context.types.int(bits * 2);
-    let mut build = |function: &mut Function, op: Opcode, ty: TypeId, operands: Vec<Operand>, flags: Flags| {
+    let build = |function: &mut Function, op: Opcode, ty: TypeId, operands: Vec<Operand>, flags: Flags| {
         let one = function.create_instruction(op, ty, operands, flags, None);
         function.insert(one, Position::Before(inst)).expect("a placed instruction");
         Operand::Value(function.instruction(one).result.expect("a value"))
@@ -1589,7 +1589,7 @@ fn fold_str_n_cmp(
 
     let mut incoming = Vec::new();
     for (at, &sub) in subs.iter().enumerate() {
-        let mut build = |function: &mut Function, op: Opcode, ty, operands: Vec<Operand>, flags| {
+        let build = |function: &mut Function, op: Opcode, ty, operands: Vec<Operand>, flags| {
             let one = function.create_instruction(op, ty, operands, flags, None);
             function.insert(one, Position::End(sub)).expect("a placed block");
             function.instruction(one).result.map(Operand::Value)
@@ -1855,7 +1855,7 @@ fn fold_any_or_all_bits_set(
     }
     let root = ops.root.expect("a chain has a root");
     let mask = Operand::Constant(context.int(x_ty, ops.mask as i128));
-    let mut build = |function: &mut Function, op: Opcode, ty: TypeId, operands: Vec<Operand>| {
+    let build = |function: &mut Function, op: Opcode, ty: TypeId, operands: Vec<Operand>| {
         let one = function.create_instruction(op, ty, operands, Flags::default(), None);
         function.insert(one, Position::Before(inst)).expect("a placed instruction");
         Operand::Value(function.instruction(one).result.expect("a value"))
@@ -2478,7 +2478,7 @@ fn try_to_recognize_table_based_log2(
     load: &TableLoad,
 ) -> bool {
     use llrm_mir::valuetracking::pattern;
-    let (mut x, x_ty, input_bits, zero_elem, isolated) = {
+    let (x, x_ty, input_bits, zero_elem, isolated) = {
         let q = query(context, layout, function);
         let Some((_, _, product, shift)) = pattern::binary(&q, load.index, BinaryOp::LShr) else { return false };
         let Some((shift, _)) = q.int_constant(shift) else { return false };

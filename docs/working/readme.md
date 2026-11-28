@@ -251,3 +251,9 @@ A/B runs, cause cards and plans by target, kept for the numbers they hold.
 | [z80-shl32-ab-2026-11-11](z80-shl32-ab-2026-11-11.md) | z80 SHL32 over any two pairs: A/B (2026-11-11) |
 | [z80-sp-frame-ab-2026-11-12](z80-sp-frame-ab-2026-11-12.md) | z80 SP-addressed frames: A/B (2026-11-12) |
 | [z80-wshift-ab-2026-11-12](z80-wshift-ab-2026-11-12.md) | z80 WSHIFT: a variable i64 shift as an in-place loop, A/B (2026-11-12) |
+| [indirectbr-guards-2026-11-20](indirectbr-guards-2026-11-20.md) | indirectbr and blockaddress: each guard and the test that pins it (#10353) |
+| [m68k-class-splitting-plan](m68k-class-splitting-plan.md) | m68k register class splitting: scoping plan (2026-11-24) |
+| [m68k-trial-clock-estimate-plan](m68k-trial-clock-estimate-plan.md) | m68k trial clock estimate with a layout-dependent weight: scoping (2026-11-24) |
+| [open-cells-os-x86](open-cells-os-x86.md) | x86 Os cells over the best bar, QB hostperf |
+| [x86-os-inline-finished-trial-plan](x86-os-inline-finished-trial-plan.md) | x86 Os inline trial: build the calls the size guard refused, keep what pays: scoping |
+| [z80-module-clock-estimate](z80-module-clock-estimate.md) | Z80 module price: the static clock estimate on smaller modules |

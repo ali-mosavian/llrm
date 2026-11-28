@@ -993,7 +993,8 @@ struct Unswitched {
     siblings: Vec<BlockId>,
     /// `revisitCurrentLoop`: a non-trivial unswitch that is not a partial one.
     revisit: bool,
-    /// The step was a non-trivial unswitch: the loop pass manager takes it from here.
+    /// The step was a non-trivial unswitch: the loop pass manager takes it from
+    /// here.
     non_trivial: bool,
 }
 
@@ -1037,7 +1038,10 @@ fn unswitch_best_condition(
         run.partial_done.insert(header);
     }
     let partial = best.partial.is_some();
-    Some((nontrivial::unswitch_nontrivial_invariants(run, analyzed, header, &best, insert_freeze).cloned_headers, partial))
+    Some((
+        nontrivial::unswitch_nontrivial_invariants(run, analyzed, header, &best, insert_freeze).cloned_headers,
+        partial,
+    ))
 }
 
 /// `unswitchLoop`: the trivial path, then, with `non_trivial`, the best
@@ -1076,7 +1080,8 @@ fn unswitch_loop(
         );
     let lp = analyzed.loops.get_loop_for(header).expect("a loop headed by this block");
     // DEVIATE UNROLL-SPEED-TRIAL: the compile that copies no loop for a
-    // condition (`SpeedUnroll::NoUnswitch`) is priced against the one that does.
+    // condition (`SpeedUnroll::NoUnswitch`) is priced against the one that
+    // does.
     let refused = crate::trial::speed_unroll().is_some_and(crate::trial::SpeedUnroll::refuses_unswitch);
     if !non_trivial || optsize || refused || !nontrivial::is_safe(run, analyzed, lp) {
         return Unswitched::default();

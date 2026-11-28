@@ -130,10 +130,10 @@ use llrm_analysis::manager::{AssumptionCache, ExposedFrames};
 use llrm_analysis::num::Num as BigInt;
 use llrm_mir::context::{ConstantKind, Context, signed};
 use llrm_mir::datalayout::DataLayout;
+use llrm_mir::dense::IdSet;
 use llrm_mir::edit::Position;
 use llrm_mir::facts::Fact;
 use llrm_mir::lowering::CgpStep;
-use llrm_mir::dense::IdSet;
 use llrm_mir::module::{BlockId, Function, GlobalValue, InstId, Operand, ValueDef, ValueId};
 use llrm_mir::opcode::{BinaryOp, CastOp, Flags, IntPredicate, Opcode};
 use llrm_mir::passes::{self, Analyses, Dominators, FunctionPass, Loops, PreservedAnalyses};
@@ -713,7 +713,6 @@ fn shifted(
     unit: &passes::Unit,
     cold: &Cold,
     tti: &dyn Tti,
-    retry: bool,
     space: u32,
     block: BlockId,
     bytes: u64,
@@ -912,7 +911,6 @@ fn matched_over(
                     unit,
                     cold,
                     tti,
-                    retry,
                     space,
                     block,
                     bytes,
@@ -932,7 +930,7 @@ fn matched_over(
             let operand = instruction.operands[1 + at];
             // `matchScaledValue(index, scale)` of a `shl x, C`: the shift is
             // the scale of the mode (`matchOperationAddr`, `Instruction::Shl`).
-            match shifted(unit, cold, tti, retry, space, block, bytes, operand, scale, offset + inner.offset) {
+            match shifted(unit, cold, tti, space, block, bytes, operand, scale, offset + inner.offset) {
                 Some((shl, folded, scale)) => {
                     insts.push(shl);
                     in_bounds = false;
@@ -965,8 +963,8 @@ fn matched_over(
     Mode { base: inner.base, reg, offset: total, index, insts, in_bounds }
 }
 
-/// Each load and store whose address is made in another block, with the address
-/// made where it is used; whether any was.
+// Each load and store whose address is made in another block, with the address
+// made where it is used; whether any was.
 thread_local! {
     /// Whether a match reached the retry's conflict without being allowed it.
     static RETRY_REACHED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };

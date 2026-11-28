@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/vectorlower.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/vectorlower.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/vectorlower.rs sha256:274017fd603a253bc652cf43684cf417691110747b9d690ed08c925230eeb778 -->
+<!-- src: crates/opt/llrm-transforms/src/vectorlower.rs sha256:104829e80f9fb879f9a26d981796259623a46488ed426e10680f34b44a5dcf68 -->
 
 # vectorlower
 
@@ -41,4 +41,5 @@ In `cgpaddr`, with the other CodeGenPrepare rewrites, where the target's
 (`Tti::vector_arithmetic_cost`: only the bitwise operations).
 
 ## Example
-`%w = xor <2 x i16> %v, %s` becomes `%w = xor i32 %v, %s`, where `%v` and `%s` are the same two lanes held in one `i32`.
+`%w = xor <2 x i16> %v, %s` becomes `%w = xor i32 %v, %s`, where `%v` and
+`%s` are the same two lanes held in one `i32`.

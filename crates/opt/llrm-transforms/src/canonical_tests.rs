@@ -246,7 +246,12 @@ b3:
     let mut passes = llrm_mir::passes::PassManager::default();
     passes.verify_each = true;
     passes.add(super::Canonical);
-    passes.add(crate::looprotate::LoopRotate { duplicate_headers: true, size: false, check_exit_count: false, free_guard: false });
+    passes.add(crate::looprotate::LoopRotate {
+        duplicate_headers: true,
+        size: false,
+        check_exit_count: false,
+        free_guard: false,
+    });
     passes.run_module(&mut module, std::rc::Rc::new(llrm_mir::target::Neutral)).expect("runs");
     let shown = printed(&module);
     let entry = shown.split("b0:\n").nth(1).unwrap().lines().next().unwrap();

@@ -39,7 +39,6 @@ use llrm_mir::datalayout::DataLayout;
 use llrm_mir::tti::*;
 use llrm_target::Target as _;
 
-use crate::driver::Level;
 use crate::target::Z80;
 use crate::timing::cost;
 
@@ -179,9 +178,9 @@ pub const SPEED_MILLICLOCKS_PER_BYTE: i64 = 3000;
 impl Tti for Z80Tti {
     /// DEVIATE COMMON-INSTS-O1 (owner wasm-3, exit 2026-12-12, row
     /// COMMON-INSTS-O1): the -O2 function pipeline's hoisting and sinking
-    /// SimplifyCFG (L832) also runs at -O1, as before the pin's plain one (L621)
-    /// was mirrored; the flip is not measured here (computed_goto -O1 +369 B,
-    /// word_compare_branches +265 B on 6502 without it).
+    /// SimplifyCFG (L832) also runs at -O1, as before the pin's plain one
+    /// (L621) was mirrored; the flip is not measured here (computed_goto
+    /// -O1 +369 B, word_compare_branches +265 B on 6502 without it).
     fn common_insts_at_o1(&self) -> bool {
         true
     }
@@ -644,6 +643,12 @@ impl Tti for Z80Tti {
     /// `OptSizeThreshold` 50 allows growth, and a word update is 6 B where the
     /// call is 3.
     fn opt_size_inline_by_code_size(&self) -> bool {
+        true
+    }
+
+    /// DEVIATE SZ1-O1 (row SZ1-O1): the SZ1 rule holds -O1 too; a small
+    /// platform pays for bytes at every level.
+    fn opt_size_inline_rule_at_o1(&self) -> bool {
         true
     }
 

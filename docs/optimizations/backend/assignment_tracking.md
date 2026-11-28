@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/assignment_tracking.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/assignment_tracking.rs); edit the header, not this file.
-<!-- src: crates/codegen/llrm-codegen/src/backend/assignment_tracking.rs sha256:e733f23ccf75fa693693a0872e364c89dca78f91facc506fdae3dd18a975c2b5 -->
+<!-- src: crates/codegen/llrm-codegen/src/backend/assignment_tracking.rs sha256:0d1463bfecb0b320e4f9843c15e1d7137557fcf7e6caaab22b85a65151c9093c -->
 
 # assignment_tracking
 
@@ -17,7 +17,8 @@ dataflow: a state per block (`BlockInfo`), transfer functions for stores,
 escaping calls and records, and `run`, the fixpoint over the blocks.
 
 ## Runs
-In the driver, once per module before code generation, when the module carries `#dbg_assign` records (`tracked`, `module_rewritten`).
+In the driver, once per module before code generation, when the module
+carries `#dbg_assign` records (`tracked`, `module_rewritten`).
 
 ## Example
 A variable `x` kept in `%a` from its first use, and `y` in its stack slot

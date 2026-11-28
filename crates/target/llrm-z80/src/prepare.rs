@@ -50,8 +50,9 @@ pub fn split_phi_edges(module: &mut Module) {
 /// The attribute that lets a function tuned for size call `__mulsi3`.
 pub const LONG_MULTIPLY: &str = "llrm-mulsi3";
 
-/// The attribute of a module with one long multiply: it keeps the word products, and a function not tuned
-/// for size is also selected with the routine's call (`pipeline::CALL_MULS`), the module price choosing.
+/// The attribute of a module with one long multiply: it keeps the word
+/// products, and a function not tuned for size is also selected with the
+/// routine's call (`pipeline::CALL_MULS`), the module price choosing.
 pub const LONE_MULTIPLY: &str = "llrm-mulsi3-lone";
 
 /// Marks every function with a body when the module multiplies longs often
@@ -181,7 +182,8 @@ pub fn mark_long_shifts(module: &mut Module) {
 pub const WORD_PRODUCT: &str = "llrm-word-product";
 
 /// Marks every function with a body that multiplies two zero-extended words, or
-/// multiplies 32 bits or more through an intrinsic the selector expands to them.
+/// multiplies 32 bits or more through an intrinsic the selector expands to
+/// them.
 pub fn mark_word_products(module: &mut Module) {
     let names: Vec<String> = module
         .functions()
@@ -282,8 +284,7 @@ pub fn mark_word_chains(module: &mut Module) {
             if crate::dagisel::pipeline::pin_decomposes(c) {
                 continue;
             }
-            let Some((_, (bytes, _), (call, _))) = crate::dagisel::pipeline::word_chain(c as i64, true, false, true)
-            else {
+            let Some((_, (bytes, _), (call, _))) = crate::dagisel::pipeline::word_chain(c as i64, true, true) else {
                 return;
             };
             extra += bytes - call;

@@ -4,13 +4,12 @@
 
 use llrm_m68k::compile::{Options, items_with, text_with};
 use llrm_m68k::dagisel::hooks::Cpu;
-use llrm_m68k::object::{executable, start, write_executable};
-
-use crate::support;
-
 use llrm_m68k::encode::encode;
 use llrm_m68k::mc::{Inst, Operand, print};
+use llrm_m68k::object::{executable, start, write_executable};
 use llrm_m68k::reg;
+
+use crate::support;
 
 const DATALAYOUT: &str = "E-m:e-p:32:16:32-i8:8:8-i16:16:16-i32:16:32-n8:16:32-a:0:16-S16";
 

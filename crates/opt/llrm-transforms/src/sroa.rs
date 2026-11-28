@@ -1368,10 +1368,11 @@ fn check_vector_types_for_promotion(
     }
     // SDAG SDNode can't have more than 65535 operands.
     candidates.list.retain(|shape| shape.count <= u32::from(u16::MAX));
-    // DEVIATE: only a power-of-two lane count (a vector or a slice of one). Reason: the DAG has no
-    // vector type of an odd lane count (the pin widens `<3 x i8>` to `<4 x i8>`, then `<16 x i8>`), so
-    // `<3 x i8>` compiled nowhere. Exit: extended vector types in the type legalizer (`v3i8` to `v4i8` to
-    // `v16i8`); owner x87-cordic-2; review 2026-11-27.
+    // DEVIATE: only a power-of-two lane count (a vector or a slice of one).
+    // Reason: the DAG has no vector type of an odd lane count (the pin
+    // widens `<3 x i8>` to `<4 x i8>`, then `<16 x i8>`), so `<3 x i8>`
+    // compiled nowhere. Exit: extended vector types in the type legalizer
+    // (`v3i8` to `v4i8` to `v16i8`); owner x87-cordic-2; review 2026-11-27.
     candidates.list.retain(|shape| shape.count.is_power_of_two());
     candidates.list.iter().copied().find(|&shape| {
         let element_bits = layout.size_bits(&context.types, shape.element);

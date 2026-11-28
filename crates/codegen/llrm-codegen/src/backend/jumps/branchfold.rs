@@ -336,12 +336,20 @@ fn effects(
     bits: u32,
     insn: &Insn,
 ) -> Option<(crate::backend::lanes::Lanes, crate::backend::lanes::Lanes)> {
-    let unmodelled = insn.what.as_ref().is_some_and(|what| {
-        what.dests.iter().chain(&what.sources).any(|loc| {
-            matches!(loc, crate::model::ir::Loc::Reg(one)
-                if !regs.in_class(one.register, llrm_lir::registers::class::INT) && !regs.is_segment(one.register))
-        })
-    });
+    let unmodelled = insn
+        .what
+        .as_ref()
+        .is_some_and(
+            |what| what.dests
+                .iter()
+                .chain(&what.sources)
+                .any(
+                    |loc| matches!(
+                        loc,
+                        crate::model::ir::Loc::Reg(one) if !regs.in_class(one.register, llrm_lir::registers::class::INT) && !regs.is_segment(one.register)
+                    ),
+                ),
+        );
     if unmodelled {
         return None;
     }
@@ -747,8 +755,7 @@ impl<'a> Folder<'a> {
         let mut run = Vec::new();
         while let Some((at, by)) = pairs(run.len()) {
             let head = &first.insns[at];
-            let Some((reads, writes)) = effects(regs, bits, head)
-            else {
+            let Some((reads, writes)) = effects(regs, bits, head) else {
                 break;
             };
             // A flag the instruction sets is the compare's to set again: only

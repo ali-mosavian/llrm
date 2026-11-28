@@ -81,8 +81,9 @@ fn a_large_frame_is_one_adjustment() {
     assert_eq!(layout(&function).prologue(), [FrameOp::SubSp(30004)]);
 }
 
-/// DEVIATE: past what a 16-bit displacement reaches the frame takes `%a6` (the arguments lie
-/// above the whole frame): an 80000-byte alloca is `link` and the rest of the frame.
+/// DEVIATE: past what a 16-bit displacement reaches the frame takes `%a6` (the
+/// arguments lie above the whole frame): an 80000-byte alloca is `link` and the
+/// rest of the frame.
 #[test]
 fn a_frame_past_the_displacement_reach_takes_the_frame_pointer() {
     let function =

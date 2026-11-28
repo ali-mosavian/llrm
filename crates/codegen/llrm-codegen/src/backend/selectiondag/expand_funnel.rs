@@ -100,7 +100,9 @@ pub fn expand_rotate(
 
     // If a rotate in the other direction is more supported, use it.
     let reverse = if is_left { ISD::Rotr } else { ISD::Rotl };
-    if !tli.is_operation_legal_or_custom(op, vt) && tli.is_operation_legal_or_custom(reverse, vt) && bits.is_power_of_two()
+    if !tli.is_operation_legal_or_custom(op, vt)
+        && tli.is_operation_legal_or_custom(reverse, vt)
+        && bits.is_power_of_two()
     {
         let negated = dag.get_negative(amount, shift_vt);
         return dag.get_node(reverse, vt, &[x, negated]);

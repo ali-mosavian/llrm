@@ -56,19 +56,25 @@ pub fn render(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use llrm_spike_mf::{Inst, Kind, Operand, Reg};
 
-    /// Before `LLRM_DEBUG=mir` there was no way to read m68k's machine code at all (`LLRM_MIR_PRINT` is refused for
-    /// m68k), so the 222 copies of known_loads_walks' `f` could not be looked at.
+    use super::*;
+
+    /// Before `LLRM_DEBUG=mir` there was no way to read m68k's machine code at
+    /// all (`LLRM_MIR_PRINT` is refused for m68k), so the 222 copies of
+    /// known_loads_walks' `f` could not be looked at.
     #[test]
     fn a_function_renders_its_blocks_and_instructions() {
         let mut function = MFunction::new("f");
-        function.blocks.push(llrm_spike_mf::Block {
-            id: 7,
-            insts: vec![Inst::new(Kind::Copy, vec![Operand::Def(Reg::Virt(1)), Operand::Use(Reg::Virt(0))])],
-            phis: Vec::new(),
-        });
+        function
+            .blocks
+            .push(
+                llrm_spike_mf::Block {
+                    id: 7,
+                    insts: vec![Inst::new(Kind::Copy, vec![Operand::Def(Reg::Virt(1)), Operand::Use(Reg::Virt(0))])],
+                    phis: Vec::new(),
+                },
+            );
         let text = render("before allocation", &function, None);
         assert_eq!(text, "# before allocation: @f\nbb.7:\n  Copy Def(Virt(1)), Use(Virt(0))\n");
     }

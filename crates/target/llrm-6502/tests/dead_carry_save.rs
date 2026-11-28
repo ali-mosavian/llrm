@@ -1,7 +1,7 @@
-//! A dead carry save is dropped after allocation, not before: dropped before, the
-//! free `a` made the allocator pick differently at each site of a repeated sum
-//! chain and the outliner stopped sharing them (wide_shift_by_one -O2 843 -> 916
-//! B, `jsr __outl_N` five times to none).
+//! A dead carry save is dropped after allocation, not before: dropped before,
+//! the free `a` made the allocator pick differently at each site of a repeated
+//! sum chain and the outliner stopped sharing them (wide_shift_by_one -O2 843
+//! -> 916 B, `jsr __outl_N` five times to none).
 
 mod common;
 

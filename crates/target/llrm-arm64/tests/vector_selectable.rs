@@ -9,7 +9,8 @@ use std::process::Command;
 const HEAD: &str = "target triple = \"aarch64-unknown-linux-gnu\"\n\
 target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i8:8:32-i16:16:32-i64:64-i128:128-n32:64-S128-Fn32\"\n";
 
-/// `(lane count, lane type)` of each NEON vector and whether its lanes are floats.
+/// `(lane count, lane type)` of each NEON vector and whether its lanes are
+/// floats.
 const TYPES: [(u32, &str, bool); 10] = [
     (16, "i8", false),
     (8, "i16", false),
@@ -59,9 +60,21 @@ const INTEGER_BODIES: &[Operation] = &[
     ("ashr_imm", "%r = ashr {T} %a, splat ({E} 3)", any),
     ("select", "%c = icmp slt {T} %a, %b\n%r = select <{N} x i1> %c, {T} %a, {T} %b", any),
     ("icmp_zero", "%c = icmp sgt {T} %a, zeroinitializer\n%r = sext <{N} x i1> %c to {T}", any),
-    ("splat_load", "%x = load {E}, ptr %p, align 8\n%i = insertelement {T} poison, {E} %x, i64 0\n%r = shufflevector {T} %i, {T} poison, <{N} x i32> zeroinitializer", any),
-    ("splat_load_add", "%x = load {E}, ptr %p, align 8\n%i = insertelement {T} poison, {E} %x, i64 0\n%s2 = shufflevector {T} %i, {T} poison, <{N} x i32> zeroinitializer\n%r = add {T} %a, %s2", any),
-    ("splat_arg", "%i = insertelement {T} poison, {E} %s, i64 0\n%r = shufflevector {T} %i, {T} poison, <{N} x i32> zeroinitializer", any),
+    (
+        "splat_load",
+        "%x = load {E}, ptr %p, align 8\n%i = insertelement {T} poison, {E} %x, i64 0\n%r = shufflevector {T} %i, {T} poison, <{N} x i32> zeroinitializer",
+        any,
+    ),
+    (
+        "splat_load_add",
+        "%x = load {E}, ptr %p, align 8\n%i = insertelement {T} poison, {E} %x, i64 0\n%s2 = shufflevector {T} %i, {T} poison, <{N} x i32> zeroinitializer\n%r = add {T} %a, %s2",
+        any,
+    ),
+    (
+        "splat_arg",
+        "%i = insertelement {T} poison, {E} %s, i64 0\n%r = shufflevector {T} %i, {T} poison, <{N} x i32> zeroinitializer",
+        any,
+    ),
     ("splat_const", "%r = add {T} %a, splat ({E} 7)", any),
     ("insert_lane", "%r = insertelement {T} %a, {E} %s, i64 1", any),
     ("insert_lane_load", "%x = load {E}, ptr %p, align 8\n%r = insertelement {T} %a, {E} %x, i64 1", any),
@@ -71,7 +84,11 @@ const INTEGER_BODIES: &[Operation] = &[
     ("smax", "%r = call {T} @llvm.smax.{V}({T} %a, {T} %b)", any),
     ("umin", "%r = call {T} @llvm.umin.{V}({T} %a, {T} %b)", any),
     ("umax", "%r = call {T} @llvm.umax.{V}({T} %a, {T} %b)", any),
-    ("reduce_add", "%x = call {E} @llvm.vector.reduce.add.{V}({T} %a)\nstore {E} %x, ptr %q, align 8\n%r = add {T} %a, %b", any),
+    (
+        "reduce_add",
+        "%x = call {E} @llvm.vector.reduce.add.{V}({T} %a)\nstore {E} %x, ptr %q, align 8\n%r = add {T} %a, %b",
+        any,
+    ),
     ("ctpop", "%r = call {T} @llvm.ctpop.{V}({T} %a)", any),
     ("ctlz", "%r = call {T} @llvm.ctlz.{V}({T} %a, i1 false)", any),
     ("cttz", "%r = call {T} @llvm.cttz.{V}({T} %a, i1 false)", any),
@@ -98,9 +115,21 @@ const FLOAT_BODIES: &[Operation] = &[
     ("fmuladd", "%r = call {T} @llvm.fmuladd.{V}({T} %a, {T} %b, {T} %a)", any),
     ("fcmp_select", "%c = fcmp olt {T} %a, %b\n%r = select <{N} x i1> %c, {T} %a, {T} %b", any),
     ("fcmp_zero", "%c = fcmp ogt {T} %a, zeroinitializer\n%r = select <{N} x i1> %c, {T} %a, {T} %b", any),
-    ("splat_load", "%x = load {E}, ptr %p, align 8\n%i = insertelement {T} poison, {E} %x, i64 0\n%r = shufflevector {T} %i, {T} poison, <{N} x i32> zeroinitializer", any),
-    ("splat_load_mul", "%x = load {E}, ptr %p, align 8\n%i = insertelement {T} poison, {E} %x, i64 0\n%s2 = shufflevector {T} %i, {T} poison, <{N} x i32> zeroinitializer\n%r = fmul {T} %a, %s2", any),
-    ("splat_arg", "%i = insertelement {T} poison, {E} %s, i64 0\n%r = shufflevector {T} %i, {T} poison, <{N} x i32> zeroinitializer", any),
+    (
+        "splat_load",
+        "%x = load {E}, ptr %p, align 8\n%i = insertelement {T} poison, {E} %x, i64 0\n%r = shufflevector {T} %i, {T} poison, <{N} x i32> zeroinitializer",
+        any,
+    ),
+    (
+        "splat_load_mul",
+        "%x = load {E}, ptr %p, align 8\n%i = insertelement {T} poison, {E} %x, i64 0\n%s2 = shufflevector {T} %i, {T} poison, <{N} x i32> zeroinitializer\n%r = fmul {T} %a, %s2",
+        any,
+    ),
+    (
+        "splat_arg",
+        "%i = insertelement {T} poison, {E} %s, i64 0\n%r = shufflevector {T} %i, {T} poison, <{N} x i32> zeroinitializer",
+        any,
+    ),
     ("extract_lane", "%x = extractelement {T} %a, i64 1\nstore {E} %x, ptr %q, align 8\n%r = fadd {T} %a, %b", any),
     ("copysign", "%r = call {T} @llvm.copysign.{V}({T} %a, {T} %b)", any),
     ("floor", "%r = call {T} @llvm.floor.{V}({T} %a)", any),
@@ -140,11 +169,14 @@ fn function(
     body: &str,
 ) -> String {
     let vector = format!("<{lanes} x {element}>");
-    let tag = format!("v{lanes}{}", match element {
-        "float" => "f32",
-        "double" => "f64",
-        other => other,
-    });
+    let tag = format!(
+        "v{lanes}{}",
+        match element {
+            "float" => "f32",
+            "double" => "f64",
+            other => other,
+        }
+    );
     let double_width = match element {
         "i8" => "i16",
         "i16" => "i32",
@@ -200,7 +232,8 @@ const REFUSED: &[(&str, &str)] = &[
     ("lshr", "custom lowering of Srl"),
     ("ashr", "custom lowering of Sra"),
     // `CLZ`, `RBIT` and the saturating arithmetic have no instruction; `CNT`
-    // is bytes only, so `ctpop`, `cttz` and `bitreverse` of wider lanes have no pattern.
+    // is bytes only, so `ctpop`, `cttz` and `bitreverse` of wider lanes have no
+    // pattern.
     ("ctlz", "CannotSelect(\"CtLz\")"),
     ("cttz", "CannotSelect(\"CtTz\")"),
     ("ctpop", "CannotSelect(\"CtPop\")"),
@@ -254,8 +287,24 @@ fn every_vector_operation_compiles_or_is_listed() {
 /// 64-bit `build_vector` is another lane's work).
 #[test]
 fn a_splat_of_a_load_is_ld1r() {
-    for (lanes, element, _) in TYPES.into_iter().filter(|(lanes, element, _)| lanes * if *element == "double" || *element == "i64" { 64 } else if *element == "float" || *element == "i32" { 32 } else if *element == "i16" { 16 } else { 8 } == 128) {
-        let source = function(lanes, element, "%x = load {E}, ptr %p, align 8\n%i = insertelement {T} poison, {E} %x, i64 0\n%r = shufflevector {T} %i, {T} poison, <{N} x i32> zeroinitializer");
+    for (lanes, element, _) in TYPES.into_iter().filter(|(lanes, element, _)| {
+        lanes
+            * if *element == "double" || *element == "i64" {
+                64
+            } else if *element == "float" || *element == "i32" {
+                32
+            } else if *element == "i16" {
+                16
+            } else {
+                8
+            }
+            == 128
+    }) {
+        let source = function(
+            lanes,
+            element,
+            "%x = load {E}, ptr %p, align 8\n%i = insertelement {T} poison, {E} %x, i64 0\n%r = shufflevector {T} %i, {T} poison, <{N} x i32> zeroinitializer",
+        );
         let dir = tempfile::tempdir().unwrap();
         let (input, output) = (dir.path().join("t.ll"), dir.path().join("t.s"));
         std::fs::write(&input, &source).unwrap();
@@ -277,7 +326,8 @@ fn a_splat_of_a_load_is_ld1r() {
 #[test]
 fn a_lane_load_into_a_vector_compiles() {
     for (lanes, element, _) in TYPES.into_iter().filter(|(_, _, float)| !float) {
-        let source = function(lanes, element, "%x = load {E}, ptr %p, align 8\n%r = insertelement {T} %a, {E} %x, i64 1");
+        let source =
+            function(lanes, element, "%x = load {E}, ptr %p, align 8\n%r = insertelement {T} %a, {E} %x, i64 1");
         assert_eq!(complaint(&source), None, "<{lanes} x {element}>");
     }
 }

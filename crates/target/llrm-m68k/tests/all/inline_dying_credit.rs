@@ -1,6 +1,7 @@
-//! jpeg_fixed -Os (68000/68020, +246/+288 B against gcc): `message`, a loop and a call, private and called from ten places
-//! was copied into each, the units crediting the callee that dies with its last call. The copies were 20 B each against
-//! a 14 B call. A speed caller keeps the credit.
+//! jpeg_fixed -Os (68000/68020, +246/+288 B against gcc): `message`, a loop and
+//! a call, private and called from ten places was copied into each, the units
+//! crediting the callee that dies with its last call. The copies were 20 B each
+//! against a 14 B call. A speed caller keeps the credit.
 
 use llrm_m68k::driver::{Level, assembly, cpu_of};
 
@@ -13,8 +14,9 @@ define internal void @msg(ptr %t) {\nentry:\n  br label %loop\nloop:\n\
   call void @write(i32 1, ptr %t, i32 %i)\n  ret void\n}\n";
 
 fn ten_sites() -> String {
-    // the strings are read from memory: with constants an inline folds the loop away and is faster, which
-    // the -Os trial keeps (the loop priced once for ten calls hid that, `trial::price_of_functions`)
+    // the strings are read from memory: with constants an inline folds the loop
+    // away and is faster, which the -Os trial keeps (the loop priced once
+    // for ten calls hid that, `trial::price_of_functions`)
     let globals = "@s = external global [10 x ptr]\n";
     let calls: String = (0..10)
         .map(|i| format!("  %g{i} = getelementptr ptr, ptr @s, i32 {i}\n  %p{i} = load ptr, ptr %g{i}\n  call void @msg(ptr %p{i})\n"))
@@ -44,8 +46,9 @@ fn a_callee_of_a_hot_loop_is_still_copied_at_speed() {
     assert!(!asm.contains("msg:"), "the callee stayed outlined at -O2:\n{asm}");
 }
 
-/// shift_int64_masked_amount -Os (`tests/ir/hot_callee_at_size.ll`, the program's IR): `mix`, three calls in a nested
-/// loop, stayed a call at -Os (188,470 -> 276,962 clocks for -6 B). A hot site keeps the credit.
+/// shift_int64_masked_amount -Os (`tests/ir/hot_callee_at_size.ll`, the
+/// program's IR): `mix`, three calls in a nested loop, stayed a call at -Os
+/// (188,470 -> 276,962 clocks for -6 B). A hot site keeps the credit.
 #[test]
 fn a_callee_of_a_hot_loop_is_still_copied_at_size() {
     let ir = include_str!("../ir/hot_callee_at_size.ll");

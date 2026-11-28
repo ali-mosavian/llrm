@@ -249,6 +249,7 @@ pub mod divrempairs;
 pub mod dropunnecessaryassumes;
 pub mod earlycse;
 pub use llrm_analysis::edges;
+pub mod atomicexpand;
 pub mod backwardthreading;
 #[cfg(test)]
 mod backwardthreading_tests;
@@ -396,8 +397,8 @@ pub mod mergeicmps;
 pub mod mergestores;
 mod mirror;
 pub mod mldstmotion;
-pub mod narrowcycle;
 pub mod mosindexiv;
+pub mod narrowcycle;
 pub mod narrowiv;
 pub mod narrowrange;
 pub mod narrowspace;

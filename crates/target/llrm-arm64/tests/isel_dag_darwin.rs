@@ -1,6 +1,6 @@
-//! Every `tests/darwin` fixture, linked and run natively: it must print and exit as
-//! recorded. It once passed 9 of 27 (variadic arguments in registers, `sret` as a
-//! pointer in `x0`).
+//! Every `tests/darwin` fixture, linked and run natively: it must print and
+//! exit as recorded. It once passed 9 of 27 (variadic arguments in registers,
+//! `sret` as a pointer in `x0`).
 
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 #[test]

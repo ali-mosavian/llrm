@@ -1,6 +1,7 @@
-//! The shared MachineLICM replaced a data-register zero by an equal one the entry block made for
-//! a phi (class `XR32`) without narrowing it, so the allocator put it in `%a4` and `subx.l %a4,%d2`
-//! reached the assembler (QuickrBasic `frame.c`, `array.c`: 4 files refused at 68020).
+//! The shared MachineLICM replaced a data-register zero by an equal one the
+//! entry block made for a phi (class `XR32`) without narrowing it, so the
+//! allocator put it in `%a4` and `subx.l %a4,%d2` reached the assembler
+//! (QuickrBasic `frame.c`, `array.c`: 4 files refused at 68020).
 
 use llrm_m68k::dagisel::hooks::Cpu;
 use llrm_m68k::driver::{Level, assembly};

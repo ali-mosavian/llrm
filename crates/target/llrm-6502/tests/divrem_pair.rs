@@ -96,7 +96,9 @@ fn a_lone_remainder_is_not_a_pair() {
 #[test]
 fn the_signed_pair_routines_leave_both_results() {
     let cases: [(i32, i32); 5] = [(-100000, 7), (-7, -2), (7, -2), (i32::MIN, 1), (i32::MAX, -255)];
-    for routine in ["__divmodsi4", "__divmodsi4_fast", "__divmodsi4_fast_small", "__divmodsi4_fast_lean", "__divmodsi4_fast_byte"] {
+    for routine in
+        ["__divmodsi4", "__divmodsi4_fast", "__divmodsi4_fast_small", "__divmodsi4_fast_lean", "__divmodsi4_fast_byte"]
+    {
         for (a, b) in cases {
             if routine.ends_with("_byte") && !(1..=255).contains(&b) {
                 continue;
@@ -112,7 +114,13 @@ fn the_signed_pair_routines_leave_both_results() {
 /// The unsigned pair routines leave the remainder in rc4..rc7 as well.
 #[test]
 fn the_unsigned_pair_routines_leave_the_remainder_in_rc4() {
-    for routine in ["__udivmodsi4", "__udivmodsi4_fast", "__udivmodsi4_fast_small", "__udivmodsi4_fast_lean", "__udivmodsi4_fast_byte"] {
+    for routine in [
+        "__udivmodsi4",
+        "__udivmodsi4_fast",
+        "__udivmodsi4_fast_small",
+        "__udivmodsi4_fast_lean",
+        "__udivmodsi4_fast_byte",
+    ] {
         for (a, b) in [(4_000_000_000u32, 7u32), (4_000_000_000, 3_000_000_000), (u32::MAX, 255)] {
             if routine.ends_with("_byte") && !(1..=255).contains(&b) {
                 continue;

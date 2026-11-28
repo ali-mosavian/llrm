@@ -94,7 +94,7 @@ fn analyse(
     // a jump out of the routine is a node of the callee's effects with no
     // successor, placed after the routine's own
     let mut tails: Vec<Node> = Vec::new();
-    let mut tail_of = |routine: &str, stack: &mut Vec<String>, tails: &mut Vec<Node>| -> Option<usize> {
+    let tail_of = |routine: &str, stack: &mut Vec<String>, tails: &mut Vec<Node>| -> Option<usize> {
         let fx = effects_of(routine, stack)?;
         tails.push(Node { reads: fx.reads, writes: fx.writes, next: Vec::new() });
         Some(count + tails.len() - 1)

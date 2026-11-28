@@ -4,6 +4,7 @@ from __future__ import annotations
 import shutil
 import os
 import subprocess
+import time
 import sys
 from pathlib import Path
 
@@ -82,6 +83,26 @@ def test_the_cheapest_ranked_tests_that_fit_a_crates_share_are_chosen():
     assert ps.unit_tests("llrm-x", 0.35, ranking) == ["a", "b"]
     assert ps.unit_tests("llrm-x", 0.01, ranking) == []
     assert ps.unit_tests("llrm-none", 5.0, ranking) == [], "no ranking: all its tests, cut at the share"
+
+
+def test_a_share_in_instructions_picks_by_the_instructions_each_test_ran():
+    """llrm-m68k's 24 ranked tests read 0.0 s each and ran 6.4 G together: every_plan_computes_its_product alone is 5.9 G. Seconds rank nothing the budget counts."""
+    ranking = {"llrm-x": [("a", 0.0, 100_000_000), ("b", 0.0, 200_000_000), ("big", 0.0, 5_900_000_000)]}
+    assert ps.unit_tests("llrm-x", 3.0, ranking, instructions=4_000_000_000) == ["a", "b"]
+    assert ps.unit_tests("llrm-x", 3.0, ranking, instructions=150_000_000) == ["a"]
+
+
+def test_a_ranking_rewrites_its_own_crate_and_keeps_the_rest_of_the_file(tmp_path, monkeypatch):
+    """`--rank llrm-m68k` rewrote parity_smoke.toml whole: its comments and the cases list's layout were gone."""
+    path = tmp_path / "parity_smoke.toml"
+    path.write_text('# the cases, why\ncases = [\n  "arith",\n]\n\n[units."llrm-a"]\ntests = [\n  ["x", 0.1],\n]\n\n[units."llrm-b"]\ntests = []\n')
+    monkeypatch.setattr(ps, "SELECTION", path)
+    ps.write_ranking("llrm-a", [("y", 0.0, 5)])
+    ps.write_ranking("llrm-c", [("z", 0.0, 7)])
+    text = path.read_text()
+    assert text.startswith('# the cases, why\ncases = [\n  "arith",\n]\n') and '[units."llrm-b"]\ntests = []' in text, text
+    units = ps.selection()["units"]
+    assert units["llrm-a"]["tests"] == [["y", 0.0, 5]] and units["llrm-c"]["tests"] == [["z", 0.0, 7]], units
 
 
 def test_the_ranking_is_read_from_the_report_time_listing_cheapest_first():
@@ -243,6 +264,13 @@ def test_every_failing_ratchet_is_named_not_only_the_first():
 
     failed = ps.ratchet_failures(run=lambda command: Done(1 if ("block_list_ratchet" in " ".join(command) or "facts_rewrite" in " ".join(command)) else 0))
     assert set(failed) == {"ratchet:block_list_ratchet", "ratchet:facts_rewrite"}, failed
+
+
+def test_a_second_run_line_keeps_what_the_first_run_spent():
+    """The 6a73 smoke passed on its second run, and the line kept nothing of the first: what went over the budget could not be read."""
+    verdicts = iter([(False, "PARITY SMOKE FAIL over the budget: 61.20 G instructions > 60.00 G | d_faces ok 5.1 s | 61.20 G instr of 60.00 G"), (True, "PARITY SMOKE PASS d_faces ok 1.3 s | 53.14 G instr of 60.00 G")])
+    ok, line = ps.run_twice_over_budget(lambda: next(verdicts))
+    assert ok and "d_faces ok 5.1 s" in line and "61.20 G instr" in line, line
 
 
 def test_the_failed_steps_come_out_of_the_smoke_line_by_name():
@@ -729,13 +757,13 @@ def test_the_crates_whose_prs_blew_the_instruction_budget_have_a_ranking():
     """llrm-codegen had no ranking, so a codegen PR ran its whole lib: 168 G of 60 G, #5325's batch refused four times."""
     ranking = ps.selection().get("units", {})
     for crate in ("llrm-codegen", "llrm-mir", "llrm-cc"):
-        assert ps.unit_tests(crate, 6.4, {k: [(n, s) for n, s in v["tests"]] for k, v in ranking.items()}), crate
+        assert ps.unit_tests(crate, 6.4, {k: [tuple(one) for one in v["tests"]] for k, v in ranking.items()}, 4_000_000_000), crate
 
 
 def test_an_unranked_unit_step_runs_one_test_thread(monkeypatch):
     """An unranked crate runs its whole lib cut by wall time; cargo's thread per core made that 32x the CPU and instructions the wall allowance was charged."""
     seen = []
-    monkeypatch.setattr(ps, "run_cut", lambda command, seconds, cwd, env=None: seen.append(env) or (0, ""))
+    monkeypatch.setattr(ps, "run_cut", lambda command, seconds, cwd, env=None, instructions=None: seen.append(env) or (0, ""))
     monkeypatch.setattr(ps, "selection", lambda: {"units": {"ranked": {"tests": [["t_a", 0.1]]}}})
     monkeypatch.setattr(ps.xfail, "load_for", lambda root: {})
     ps.unit_step("unranked", 5.0)(Path("."))
@@ -753,3 +781,73 @@ def test_a_runner_whose_perf_cannot_count_still_runs_the_commands(tmp_path, monk
     with ps.Meter() as counted:
         done = subprocess.run([sys.executable, "-c", "print(7)"], capture_output=True, text=True)
     assert (done.returncode, done.stdout.strip(), counted.value) == (0, "7", None)
+
+
+def test_the_bintree_c_compiles_name_their_target_by_its_row():
+    """llrm-cc takes its target from a row, not -m16/-m32: given `-m32` it built i386 IR against the x86-64 table and refused every merge's `programs` step
+    ("clang's datalayout ... lays types out differently from the table's"), red on release/next since the flag stopped naming a row."""
+    bins = Path("/bins")
+    c = [job for job in ps.program_jobs(bins) if Path(job[0]).name == "llrm-cc"]
+    assert len(c) == 2
+    for job, bits in zip(c, (16, 32)):
+        assert not {"-m16", "-m32"} & set(job) and "-c" in job, job
+        assert next(one for one in job if one.startswith("--target=")) == ps.llrmbin.c_args(bits)[0], job
+
+
+def test_a_unit_step_gets_the_instructions_the_fixed_steps_left():
+    """The unit steps were allotted CPU seconds and judged in instructions: #10964's smoke ran an unranked llrm-transforms for its 3.4 s share, about 36 G on top of
+    the fixed steps' 50 G, and failed "over the budget: 86.77 G > 60 G" against a head that ran no unit step."""
+    given, used = [], [50_000_000_000]  # the fixed steps' count; each unit step runs its whole share
+
+    def unit(bins, instructions=None):
+        given.append(instructions)
+        used[0] += instructions
+        return "ok", ""
+
+    unit.takes_instructions = True
+    meter = type("Meter", (Counted,), {"value": 60_000_000_000, "so_far": lambda self: used[0]})
+    steps = [("run", lambda bins: ("ok", ""), 1.0), ("unit a", unit, 1.0), ("unit b", unit, 1.0)]
+    ps.run_steps(steps, Path("."), clock=lambda: 0.0, meter=meter, limit=60_000_000_000)
+    assert given == [5_000_000_000, 5_000_000_000]
+
+
+def test_a_unit_step_is_cut_when_it_has_run_its_instructions():
+    """A command that would run 20 s is stopped as soon as its counter passes the share, not at its CPU allowance."""
+    began = time.monotonic()
+    code, _ = ps.run_cut(["sleep", "20"], 15.0, Path("."), instructions=1_000, counted=lambda: 2_000)
+    assert code is None and time.monotonic() - began < 10
+
+
+def test_a_cut_stops_before_the_share_not_one_sample_after_it():
+    """The 6a73 smoke ran 61.31 G and 60.51 G of 60 G: each unit step was cut only once its lagging count had passed its share."""
+    seen = []
+
+    def counted():
+        seen.append(len(seen) * 10)
+        return seen[-1]
+
+    code, _ = ps.run_cut(["sleep", "20"], 15.0, Path("."), instructions=55, counted=counted)
+    assert code is None and seen[-1] <= 55, seen
+
+
+def test_interval_and_total_perf_files_are_counted_alike():
+    """`perf stat -I` writes a timestamp first: Meter read only `count,,instructions` lines, so a cut unit step would have counted 0 G."""
+    total = "123,,instructions:u,100.00,,\n"
+    interval = "     0.100206101,100,,instructions:u,100.00,,\n     0.200519841,23,,instructions:u,100.00,,\n"
+    assert ps.instructions_of(total) == ps.instructions_of(interval) == 123
+    assert ps.instructions_of("<not counted>,,instructions:u,0,0.00,,\n") is None
+
+
+def test_a_cut_unit_step_says_what_cut_it_and_how_far_it_got_not_ok(monkeypatch):
+    """Both unit steps of the 6a73 smoke read "ok ... no ranking yet, cut at 3.0 s": they were cut at their instruction share (llrm-m68k's whole lib is 6.4 G) and
+    "ok" hid that most of their tests never ran."""
+    monkeypatch.setattr(ps, "run_cut", lambda *a, **k: (None, "\nrunning 40 tests\n..........\n"))
+    monkeypatch.setattr(ps, "unit_tests", lambda *a: ["a::b"])
+    verdict, detail = ps.unit_step("llrm-m68k", 3.0)(Path("."), 3_000_000_000)[:2]
+    assert verdict == "cut" and "cut at 3.0 G (10/40 tests ran), none failed" in detail, (verdict, detail)
+
+
+def test_a_cut_unit_step_with_a_failure_before_the_cut_fails(monkeypatch):
+    monkeypatch.setattr(ps, "run_cut", lambda *a, **k: (None, "\nrunning 40 tests\n....F.\n"))
+    monkeypatch.setattr(ps, "unit_tests", lambda *a: ["a::b"])
+    assert ps.unit_step("llrm-m68k", 3.0)(Path("."), 3_000_000_000)[0] == "fail"

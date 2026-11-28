@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/twoentryphi.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/twoentryphi.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/twoentryphi.rs sha256:1c0d265e23c159ede643b12d6ecef967a57139a0fbe0653e25e8edda4c3b2139 -->
+<!-- src: crates/opt/llrm-transforms/src/twoentryphi.rs sha256:ee6951f1a5dbfc8d69c6db7735a2d53d2633c0d89d7fb0ec87537973880a7682 -->
 
 # twoentryphi
 
@@ -48,10 +48,11 @@ a block whose first instruction is a phi of two entries.
   one statement that feeds the phi. It applies only where the phi is on a
   loop-carried recurrence (`on_recurrence`, a DEVIATE damage limiter, not a
   priced criterion) and the branch condition is later than the phi's values
-  (`condition_is_later`: `X86CmovConversion::checkForProfitableCmovCandidates`'
-  test that a cmov waits longer for its condition than for its value, on
-  TTI latencies). sfm16_dbg m64 -37..-40% executed instructions; every other
-  bench cell unchanged.
+  (`condition_is_later`:
+  `X86CmovConversion::checkForProfitableCmovCandidates`' test that a cmov
+  waits longer for its condition than for its value, on TTI latencies).
+  sfm16_dbg m64 -37..-40% executed instructions; every other bench cell
+  unchanged.
 
 ## Example
 The phi that a branch chooses between becomes a select in the branch's

@@ -308,6 +308,18 @@ impl llrm_target::Target for M64 {
         Some(llrm_x86::registers::X87_TOP)
     }
 
+    fn asm_register(
+        &self,
+        name: &str,
+    ) -> llrm_target::inline_asm::AsmRegister {
+        llrm_x86::constraints::asm_register(name)
+    }
+
+    fn inline_asm(&self) -> Option<llrm_target::inline_asm::InlineAsm> {
+        let mode = u8::try_from(self.layout().mode).expect("an x86 mode is 16, 32 or 64");
+        Some(llrm_x86::constraints::inline_asm(mode, self.registers_text()))
+    }
+
     /// What cdecl32 keeps, but the frame register.
     fn callee_saved(&self) -> Vec<(RegId, RegId)> {
         llrm_x86::calling::callee_saved(CALLING.native())

@@ -1,6 +1,8 @@
-//! float_return -O1 (68000/68020, +12 B against gcc, 6 cells): `y + y` on a double is `__adddf3(y, y)`, a load of each
-//! word into `%a1` stored twice into the call area. The fold of a push into its load's memory refused a load a second
-//! store reads, so both calls kept the area (`lea -16,%sp`, 4 loads and 8 stores): 110 B against gcc's 98.
+//! float_return -O1 (68000/68020, +12 B against gcc, 6 cells): `y + y` on a
+//! double is `__adddf3(y, y)`, a load of each word into `%a1` stored twice into
+//! the call area. The fold of a push into its load's memory refused a load a
+//! second store reads, so both calls kept the area (`lea -16,%sp`, 4 loads and
+//! 8 stores): 110 B against gcc's 98.
 
 use llrm_m68k::driver::{Level, assembly, cpu_of};
 

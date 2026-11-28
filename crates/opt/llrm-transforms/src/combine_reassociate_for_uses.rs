@@ -15,7 +15,7 @@
 //! The compares now meet in one `and`, which the backend can chain with `ccmp`.
 
 use llrm_mir::module::{InstId, Operand};
-use llrm_mir::opcode::{BinaryOp, Flags, Opcode};
+use llrm_mir::opcode::{Flags, Opcode};
 
 use crate::combine::{Combiner, Visit};
 use crate::combine_shared::{has_one_use, query};

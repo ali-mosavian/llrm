@@ -7,8 +7,6 @@ use llrm_m68k::compile::{Options, text_with};
 use llrm_m68k::dagisel::hooks::Cpu;
 use llrm_m68k::libcalls::Mode;
 
-use crate::support;
-
 const HEAD: &str = "target datalayout = \"E-m:e-p:32:16:32-i8:8:8-i16:16:16-i32:16:32-n8:16:32-a:0:16-S16\"\n";
 
 /// `uses` functions each counting trailing zeros of an i64.

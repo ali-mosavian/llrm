@@ -735,7 +735,9 @@ impl Collection<'_, '_> {
         mut base: Formula,
     ) {
         let cx = self.cx;
-        let Some(int_ty) = base.ty(se, cx) else { return };
+        if base.ty(se, cx).is_none() {
+            return;
+        }
         // A formula with a scaled register cannot take another: unscale it to
         // find a better scale.
         if base.scale != 0 && !base.unscale() {

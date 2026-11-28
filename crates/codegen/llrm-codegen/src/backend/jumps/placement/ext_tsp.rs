@@ -122,20 +122,10 @@ pub(super) fn score(
         .sum()
 }
 
-/// `codelayout::calcExtTspScore` of the original order.
-pub(super) fn original_score(
-    sizes: &[u64],
-    edges: &[EdgeCount],
-) -> f64 {
-    let order: Vec<usize> = (0..sizes.len()).collect();
-    score(&order, sizes, edges)
-}
-
 /// `MergeTypeT`: chain X is cut in X1 and X2 and joined with Y in this order.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum MergeType {
     XY,
-    YX,
     X1YX2,
     YX2X1,
     X2X1Y,
@@ -244,7 +234,6 @@ fn merged_parts<'a>(
     let (x1, x2) = x.split_at(offset);
     match ty {
         MergeType::XY => [x1, x2, y],
-        MergeType::YX => [y, x1, x2],
         MergeType::X1YX2 => [x1, y, x2],
         MergeType::YX2X1 => [y, x2, x1],
         MergeType::X2X1Y => [x2, x1, y],
@@ -281,8 +270,7 @@ fn score_parts(
         .iter()
         .map(|&jump| {
             let jump = &all_jumps[jump];
-            let (source, target) = (&nodes[jump.source], &nodes[jump.target]);
-            score_of_jump(addr[jump.source], source.size, addr[jump.target], jump.count, jump.conditional)
+            score_of_jump(addr[jump.source], nodes[jump.source].size, addr[jump.target], jump.count, jump.conditional)
         })
         .sum()
 }
@@ -895,7 +883,11 @@ mod tests {
         }
         let index = (0..blocks.len()).map(|place| (place as i64, place)).collect();
         let edges = size_edges(&blocks, &index, None);
-        assert!(edges.iter().all(|edge| edge.src != 0), "the dispatch has {} jumps", edges.iter().filter(|edge| edge.src == 0).count());
+        assert!(
+            edges.iter().all(|edge| edge.src != 0),
+            "the dispatch has {} jumps",
+            edges.iter().filter(|edge| edge.src == 0).count()
+        );
         assert_eq!(edges.len(), 400, "each case still jumps back to the dispatch");
     }
 

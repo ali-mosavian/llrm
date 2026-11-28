@@ -835,7 +835,7 @@ impl licm::Policy<Wrapped> for X86<'_> {
                     .iter()
                     .any(|op| name.strip_prefix(op).is_some_and(|rest| rest == "ss" || rest == "sd")),
             );
-        let [Loc::Held(dest)] = what.dests.as_slice() else { return None };
+        let [Loc::Held(_)] = what.dests.as_slice() else { return None };
         let cells = what.sources.iter().filter(|source| matches!(source, Loc::Mem(_))).count();
         let (at, cell) = what
             .sources

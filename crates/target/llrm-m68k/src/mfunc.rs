@@ -510,9 +510,11 @@ impl Emitter<'_> {
                     }
                     return Ok(());
                 }
-                // `InstrEmitter::EmitCopyToRegNode`: the copy of an `IMPLICIT_DEF` into a physical register
-                // is an `IMPLICIT_DEF` of that register, which `ProcessImplicitDefs` drops: no code, the
-                // register keeps whatever it holds (`ret i32 undef`)
+                // `InstrEmitter::EmitCopyToRegNode`: the copy of an
+                // `IMPLICIT_DEF` into a physical register is an
+                // `IMPLICIT_DEF` of that register, which `ProcessImplicitDefs`
+                // drops: no code, the register keeps whatever
+                // it holds (`ret i32 undef`)
                 if matches!(dst, Reg::Phys(_)) && self.dag.opcode(source) == ISD::Machine(10) {
                     return Ok(());
                 }
@@ -556,8 +558,9 @@ impl Emitter<'_> {
                 if !is_value(n.values[0]) {
                     return Ok(());
                 }
-                // read only by copies into physical registers, which make no code of their own
-                // (`EmitCopyToRegNode`, above): nothing to define
+                // read only by copies into physical registers, which make no
+                // code of their own (`EmitCopyToRegNode`,
+                // above): nothing to define
                 let users: Vec<u32> = self.dag.users(value).collect();
                 if users.into_iter().all(|user| {
                     let copy = SDValue { node: user, res: 0 };

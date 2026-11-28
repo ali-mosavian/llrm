@@ -105,7 +105,8 @@ impl LIRTransform for MaskByAnd {
         // before the compare (`xor`, two bytes): cheaper than the `and` here in
         // both bytes and clocks, so it is left alone.
         let fixed = crate::backend::fixupsetcc::fixed(&body);
-        let kept: llrm_mir::hash::HashSet<i64> = fixed.blocks.iter().flat_map(|b| b.insns.iter()).map(|one| one.at).collect();
+        let kept: llrm_mir::hash::HashSet<i64> =
+            fixed.blocks.iter().flat_map(|b| b.insns.iter()).map(|one| one.at).collect();
         let regs = body.regs();
         let reads = read_counts(&body);
         let mut out = body.clone();
@@ -121,7 +122,14 @@ impl LIRTransform for MaskByAnd {
                     continue;
                 }
                 if let Some(new) = masked(&insns[at], &reads, |copied, dest| {
-                    self.pays(frequency, copied) && !(copied && crosses_call(&insns, at, dest, reads.of(dest) > insns.iter().filter(|one| reads_value(one, dest)).count()))
+                    self.pays(frequency, copied)
+                        && !(copied
+                            && crosses_call(
+                                &insns,
+                                at,
+                                dest,
+                                reads.of(dest) > insns.iter().filter(|one| reads_value(one, dest)).count(),
+                            ))
                 })
                 .filter(|_| flags_dead_after(regs, body.bits, &insns[at + 1..]))
                 {
@@ -163,8 +171,10 @@ fn masked(
     let made = new.what.as_mut()?;
     made.name = Some("and".into());
     made.op = Operation::Binary;
-    made.sources =
-        vec![Loc::Held(Held { value: source.value, width: 4, offset: 0 }), Loc::Imm(Imm { value: mask, width: 4, address: None })];
+    made.sources = vec![
+        Loc::Held(Held { value: source.value, width: 4, offset: 0 }),
+        Loc::Imm(Imm { value: mask, width: 4, address: None }),
+    ];
     new.widths.retain(|(value, _)| *value != source.value);
     Some(new)
 }

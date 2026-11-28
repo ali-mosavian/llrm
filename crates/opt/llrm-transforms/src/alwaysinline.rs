@@ -21,8 +21,8 @@
 //! `pipeline`.
 //!
 //! # Example
-//! A call of an `alwaysinline` function is replaced by a copy of its body, and the
-//! function is dropped once nothing calls or addresses it.
+//! A call of an `alwaysinline` function is replaced by a copy of its body, and
+//! the function is dropped once nothing calls or addresses it.
 //!
 //! ```text
 //! define internal i32 @f(i32 %x) alwaysinline { %r = add i32 %x, 1 ; ret i32 %r }
@@ -159,7 +159,8 @@ impl ProgramPass for AlwaysInline {
             }
         }
         // What the managers worked out is the next pass's start, not lost: the
-        // summaries and globals' facts are made from nothing once for a program.
+        // summaries and globals' facts are made from nothing once for a
+        // program.
         for (at, one) in modules.into_iter().enumerate() {
             analyses.carry(at, one.carried());
         }

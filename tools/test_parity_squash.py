@@ -653,10 +653,10 @@ def test_a_generated_only_conflict_pr_is_not_refused_at_the_squash(monkeypatch):
         return subprocess.CompletedProcess(cmd, 0)
 
     info = {"headRefOid": "oldsha", "headRefName": "pr", "title": "t", "mergeable": "CONFLICTING"}
-    assert ps.squash("2878", info, "", run=run, update=lambda head, branch: "newsha", settle=0)
+    assert ps.squash("2878", info, "", recheck=lambda number, info: "", run=run, update=lambda head, branch: "newsha", settle=0)
     comment = next(c for c in calls if c[:3] == ["gh", "pr", "comment"])
     assert "never force" in comment[-1] and "newsha"[:9] in comment[-1]
-    assert not ps.squash("2872", info, "", run=run, update=lambda head, branch: "", settle=0)
+    assert not ps.squash("2872", info, "", recheck=lambda number, info: "", run=run, update=lambda head, branch: "", settle=0)
 
 
 def named_assistant():
@@ -1083,10 +1083,10 @@ def test_a_pr_added_to_waits_during_the_batch_is_not_pushed_and_is_held(tmp_path
         return SimpleNamespace(returncode=0, stdout="", stderr="")
 
     info = {"mergeable": "MERGEABLE", "headRefOid": "a" * 40, "title": "t", "headRefName": "b"}
-    assert ps.squash("4057", info, "body", run=run) is True and calls, "not held: squashed"
+    assert ps.squash("4057", info, "body", recheck=lambda number, info: "", run=run) is True and calls, "not held: squashed"
     calls.clear()
     waits.write_text("# owner waits\n2697 # parked\n4057 # held mid-batch\n")
-    assert ps.squash("4057", info, "body", run=run) is None
+    assert ps.squash("4057", info, "body", recheck=lambda number, info: "", run=run) is None
     assert not calls, "nothing was pushed or merged"
     assert ps.waiting("4057") and not ps.waiting("405") and not ps.waiting("2698")
 
@@ -1129,7 +1129,7 @@ def test_a_squash_github_refuses_prints_the_reason(capsys):
     """`4108: REFUSED: #4108 ` named no reason: the log held GitHub's message on a line the summary does not carry, and the only REFUSED text left was the batch's summary."""
     info = {"mergeable": "MERGEABLE", "headRefOid": "a" * 40, "title": "t", "headRefName": "b"}
     refuse = lambda command, **kwargs: SimpleNamespace(returncode=1, stdout="", stderr="GraphQL: Pull Request is not mergeable (mergePullRequest)\n")  # noqa: E731
-    assert ps.squash("4108", info, "body", run=refuse) is False
+    assert ps.squash("4108", info, "body", recheck=lambda number, info: "", run=refuse) is False
     out = capsys.readouterr().out
     assert "#4108: REFUSED: the squash was refused by GitHub: GraphQL: Pull Request is not mergeable" in out and "(mergePullRequest)" in out
 
@@ -1178,7 +1178,7 @@ def test_a_head_that_is_only_out_of_date_gets_parity_merged_and_the_squash_retri
     """#3477 was refused twice with `Head branch is out of date`: another landing had moved feat/parity, the owner had done nothing."""
     run, calls = _gh([OUT_OF_DATE, ""])
     info = {"mergeable": "MERGEABLE", "headRefOid": "a" * 40, "title": "t", "headRefName": "b"}
-    assert ps.squash("3477", info, "body", run=run, settle=0, merge=lambda head, branch: "c" * 40) is True
+    assert ps.squash("3477", info, "body", recheck=lambda number, info: "", run=run, settle=0, merge=lambda head, branch: "c" * 40) is True
     merges = [c for c in calls if c[:3] == ["gh", "pr", "merge"]]
     assert len(merges) == 2 and merges[1][merges[1].index("--match-head-commit") + 1] == "c" * 40
     assert "#3477: head out of date: merged parity ccccccccc, retried" in capsys.readouterr().out
@@ -1187,11 +1187,11 @@ def test_a_head_that_is_only_out_of_date_gets_parity_merged_and_the_squash_retri
 def test_out_of_date_with_a_conflict_is_the_owners_and_a_second_out_of_date_is_refused(capsys):
     info = {"mergeable": "MERGEABLE", "headRefOid": "a" * 40, "title": "t", "headRefName": "b"}
     run, calls = _gh([OUT_OF_DATE, ""])
-    assert ps.squash("1", info, "body", run=run, settle=0, merge=lambda head, branch: "") is False
+    assert ps.squash("1", info, "body", recheck=lambda number, info: "", run=run, settle=0, merge=lambda head, branch: "") is False
     assert len([c for c in calls if c[:3] == ["gh", "pr", "merge"]]) == 1, "a conflict: no retry"
     assert "does not merge into it cleanly" in capsys.readouterr().out
     run, calls = _gh([OUT_OF_DATE, OUT_OF_DATE, ""])
-    assert ps.squash("2", info, "body", run=run, settle=0, merge=lambda head, branch: "d" * 40) is False
+    assert ps.squash("2", info, "body", recheck=lambda number, info: "", run=run, settle=0, merge=lambda head, branch: "d" * 40) is False
     assert len([c for c in calls if c[:3] == ["gh", "pr", "merge"]]) == 2, "one merge and one retry, no more"
 
 
@@ -1302,10 +1302,10 @@ def test_a_squash_github_failed_on_its_side_is_retried_once_after_a_wait_not_ref
     """#5039 was REFUSED with `GraphQL: Something went wrong` (00:14, request A186:1A8971): GitHub's own error, the PR open, mergeable and unchanged; it cost a batch cycle."""
     run, calls = _gh(["GraphQL: Something went wrong while executing your query.", ""])
     info = {"mergeable": "MERGEABLE", "headRefOid": "a" * 40, "title": "t", "headRefName": "b"}
-    assert ps.squash("5039", info, "body", run=run, settle=0, retry_wait=0) is True
+    assert ps.squash("5039", info, "body", recheck=lambda number, info: "", run=run, settle=0, retry_wait=0) is True
     assert len([c for c in calls if c[:3] == ["gh", "pr", "merge"]]) == 2
     run, calls = _gh(["GraphQL: Something went wrong.", "GraphQL: Something went wrong."])
-    assert ps.squash("5040", info, "body", run=run, settle=0, retry_wait=0) is False
+    assert ps.squash("5040", info, "body", recheck=lambda number, info: "", run=run, settle=0, retry_wait=0) is False
     assert len([c for c in calls if c[:3] == ["gh", "pr", "merge"]]) == 2, "once, not forever"
     assert not ps.own_refusal("the squash was refused by GitHub: GraphQL: Something went wrong")
 
@@ -1315,7 +1315,7 @@ def test_a_squash_github_declines_for_a_moved_head_is_left_out_not_refused(capsy
     run, calls = _gh(["GraphQL: Head branch was modified. Review and try the merge again. (mergePullRequest)"])
     info = {"mergeable": "MERGEABLE", "headRefOid": "a" * 40, "title": "t", "headRefName": "b"}
     ps.HEAD_MOVED.clear()
-    assert ps.squash("5087", info, "body", run=run, settle=0, retry_wait=0) is False
+    assert ps.squash("5087", info, "body", recheck=lambda number, info: "", run=run, settle=0, retry_wait=0) is False
     out = capsys.readouterr().out
     assert "#5087: LEFT OUT (head moved)" in out and "REFUSED" not in out and "5087" in ps.HEAD_MOVED
     assert ps.batch_summary(["1"], ["2"], [], ["5087"]) == "LANDED: #1  REFUSED: #2  LEFT OUT (head moved): #5087"
@@ -1496,7 +1496,7 @@ def test_a_403_at_the_squash_waits_for_the_reset_and_neither_refuses_nor_holds_t
         return subprocess.CompletedProcess(cmd, 0, "", "")
 
     info = {"headRefOid": "abc123", "headRefName": "pr", "title": "t", "mergeable": "MERGEABLE"}
-    assert ps.squash("5290", info, "body", run=run, settle=0) is True
+    assert ps.squash("5290", info, "body", recheck=lambda number, info: "", run=run, settle=0) is True
     assert waits == [1] and len(merges) == 2
     assert "REFUSED" not in capsys.readouterr().out
     held = tmp_path / "held.state"
@@ -1558,8 +1558,10 @@ def test_a_stale_generated_page_is_synced_and_committed_not_refused(tmp_path):
     assert "docs/a.md" in refused("5131") and ps.docs_stale(tmp_path) == {"docs/a.md"} and not refused.synced, "a failed sync still refuses and resets"
 
 
-def test_the_append_only_rows_table_merges_without_a_conflict_when_two_prs_add_rows(tmp_path):
-    """Two PRs each adding a row at the end of docs/working/above-main-rows.md conflicted (#5282, #5156, #5242, #5294): the repo's .gitattributes says merge=union for it."""
+def test_two_prs_adding_rows_at_one_place_conflict_and_rows_apart_merge_clean(tmp_path):
+    """The rows table merged by union, which brought back rows a merged PR had deleted (#10966 removed it). Two PRs adding a row at one place now conflict, as
+    any same-line edit does; rows added apart still merge clean."""
+
     def git(*args):
         return subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", *args], cwd=tmp_path, capture_output=True, text=True)
 
@@ -1567,17 +1569,22 @@ def test_the_append_only_rows_table_merges_without_a_conflict_when_two_prs_add_r
     (tmp_path / "docs/working").mkdir(parents=True)
     (tmp_path / ".gitattributes").write_text((ps.ROOT / ".gitattributes").read_text())
     table = tmp_path / "docs/working/above-main-rows.md"
-    table.write_text("| row | n |\n| a | 1 |\n")
+    table.write_text("| row | n |\n| a | 1 |\n| m | 5 |\n| n | 6 |\n| o | 7 |\n| z | 9 |\n")
     git("add", ".")
     git("commit", "-qm", "base")
-    for name, row in (("one", "| b | 2 |\n"), ("two", "| c | 3 |\n")):
-        git("checkout", "-q", "-b", name, "main")
-        table.write_text(table.read_text() + row)
-        git("commit", "-qam", name)
-    git("checkout", "-q", "one")
-    merged = git("merge", "--no-edit", "two")
-    assert merged.returncode == 0, merged.stdout + merged.stderr
-    assert "| b | 2 |" in table.read_text() and "| c | 3 |" in table.read_text()
+
+    def merged(edits):
+        for name, (after, row) in edits.items():
+            git("checkout", "-q", "-B", name, "main")
+            table.write_text(table.read_text().replace(after, after + row))
+            git("commit", "-qam", name)
+        git("checkout", "-q", "one")
+        done = git("merge", "--no-edit", "two")
+        git("merge", "--abort")
+        return done.returncode == 0
+
+    assert not merged({"one": ("| a | 1 |\n", "| b | 2 |\n"), "two": ("| a | 1 |\n", "| c | 3 |\n")}), "one place: a conflict"
+    assert merged({"one": ("| a | 1 |\n", "| b | 2 |\n"), "two": ("| z | 9 |\n", "| c | 3 |\n")}), "apart: clean"
 
 
 def test_a_head_that_leaves_a_page_stale_is_synced_on_its_branch_before_the_squash(tmp_path):
@@ -1867,7 +1874,7 @@ def test_a_squash_refused_for_merge_conflicts_prints_the_owner_and_files(capsys,
     monkeypatch.setattr(ps, "conflict_detail", lambda head, body, *rest: " [owner w10; conflicts in: dag_function_tests.rs]")
     info = {"mergeable": "MERGEABLE", "headRefOid": "a" * 40, "title": "t", "headRefName": "b", "body": "Owner: w10"}
     refuse = lambda command, **kwargs: SimpleNamespace(returncode=1, stdout="", stderr="GraphQL: Pull Request has merge conflicts (mergePullRequest)\n")  # noqa: E731
-    assert ps.squash("5462", info, "body", run=refuse) is False
+    assert ps.squash("5462", info, "body", recheck=lambda number, info: "", run=refuse) is False
     assert "has merge conflicts (mergePullRequest) [owner w10; conflicts in: dag_function_tests.rs]" in capsys.readouterr().out
 
 
@@ -2027,34 +2034,14 @@ def test_no_function_assigns_a_local_that_shadows_a_module_function_it_calls():
     assert clashes == [], clashes
 
 
-def test_format_tip_commits_a_generated_page_that_is_new(tmp_path):
-    """New-pass pages (rpoattrs, deadmi, calledvaluepropagation) landed without their generated .md three times: the sync wrote them untracked, `commit -a` skipped them and --check passed on the file on disk."""
-    sh(tmp_path, "init", "-q", "-b", "main")
-    (tmp_path / "tools" / "docs" / "docsbuild").mkdir(parents=True)
-    (tmp_path / "tools" / "fmt.sh").write_text("#!/bin/sh\n")
-    (tmp_path / "tools" / "fmt.sh").chmod(0o755)
-    (tmp_path / "tools" / "docs" / "docsbuild" / "build.py").write_text(
-        "import pathlib\npathlib.Path('docs/optimizations/passes').mkdir(parents=True, exist_ok=True)\npathlib.Path('docs/optimizations/passes/newpass.md').write_text('# newpass\\n')\n"
-    )
-    sh(tmp_path, "add", "-A")
-    sh(tmp_path, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "base")
-    assert ps.format_tip(tmp_path) is True
-    assert "docs/optimizations/passes/newpass.md" in sh(tmp_path, "ls-files"), "the new page is not in the tip"
-
-
-def test_two_halves_that_build_apart_and_fail_together_name_the_later_pr():
-    """#5784 and #5830 each passed alone and the batch failed with "missing field seh": the second half was tested on a base without the first half's PRs
-    (PUSH_MODE lands nothing until the end), both halves passed, and the push met the pair; the set was assembled again each pass."""
-    pending, refused, tested = [], [], []
-
-    def passes(group):
-        tested.append(list(group))
-        return not {"2", "3"} <= set(group)
-
-    ps.batch(["1", "2", "3", "4"], passes, pending.append, refused.append, pending=pending)
+def test_a_set_that_landed_is_handed_to_after_once():
+    """The landed tree is compared with the tested one once per passing set, after its last member lands."""
+    landed, refused, after = [], [], []
+    ps.batch(["1", "2", "3", "4"], lambda group: "3" not in group, landed.append, refused.append, after=after.append)
     assert refused == ["3"]
-    assert pending == ["1", "2", "4"]
-    assert ["1", "2", "3"] in tested
+    assert landed == ["1", "2", "4"]
+    assert after == [["1", "2"], ["4"]]
+
 
 def test_the_integration_probe_names_what_integration_failures_returns():
     """The 16:17 batch failed `integration target_facts::shared_code_holds_no_copy_of_a_target_fact`; the halving probe held the name without `integration `, so

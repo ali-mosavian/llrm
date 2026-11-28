@@ -2850,7 +2850,6 @@ mod tests {
     /// before it (lz4c -O2: two reloads into one register, the first dead).
     #[test]
     fn test_spilling_a_reload_does_not_reload_before_it() {
-        use crate::model::ir::Imm;
         let reload = Arc::new({
             let what = Semantics {
                 name: Some("RELOAD16".into()),

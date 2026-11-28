@@ -1,11 +1,12 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/pagecount.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/pagecount.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/pagecount.rs sha256:bc68530b779a035c8c81656b18986cdaf9763d2118d3fa71dacad4ebc1af362f -->
+<!-- src: crates/opt/llrm-transforms/src/pagecount.rs sha256:dc82b5c40f6b909e6bd8f5e82f09c95bf4bd5a6122822d02a4594a5e18d3aed7 -->
 
 # pagecount
 
 A counted loop that walks by page ends on its index and a page count, not
-on a second counter. The mechanism is `IndVarSimplify::linearFunctionTestReplace`
-(`FindLoopCounter`, `genLoopLimit`) applied to the walk's own counter.
+on a second counter. The mechanism is
+`IndVarSimplify::linearFunctionTestReplace` (`FindLoopCounter`,
+`genLoopLimit`) applied to the walk's own counter.
 
 ## How it works
 A loop that walks by page (see [`crate::pageindex`](pageindex.md)) has a trip count

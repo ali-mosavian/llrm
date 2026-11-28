@@ -259,7 +259,6 @@ fn lowered(
         let items = lower_functions(module, &defined, cpu, Options { libcalls: Some(libcalls), ..backend }, true)?;
         Ok(Kept { libcalls, items })
     };
-    let flat = |kept: &Kept| -> Vec<Item> { kept.items.iter().flat_map(|(_, items)| items.iter().cloned()).collect() };
     // DEVIATE OS-INLINE-TRIAL-CLOCKS (`Tti::opt_size_inline_finished_trial`):
     // the calls the -Os size bound alone refused, inlined in a second
     // compile, kept where the finished code is faster within the bytes ceiling
@@ -518,16 +517,25 @@ fn lowered_once(
     // target's own form: the pin selects a plain `move` for an atomic load
     // or store of at most 32 bits (M68kInstrAtomics.td).
     // DEVIATE M68K-ATOMIC-INLINE-FRONTEND (owner w9, review 2027-01-31): see
-    // `atomic::generic_accesses_plain`.
-    program.modules.iter_mut().try_for_each(|module| llrm_mir::atomic::generic_accesses_plain(module, 32))?;
+    // `atomic::generic_accesses_inlined`.
+    program.modules.iter_mut().try_for_each(|module| llrm_mir::atomic::generic_accesses_inlined(module, 32))?;
     program.modules.iter_mut().try_for_each(llrm_mir::atomic::hidden)?;
     llrm_transforms::pipeline::applied(&mut program, &applied)?;
-    // DEVIATE M68K-ATOMIC-SYNC: a 68020 expands a read-modify-write to a `cas`
-    // loop (`shouldExpandAtomicRMWInIR`, AtomicExpandPass, not translated):
-    // it calls the `__sync_*` routine as a 68000 does. Exit: 2026-12-15, w8.
-    program.modules.iter_mut().try_for_each(|module| llrm_mir::atomic::sync_libcalled(module, 32))?;
-    program.modules.iter_mut().try_for_each(|module| llrm_mir::atomic::ordered_accesses_plain(module, 32))?;
-    program.modules.iter_mut().try_for_each(|module| llrm_mir::atomic::lowered(module, 32, false, false, false))?;
+    // below a 68020 a read-modify-write and a compare-exchange are the
+    // `__sync_*` calls (`LibCall`, M68kISelLowering.cpp) from a 68020:
+    // `ATOMIC_CMP_SWAP` is `Legal` (`cas`) and `shouldExpandAtomicRMWInIR` is
+    // `CmpXChg`, the loop of `AtomicExpandPass`
+    let cas = cpu.at_least(Cpu::M68020);
+    if cas {
+        program.modules.iter_mut().try_for_each(|module| llrm_transforms::atomicexpand::expanded(module, 32))?;
+    }
+    program.modules.iter_mut().try_for_each(|module| llrm_mir::atomic::sync_libcalled(module, 32, cas))?;
+    // A load or store of at most 32 bits stays the atomic node, its ordering in
+    // the memory operand, which keeps it in place (M68kInstrAtomics.td).
+    program
+        .modules
+        .iter_mut()
+        .try_for_each(|module| llrm_mir::atomic::lowered(module, 32, false, false, false, cas, true))?;
     program.modules.iter_mut().try_for_each(llrm_transforms::memsetpattern::expanded)?;
     // `llvm.is.constant` and `llvm.objectsize` left by -O0 (the pin runs
     // `LowerConstantIntrinsics` at every level)

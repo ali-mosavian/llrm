@@ -71,7 +71,8 @@ pub(crate) struct GepFlags {
     pub nuw: bool,
 }
 
-/// LLVM's `GEPOperator`: a `getelementptr` instruction or a constant expression.
+/// LLVM's `GEPOperator`: a `getelementptr` instruction or a constant
+/// expression.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub(crate) enum GepRef {
     Inst(InstId),
@@ -288,7 +289,7 @@ impl Combiner<'_> {
 
     /// `emitGEPOffset` of a `GEPOperator`: the offset of `gep`, an
     /// instruction's view or a constant expression's, computed before `at`.
-    pub fn emit_gep_offset_of(
+    pub(crate) fn emit_gep_offset_of(
         &mut self,
         at: InstId,
         gep: &Gep,

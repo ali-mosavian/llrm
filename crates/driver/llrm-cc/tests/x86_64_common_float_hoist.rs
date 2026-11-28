@@ -1,8 +1,9 @@
-//! x86-64 -O1: the two arms of `window_screen ? sr(e, wymin) : -sr(e, wymax)`, each
-//! `movsd xmm3, [offset]` then the same arithmetic on `xmm3`, were hoisted above the branch
-//! (the lane model names integer registers only, so SSE operands looked independent) and read
-//! `xmm3` before either load: QB `PMAP(0, 1)` printed 2 for 199, and `-201` for 0. The program
-//! prints what gcc prints. Needs `LLRM_LLC` and a host `cc` for the link.
+//! x86-64 -O1: the two arms of `window_screen ? sr(e, wymin) : -sr(e, wymax)`,
+//! each `movsd xmm3, [offset]` then the same arithmetic on `xmm3`, were hoisted
+//! above the branch (the lane model names integer registers only, so SSE
+//! operands looked independent) and read `xmm3` before either load: QB `PMAP(0,
+//! 1)` printed 2 for 199, and `-201` for 0. The program prints what gcc prints.
+//! Needs `LLRM_LLC` and a host `cc` for the link.
 
 use std::path::Path;
 use std::process::Command;

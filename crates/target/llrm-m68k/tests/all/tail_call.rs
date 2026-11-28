@@ -111,7 +111,10 @@ fn an_argument_that_changed_is_stored_into_its_slot() {
         let text = assembly(&module(), cpu, Level::O2).expect("compiles");
         for name in ["changed", "swapped"] {
             let body = function(&text, name);
-            assert!(body.contains("\tbra\t") && !body.contains("jsr") && !body.contains("rts"), "{cpu:?} {name}:\n{body}");
+            assert!(
+                body.contains("\tbra\t") && !body.contains("jsr") && !body.contains("rts"),
+                "{cpu:?} {name}:\n{body}"
+            );
         }
         let wider = function(&text, "wider");
         assert!(wider.contains("jsr"), "{cpu:?} the callee's arguments need more room:\n{wider}");

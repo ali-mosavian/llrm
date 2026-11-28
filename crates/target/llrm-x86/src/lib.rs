@@ -6,6 +6,7 @@
 pub mod callsites;
 #[cfg(test)]
 mod codemetrics_tests;
+pub mod constraints;
 pub mod effects;
 pub mod encoding;
 #[cfg(test)]
@@ -17,9 +18,9 @@ pub use llrm_target::instr as parse;
 pub mod select;
 pub mod sizes;
 pub mod tti;
-mod tti_vector;
 #[cfg(test)]
 mod tti_tests;
+mod tti_vector;
 
 /// A calling convention's registers as the x86 family names them: the
 /// architecture's, the same in every x86 target.
@@ -218,9 +219,9 @@ pub mod registers {
 /// is made of: `[base+index+disp]` with a base from BX or BP and an index from
 /// SI or DI. The architecture's, the same in every 16-bit target.
 pub mod asm;
+pub mod helpers;
 pub mod inline_asm;
 pub mod pinregs;
-pub mod helpers;
 
 pub mod addressing16 {
     use llrm_lir::registers::RegId;

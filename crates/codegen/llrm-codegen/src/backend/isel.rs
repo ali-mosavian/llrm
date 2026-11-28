@@ -913,7 +913,8 @@ fn hidden_slot_popped_by_callee<'a>(
     variadic: bool,
     mut arguments: impl Iterator<Item = &'a [llrm_mir::Attribute]>,
 ) -> bool {
-    let in_register = |attrs: &[llrm_mir::Attribute]| !variadic && !entry.inreg_registers.is_empty() && marked_inreg(attrs);
+    let in_register =
+        |attrs: &[llrm_mir::Attribute]| !variadic && !entry.inreg_registers.is_empty() && marked_inreg(attrs);
     entry.aggregate.as_ref().is_some_and(|one| one.pointer_register.is_none() && one.pointer_popped_by == "callee")
         && arguments.any(|attrs| {
             llrm_mir::opcode::argument_class(attrs) == Some(llrm_mir::opcode::RESULT_POINTER) && !in_register(attrs)

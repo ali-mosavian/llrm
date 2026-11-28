@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/combine_select_bools.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/combine_select_bools.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/combine_select_bools.rs sha256:859e856e7ba3d3605f4d8b7bb5dea14efdb40f70234589518a5f22ed94c0e945 -->
+<!-- src: crates/opt/llrm-transforms/src/combine_select_bools.rs sha256:56e803ae38c6d1afb508ed3811dcf93111507ce5fe884ede2ab43aa3dfe22d51 -->
 
 # combine_select_bools
 
@@ -19,9 +19,10 @@ DEVIATE 1: `impliesPoisonOrCond` is `impliesPoison` alone: the `samesign`
 compare and `trunc nuw` cases are not found (it finds less).
 
 DEVIATE 2 (temporary): the folds that need another family's helper are left
-out, named where they stood: `~(A & B) & (A | B)`, the `select (~a | c)`, `(c & b)`, `(a | c)` and
-`(c & ~b)` forms (`getFreelyInverted`), `isCheckForZeroAndMulWithOverflow`,
-the implied-condition simplifications and `FoldOrOfLogicalAnds`.
+out, named where they stood: `~(A & B) & (A | B)`, the `select (~a | c)`,
+`(c & b)`, `(a | c)` and `(c & ~b)` forms (`getFreelyInverted`),
+`isCheckForZeroAndMulWithOverflow`, the implied-condition simplifications
+and `FoldOrOfLogicalAnds`.
 
 DEVIATE 3: `prof` branch weights are dropped where the arms swap.
 

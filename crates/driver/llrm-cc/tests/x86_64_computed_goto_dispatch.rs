@@ -12,7 +12,11 @@ use std::process::Command;
 /// same level in parallel, and a shared `cg{level}-{pid}` let one delete the
 /// other's output (`read_to_string` unwrap, a gate failure of #10774).
 fn scratch_dir(level: &str) -> std::path::PathBuf {
-    Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("cg{level}-{}-{:?}", std::process::id(), std::thread::current().id()))
+    Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!(
+        "cg{level}-{}-{:?}",
+        std::process::id(),
+        std::thread::current().id()
+    ))
 }
 
 fn assembly(level: &str) -> String {

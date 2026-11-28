@@ -5,7 +5,6 @@
 use std::borrow::Cow;
 
 use super::ConstantRange;
-
 use super::ap::Ap;
 use super::backedge::ExitCountKind;
 use super::expr::{Kind, Scev, Ty, Type, Use, flags};

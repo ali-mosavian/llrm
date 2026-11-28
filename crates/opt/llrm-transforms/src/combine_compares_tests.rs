@@ -1098,9 +1098,7 @@ fn test_a_target_that_declines_keeps_the_compare_of_a_constant_phi() {
     assert!(!out.contains("phi i1"), "{out}");
 }
 
-fn division_compare_on(
-    keep: bool,
-) -> String {
+fn division_compare_on(keep: bool) -> String {
     let text = "define i1 @f(i16 %v, ptr %p) {
   %q = udiv i16 %v, 10
   store i16 %q, ptr %p
@@ -1140,7 +1138,8 @@ fn test_a_compare_of_a_shared_quotient_stays_a_compare_of_the_quotient_where_kep
     assert!(pin.contains("%v, 99"), "{pin}");
 }
 
-/// The quotient has no other use: the range test saves the divide, on every target.
+/// The quotient has no other use: the range test saves the divide, on every
+/// target.
 #[test]
 fn test_a_compare_of_an_unshared_quotient_is_a_range_test_even_where_kept() {
     let text = "define i1 @f(i16 %v) {
@@ -1215,8 +1214,9 @@ fn a_swapped_select_pair_compares_as_its_two_arms() {
     check(params, body, after);
 }
 
-/// m16 sfm16_float: the fold turned two 16-bit selects into a 64-bit arm compare,
-/// +4 B in 24 objects. A target that keeps the selects leaves the compare as written.
+/// m16 sfm16_float: the fold turned two 16-bit selects into a 64-bit arm
+/// compare, +4 B in 24 objects. A target that keeps the selects leaves the
+/// compare as written.
 #[test]
 fn test_a_swapped_select_pair_compare_stays_where_the_target_keeps_it() {
     let text = "define i1 @f(i1 %c, i16 %a, i16 %b) {
@@ -1253,9 +1253,7 @@ fn test_a_swapped_select_pair_compare_stays_where_the_target_keeps_it() {
     assert!(pin.contains("icmp ne i16 %a, %b"), "{pin}");
 }
 
-fn zero_quotient_compare_on(
-    keep: bool,
-) -> String {
+fn zero_quotient_compare_on(keep: bool) -> String {
     let text = "define i1 @f(i16 %u, i16 %r, ptr %p) {
   %q = udiv i16 %u, %r
   store i16 %q, ptr %p
@@ -1286,7 +1284,8 @@ fn zero_quotient_compare_on(
 
 /// `u / radix != 0` with the quotient the next trip's `u` became `radix <= u`,
 /// keeping `u` live across the divide call (6502 k_itoa -Os: two more cells
-/// saved and copied). The pin folds it; a target that keeps the compare does not.
+/// saved and copied). The pin folds it; a target that keeps the compare does
+/// not.
 #[test]
 fn test_a_zero_test_of_a_shared_quotient_stays_a_test_of_the_quotient_where_kept() {
     let kept = zero_quotient_compare_on(true);
