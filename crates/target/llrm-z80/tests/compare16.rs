@@ -2,9 +2,7 @@
 
 use std::process::Command;
 
-fn assembly(
-    ir: &str,
-) -> String {
+fn assembly(ir: &str) -> String {
     let guard = tempfile::tempdir().unwrap();
     let dir = guard.path().to_path_buf();
     let source = dir.join("g.ll");
@@ -69,14 +67,12 @@ fn a_word_compared_with_a_constant_of_a_zero_low_byte_tests_the_high_byte_only()
 #[test]
 fn an_equality_test_steps_a_byte_by_one_instead_of_subtracting_it() {
     let one = |constant: &str| {
-        assembly(
-            &format!(
-                "declare void @f()\n\
+        assembly(&format!(
+            "declare void @f()\n\
                  define void @g(i16 %a) {{\n  %c = icmp eq i16 %a, {constant}\n  br i1 %c, label %t, label %e\n\
                  t:\n  call void @f()\n  ret void\n\
                  e:\n  ret void\n}}\n"
-            ),
-        )
+        ))
     };
     let low = one("1");
     assert!(low.contains("dec a") && !low.contains("sub a, #1"), "{low}");

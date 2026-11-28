@@ -2800,7 +2800,6 @@ struct RangeDeref(llrm_mir::target::Neutral);
 
 struct RangeTti;
 
-
 impl llrm_mir::tti::Tti for RangeTti {
     fn licm_range_deref(&self) -> bool {
         true

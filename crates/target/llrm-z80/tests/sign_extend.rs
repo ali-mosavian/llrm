@@ -3,9 +3,7 @@
 
 use std::process::Command;
 
-fn assembly(
-    ir: &str,
-) -> String {
+fn assembly(ir: &str) -> String {
     let guard = tempfile::tempdir().unwrap();
     let dir = guard.path().to_path_buf();
     let source = dir.join("g.ll");
@@ -27,9 +25,7 @@ fn assembly(
 /// rr` pairs (rep_count's sum loop: 870 B against SDCC's 273).
 #[test]
 fn a_loaded_byte_is_sign_extended_without_shifts() {
-    let text = assembly(
-        "define i32 @g(ptr %p) {\n  %b = load i8, ptr %p\n  %r = sext i8 %b to i32\n  ret i32 %r\n}\n",
-    );
+    let text = assembly("define i32 @g(ptr %p) {\n  %b = load i8, ptr %p\n  %r = sext i8 %b to i32\n  ret i32 %r\n}\n");
     assert!(!text.contains("sra"), "{text}");
     assert!(text.lines().count() < 20, "{text}");
 }

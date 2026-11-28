@@ -11,7 +11,11 @@ use llrm_x86_dagisel::generated::x86_i486::MACHINE_OPCODES;
 
 use crate::emit::emit_in;
 
-fn emit(dag: &SelectionDAG, units: &[llrm_codegen::backend::selectiondag::schedule::Unit], ctx: &EmitContext<'_>) -> Result<Emitted, EmitError> {
+fn emit(
+    dag: &SelectionDAG,
+    units: &[llrm_codegen::backend::selectiondag::schedule::Unit],
+    ctx: &EmitContext<'_>,
+) -> Result<Emitted, EmitError> {
     emit_in(dag, units, ctx, &mut EmitState::default(), 0)
 }
 

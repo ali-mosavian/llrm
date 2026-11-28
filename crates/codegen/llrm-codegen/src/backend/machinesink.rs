@@ -2308,8 +2308,14 @@ mod tests {
             )
         };
         let one_move = wide(0x1_0000_0000);
-        assert!(!as_cheap_as_a_move_named(&one_move, llrm_target::x86_cheap_move_immediate, |_| false), "x86: a movabs");
-        assert!(as_cheap_as_a_move_named(&one_move, |_, _| true, |_| false), "a target whose constant is one instruction");
+        assert!(
+            !as_cheap_as_a_move_named(&one_move, llrm_target::x86_cheap_move_immediate, |_| false),
+            "x86: a movabs"
+        );
+        assert!(
+            as_cheap_as_a_move_named(&one_move, |_, _| true, |_| false),
+            "a target whose constant is one instruction"
+        );
         assert!(as_cheap_as_a_move_named(&wide(7), llrm_target::x86_cheap_move_immediate, |_| false));
     }
 

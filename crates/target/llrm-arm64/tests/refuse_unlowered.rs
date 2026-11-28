@@ -6,9 +6,7 @@ const HEAD: &str = "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64
 
 /// The driver's stderr; the compile must exit
 /// 1 and write no object.
-fn refusal(
-    body: &str,
-) -> String {
+fn refusal(body: &str) -> String {
     let scratch = tempfile::tempdir().unwrap();
     let dir = scratch.path();
     let (source, out) = (dir.join("g.ll"), dir.join("g.s"));

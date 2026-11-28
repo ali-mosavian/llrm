@@ -9,7 +9,6 @@
 use llrm_m68k::compile::{Options, text_with};
 use llrm_m68k::dagisel::hooks::Cpu;
 
-
 const IR: &str = include_str!("../fixtures/slot_register.ll");
 
 fn asm(slot_registers: bool) -> String {
