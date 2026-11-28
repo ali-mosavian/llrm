@@ -412,9 +412,7 @@ pub fn call_when_it_pays(
     request: &Request,
 ) -> Result<(), String> {
     use crate::dagisel::function::with_cold_multiply_calls;
-    if !matches!(request.level, Level::O1 | Level::O2 | Level::O3)
-        || llrm_support::env_set("LLRM_6502_NO_MUL_CALL")
-    {
+    if !matches!(request.level, Level::O1 | Level::O2 | Level::O3) || llrm_support::env_set("LLRM_6502_NO_MUL_CALL") {
         return Ok(());
     }
     // static call weight, as `hotmultiply` counts it: ten a level of loop
