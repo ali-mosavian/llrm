@@ -71,11 +71,6 @@ def check(binary, expect_sha: str | None = None, allow_dirty: bool = False, labe
     return sha
 
 
-# One build run: the binaries of a cargo build, or the copies of one dist made from it, are written within this many
-# seconds of each other. A backend copied in from another build later is outside it.
-BUILD_RUN_SECONDS = 600
-
-
 def stamped(binary) -> bool:
     """Whether `binary` answers --version with a stamp (a tree from before a backend had one does not)."""
     try:
@@ -86,13 +81,13 @@ def stamped(binary) -> bool:
 
 
 def same_build(path: Path, llc: Path) -> bool:
-    """Whether `path` came from the build that made `llc`: the dist's pair_build record (`ok`) lists both with the md5s they
-    still have, or, without a record, it was written within BUILD_RUN_SECONDS of `llc`."""
+    """Whether `path` came from the build that made `llc`: the dist's build record (pair_build.sh's `ok` beside `dist/`) lists
+    both with the md5s they still have. A dist without a record proves nothing (a file copied in later has a fresh mtime too)."""
     ok = path.resolve().parent.parent / "ok"
-    if path.resolve().parent.name == "dist" and ok.is_file():
-        recorded = {name: want for want, _, name in (line.partition("  ") for line in ok.read_text().splitlines()) if len(want) == 32}
-        return all(recorded.get(one.name) == hashlib.md5(one.read_bytes()).hexdigest() for one in (path, llc))
-    return abs(path.stat().st_mtime - llc.stat().st_mtime) <= BUILD_RUN_SECONDS
+    if path.resolve().parent.name != "dist" or not ok.is_file():
+        return False
+    recorded = {name: want for want, _, name in (line.partition("  ") for line in ok.read_text().splitlines()) if len(want) == 32}
+    return all(recorded.get(one.name) == hashlib.md5(one.read_bytes()).hexdigest() for one in (path, llc))
 
 
 def require_clean(dist, sha: str) -> str:
@@ -113,7 +108,7 @@ def require_clean(dist, sha: str) -> str:
         elif same_build(path, llc):
             unstamped.append(path.name)
         else:
-            raise SystemExit(f"{path} prints no stamp and is not from {llc.name}'s build (no record, written more than {BUILD_RUN_SECONDS} s apart): refused")
+            raise SystemExit(f"{path} prints no stamp and is not from {llc.name}'s build (no build record lists both; tools/pairs/pair_build.sh writes one): refused")
     if unstamped:
         print(f"unstamped (pre-stamp tree): {' '.join(unstamped)}", file=sys.stderr)
     return read(llc)[0]
