@@ -72,7 +72,7 @@ class IdentityTarget(unittest.TestCase):
         """Only llrm-llc was compared: two dists sharing llrm-m68k-llc read SAME on every m68k row whatever changed."""
         for side in ("base", "new"):
             llc = os.path.join(self.d, side, "llrm-m68k-llc")
-            open(llc, "w").write("#!/bin/bash\n# one m68k llc\n")
+            open(llc, "w").write("#!/bin/bash\necho llrm-m68k-llc aaaa1111  # one m68k llc, stamped\n")
             os.chmod(llc, 0o755)
         done = self.identity("m68k-68000", same_llc="")
         self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
