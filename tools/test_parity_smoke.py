@@ -4,6 +4,7 @@ from __future__ import annotations
 import shutil
 import os
 import subprocess
+import time
 import sys
 from pathlib import Path
 
@@ -243,6 +244,13 @@ def test_every_failing_ratchet_is_named_not_only_the_first():
 
     failed = ps.ratchet_failures(run=lambda command: Done(1 if ("block_list_ratchet" in " ".join(command) or "facts_rewrite" in " ".join(command)) else 0))
     assert set(failed) == {"ratchet:block_list_ratchet", "ratchet:facts_rewrite"}, failed
+
+
+def test_a_second_run_line_keeps_what_the_first_run_spent():
+    """The 6a73 smoke passed on its second run, and the line kept nothing of the first: what went over the budget could not be read."""
+    verdicts = iter([(False, "PARITY SMOKE FAIL over the budget: 61.20 G instructions > 60.00 G | d_faces ok 5.1 s | 61.20 G instr of 60.00 G"), (True, "PARITY SMOKE PASS d_faces ok 1.3 s | 53.14 G instr of 60.00 G")])
+    ok, line = ps.run_twice_over_budget(lambda: next(verdicts))
+    assert ok and "d_faces ok 5.1 s" in line and "61.20 G instr" in line, line
 
 
 def test_the_failed_steps_come_out_of_the_smoke_line_by_name():
@@ -735,7 +743,7 @@ def test_the_crates_whose_prs_blew_the_instruction_budget_have_a_ranking():
 def test_an_unranked_unit_step_runs_one_test_thread(monkeypatch):
     """An unranked crate runs its whole lib cut by wall time; cargo's thread per core made that 32x the CPU and instructions the wall allowance was charged."""
     seen = []
-    monkeypatch.setattr(ps, "run_cut", lambda command, seconds, cwd, env=None: seen.append(env) or (0, ""))
+    monkeypatch.setattr(ps, "run_cut", lambda command, seconds, cwd, env=None, instructions=None: seen.append(env) or (0, ""))
     monkeypatch.setattr(ps, "selection", lambda: {"units": {"ranked": {"tests": [["t_a", 0.1]]}}})
     monkeypatch.setattr(ps.xfail, "load_for", lambda root: {})
     ps.unit_step("unranked", 5.0)(Path("."))
@@ -753,3 +761,58 @@ def test_a_runner_whose_perf_cannot_count_still_runs_the_commands(tmp_path, monk
     with ps.Meter() as counted:
         done = subprocess.run([sys.executable, "-c", "print(7)"], capture_output=True, text=True)
     assert (done.returncode, done.stdout.strip(), counted.value) == (0, "7", None)
+
+
+def test_the_bintree_c_compiles_name_their_target_by_its_row():
+    """llrm-cc takes its target from a row, not -m16/-m32: given `-m32` it built i386 IR against the x86-64 table and refused every merge's `programs` step
+    ("clang's datalayout ... lays types out differently from the table's"), red on release/next since the flag stopped naming a row."""
+    bins = Path("/bins")
+    c = [job for job in ps.program_jobs(bins) if Path(job[0]).name == "llrm-cc"]
+    assert len(c) == 2
+    for job, bits in zip(c, (16, 32)):
+        assert not {"-m16", "-m32"} & set(job) and "-c" in job, job
+        assert next(one for one in job if one.startswith("--target=")) == ps.llrmbin.c_args(bits)[0], job
+
+
+def test_a_unit_step_gets_the_instructions_the_fixed_steps_left():
+    """The unit steps were allotted CPU seconds and judged in instructions: #10964's smoke ran an unranked llrm-transforms for its 3.4 s share, about 36 G on top of
+    the fixed steps' 50 G, and failed "over the budget: 86.77 G > 60 G" against a head that ran no unit step."""
+    given, used = [], [50_000_000_000]  # the fixed steps' count; each unit step runs its whole share
+
+    def unit(bins, instructions=None):
+        given.append(instructions)
+        used[0] += instructions
+        return "ok", ""
+
+    unit.takes_instructions = True
+    meter = type("Meter", (Counted,), {"value": 60_000_000_000, "so_far": lambda self: used[0]})
+    steps = [("run", lambda bins: ("ok", ""), 1.0), ("unit a", unit, 1.0), ("unit b", unit, 1.0)]
+    ps.run_steps(steps, Path("."), clock=lambda: 0.0, meter=meter, limit=60_000_000_000)
+    assert given == [5_000_000_000, 5_000_000_000]
+
+
+def test_a_unit_step_is_cut_when_it_has_run_its_instructions():
+    """A command that would run 20 s is stopped as soon as its counter passes the share, not at its CPU allowance."""
+    began = time.monotonic()
+    code, _ = ps.run_cut(["sleep", "20"], 15.0, Path("."), instructions=1_000, counted=lambda: 2_000)
+    assert code is None and time.monotonic() - began < 10
+
+
+def test_a_cut_stops_before_the_share_not_one_sample_after_it():
+    """The 6a73 smoke ran 61.31 G and 60.51 G of 60 G: each unit step was cut only once its lagging count had passed its share."""
+    seen = []
+
+    def counted():
+        seen.append(len(seen) * 10)
+        return seen[-1]
+
+    code, _ = ps.run_cut(["sleep", "20"], 15.0, Path("."), instructions=55, counted=counted)
+    assert code is None and seen[-1] <= 55, seen
+
+
+def test_interval_and_total_perf_files_are_counted_alike():
+    """`perf stat -I` writes a timestamp first: Meter read only `count,,instructions` lines, so a cut unit step would have counted 0 G."""
+    total = "123,,instructions:u,100.00,,\n"
+    interval = "     0.100206101,100,,instructions:u,100.00,,\n     0.200519841,23,,instructions:u,100.00,,\n"
+    assert ps.instructions_of(total) == ps.instructions_of(interval) == 123
+    assert ps.instructions_of("<not counted>,,instructions:u,0,0.00,,\n") is None
