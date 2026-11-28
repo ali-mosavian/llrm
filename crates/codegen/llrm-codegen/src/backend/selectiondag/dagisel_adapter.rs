@@ -954,7 +954,7 @@ impl Dag for DagisAdapter<'_> {
         node: u32,
     ) -> bool {
         match self.dag.nodes()[node as usize].data {
-            NodeData::Mem(info) => !info.volatile,
+            NodeData::Mem(info) => info.is_simple(),
             _ => false,
         }
     }

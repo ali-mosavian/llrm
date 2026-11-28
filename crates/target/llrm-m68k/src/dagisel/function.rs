@@ -93,6 +93,9 @@ pub fn builder_target() -> BuilderTarget {
         va_arg_align_cap: Some(super::lowering::VA_SLOT),
         // `Machine::max_alloca_align`: the frame realigns the stack pointer
         max_alloca_align: None,
+        // `atomic_load_N` and `atomic_store_N` are `move`s
+        // (M68kInstrAtomics.td)
+        native_atomics: true,
         ..BuilderTarget::for_pointer_bits(32)
     }
     .with_tuning(tuning())
