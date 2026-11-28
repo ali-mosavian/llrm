@@ -4,7 +4,7 @@
 # compiled at -O2 and run; each must print the numbers in smoke/NAME.out, which the host's gcc -m32 makes.
 #
 # usage: tools/6502/smoke_divide.sh [--regen]     (--regen rewrites smoke/*.out from the host's gcc)
-# env:   LLRM_CC  llrm-cc to test (default $CARGO_TARGET_DIR/release/llrm-cc, else target/release/llrm-cc);
+# env:   LLRM_CC  llrm-cc to test (default: the one tools/llrmbin.py resolves);
 #                 the llrm-6502-llc must sit beside it
 #        OURS_RT  the mos_rt.s of the tree under test (default: this checkout's)
 # exit:  0 every program matches; 1 a program is wrong, refused, does not link or halt, or its .out
@@ -13,7 +13,7 @@ set -u
 here=$(cd "$(dirname "$0")" && pwd)
 repo=$(cd "$here/../.." && pwd)
 smoke=$here/smoke
-cc=${LLRM_CC:-${CARGO_TARGET_DIR:-$repo/target}/release/llrm-cc}
+cc=${LLRM_CC:-$(python3 "$repo/tools/llrmbin.py" bin)/llrm-cc}
 export OURS_RT=${OURS_RT:-$repo/crates/target/llrm-6502/runtime/mos_rt.s}
 programs=$(cd "$smoke" && ls *.c | sed 's/\.c$//')
 work=$(mktemp -d "${TMPDIR:-/tmp}/smoke-divide.XXXXXX")
