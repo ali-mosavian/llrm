@@ -201,25 +201,30 @@ fn test_the_interpreters_console_follows_the_standard_handles() {
     assert_eq!(String::from_utf8_lossy(&done.stdout).replace("\r\n", "\n"), want);
 }
 
-/// `LL$COMMAND_LINE(data, max)` pushed four registers and read its arguments at `[esp+24]` and `[esp+28]`, two slots past
-/// where it had put them (`[esp+20]`, `[esp+24]`): a non-empty command tail was copied to the address `max` (127, the
-/// interrupt table) and DOS crashed at its next call. Every `[esp+N]` of an m32 operation, with the pushes and pops before
-/// it counted, must land on one of the operation's declared arguments.
+/// `LL$COMMAND_LINE(data, max)` pushed four registers and read its arguments at
+/// `[esp+24]` and `[esp+28]`, two slots past where it had put them (`[esp+20]`,
+/// `[esp+24]`): a non-empty command tail was copied to the address `max` (127,
+/// the interrupt table) and DOS crashed at its next call. Every `[esp+N]` of an
+/// m32 operation, with the pushes and pops before it counted, must land on one
+/// of the operation's declared arguments.
 #[test]
 fn test_every_m32_operation_reads_only_its_declared_arguments_off_the_stack() {
     let interface = Interface::shipped();
     let layer = llrm_x86_m32::M32.os_layer().unwrap();
-    let text = std::fs::read_to_string(format!("{}/{}", layer.directory, layer.string("implementation").unwrap())).unwrap();
+    let text =
+        std::fs::read_to_string(format!("{}/{}", layer.directory, layer.string("implementation").unwrap())).unwrap();
     let groups = layer.groups().unwrap();
     let operand = regex::Regex::new(r"\[esp\+(\d+)\]").unwrap();
     let adjust = regex::Regex::new(r"^(sub|add)\s+esp\s*,\s*(\d+)$").unwrap();
     let mut checked = 0;
     for op in interface.of_groups(&groups) {
         let symbol = interface.symbol(op);
-        let Some(start) = text.lines().position(|line| line.split_whitespace().take(2).eq([symbol.as_str(), "proc"])) else {
+        let Some(start) = text.lines().position(|line| line.split_whitespace().take(2).eq([symbol.as_str(), "proc"]))
+        else {
             continue;
         };
-        // A routine with a frame pointer addresses its arguments off `ebp`; its `[esp+N]` are locals.
+        // A routine with a frame pointer addresses its arguments off `ebp`; its
+        // `[esp+N]` are locals.
         let body: Vec<&str> = text
             .lines()
             .skip(start + 1)

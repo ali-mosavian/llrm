@@ -3,8 +3,6 @@
 //! not an `fmov` and an `ins` of zero per lane: tile -O2 +2 instructions a row;
 //! a shuffle of a vector with zeros was refused by llc.
 
-use std::collections::BTreeMap;
-use std::path::PathBuf;
 use std::process::Command;
 
 const HEAD: &str = "target triple = \"aarch64-unknown-linux-gnu\"\n\

@@ -33,11 +33,12 @@
 //! The copy is an internal function `<origin>.constprop.N` with each known
 //! parameter replaced by its constant. A later call with the same constants
 //! (`Cloning::contexts`) goes to the copy already made. A function gets at
-//! most four clones (`ipa-cp-max-recursive-depth` 8 in gcc, DEVIATE IPACP-DEPTH below), which also bounds the
-//! recursion: a clone that calls itself with a new constant (`place(q, row + 1,
-//! n)` in the clone for `row`) is a candidate for the next clone, so GCC's -O3
-//! unrolls `queens` into eight, one a row (four here). The copy is an ordinary function:
-//! the inliner takes a clone with one caller into it.
+//! most four clones (`ipa-cp-max-recursive-depth` 8 in gcc, DEVIATE IPACP-DEPTH
+//! below), which also bounds the recursion: a clone that calls itself with a
+//! new constant (`place(q, row + 1, n)` in the clone for `row`) is a candidate
+//! for the next clone, so GCC's -O3 unrolls `queens` into eight, one a row
+//! (four here). The copy is an ordinary function: the inliner takes a clone
+//! with one caller into it.
 //!
 //! GCC propagates lattices over the whole call graph and prices a value with
 //! each function's time and size summaries under the context
@@ -152,7 +153,8 @@ pub struct Tuning {
     pub max_clones: usize,
 }
 
-/// `max-completely-peel-times` (params.opt): the most trips the unroller takes whole.
+/// `max-completely-peel-times` (params.opt): the most trips the unroller takes
+/// whole.
 const MAX_PEEL_TIMES: i128 = 16;
 /// `ipa-cp-loop-hint-bonus` (params.opt:221): time units added where the known
 /// actuals make a loop's bound known.
@@ -283,8 +285,9 @@ pub fn cloned(
             continue;
         }
         let origin = state.origin.get(&name).copied().unwrap_or(name);
-        // A clone the walk inlined away is one `unreachable` (`is_deleted`): a call sent
-        // there never returns, and the context gets a new clone.
+        // A clone the walk inlined away is one `unreachable` (`is_deleted`): a
+        // call sent there never returns, and the context gets a new
+        // clone.
         let existing = state
             .contexts
             .get(&(origin, known.clone()))
@@ -818,7 +821,8 @@ fn time_saved(
                                 _ => return None,
                             }
                         };
-                        // The counter's start: the one arm from outside the loop.
+                        // The counter's start: the one arm from outside the
+                        // loop.
                         let mut start = Some(0i128);
                         for (value, from) in crate::lcssa::arms(body, phi) {
                             if one.body.contains(&cfg::id(from)) {
@@ -920,11 +924,16 @@ fn constant_addresses(
                     Operand::Value(v) => values.contains(&v),
                     Operand::Block(_) => false,
                 };
-                let indices = instruction.operands[1..].iter().all(|index| match index {
-                    Operand::Constant(_) => true,
-                    Operand::Value(v) => known.contains_key(v),
-                    Operand::Block(_) => false,
-                });
+                let indices = instruction
+                    .operands[1..]
+                    .iter()
+                    .all(
+                        |index| match index {
+                            Operand::Constant(_) => true,
+                            Operand::Value(v) => known.contains_key(v),
+                            Operand::Block(_) => false,
+                        },
+                    );
                 if base && indices {
                     found.insert(inst);
                     values.insert(result);
@@ -1067,11 +1076,17 @@ out:
         let body = module.global(id).function().expect("a body");
         let layout = DataLayout::default();
         let frequency = frequencies_with_recursion(&module, &layout, body, &|callee| callee == id);
-        let block = body.layout().iter().copied().find(|&block| {
-            body.iter_block(block).any(|inst| {
-                matches!(body.instruction(inst).opcode, Opcode::Binary(llrm_mir::opcode::BinaryOp::Sub))
-            })
-        });
+        let block = body
+            .layout()
+            .iter()
+            .copied()
+            .find(
+                |&block| body.iter_block(block)
+                    .any(|inst| matches!(
+                        body.instruction(inst).opcode,
+                        Opcode::Binary(llrm_mir::opcode::BinaryOp::Sub)
+                    )),
+            );
         frequency[&cfg::id(block.expect("the block of the call"))]
     }
 
@@ -1095,6 +1110,9 @@ out:
     #[test]
     fn a_counted_loop_that_calls_its_function_keeps_its_trips() {
         let counted = frequency_of_again(COUNTED);
-        assert!((3 * profit::UNIT..=5 * profit::UNIT).contains(&counted), "{counted} UNITths per entry; 8 trips, half taken");
+        assert!(
+            (3 * profit::UNIT..=5 * profit::UNIT).contains(&counted),
+            "{counted} UNITths per entry; 8 trips, half taken"
+        );
     }
 }

@@ -825,7 +825,7 @@ fn rotate_loop(
 
     // Check the size of the original header and reject the loop if it is very
     // big or we can't duplicate blocks inside it.
-    let mut too_big = false;
+    let too_big;
     {
         let function = &*run.function;
         let assumes = assume_calls(run, lp);

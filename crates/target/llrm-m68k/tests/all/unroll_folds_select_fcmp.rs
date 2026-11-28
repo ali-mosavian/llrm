@@ -1,6 +1,7 @@
-//! The unroll analysis simplified neither an `fcmp` nor a `select` of constants, so a two-trip
-//! float loop whose compare and `beta` select fold on the trip was priced 15 against its rolled 14
-//! and stayed rolled at -Os: float_in_place_update was 164 B at the 68000, gcc's 16. gcc's
+//! The unroll analysis simplified neither an `fcmp` nor a `select` of
+//! constants, so a two-trip float loop whose compare and `beta` select fold on
+//! the trip was priced 15 against its rolled 14 and stayed rolled at -Os:
+//! float_in_place_update was 164 B at the 68000, gcc's 16. gcc's
 //! complete unroll folds every statement the peeling makes constant.
 
 use llrm_m68k::dagisel::hooks::Cpu;

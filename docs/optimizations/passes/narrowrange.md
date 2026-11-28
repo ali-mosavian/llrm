@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/narrowrange.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/narrowrange.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/narrowrange.rs sha256:2de1af8b6a4c9052b54b24d0eccbece6130fcb626324c499e26cb4b719db4afb -->
+<!-- src: crates/opt/llrm-transforms/src/narrowrange.rs sha256:058fdfaacdcd9b8800a26cb995bfa00537bd92644536d516e9bb6b5adfea6f96 -->
 
 # narrowrange
 
@@ -32,7 +32,8 @@ pushes are fewer bytes than the extensions the narrow divide needs (div8_os
 68000: +20 B at both, -14% and -38% clocks).
 
 ## Example
-A divide whose operands ScalarEvolution proves to be 0..255 is done in 8 bits.
+A divide whose operands ScalarEvolution proves to be 0..255 is done in 8
+bits.
 
 ```text
 %q = udiv i32 %a, %b        ; %a, %b in 0..255

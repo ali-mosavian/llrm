@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/cvp.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/cvp.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/cvp.rs sha256:676b8475c1ee0661a6179d7419c74c6c077c23af4ccfd6478ce1776037636597 -->
+<!-- src: crates/opt/llrm-transforms/src/cvp.rs sha256:fe3baa240202815079b158d4875ffcca878097528d84f5902507aeae6842a212 -->
 
 # cvp
 
@@ -77,9 +77,9 @@ OWED (MIR can represent it; each has an issue and its exit):
 
 ADDED beyond LLVM (GCC ranger, `gimple-range-edge`/`tree-vrp` edge
 simplification; no exit, LLVM has no such arm):
-13. `min_max_value_on_edge`: `getValueOnEdge` also looks through a
-    min/max call, as it does a select; the phi takes the operand the ranges
-    on the edge decide.
+13. `min_max_value_on_edge`: `getValueOnEdge` also looks through a min/max
+    call, as it does a select; the phi takes the operand the ranges on the
+    edge decide.
 
 ## Example
 In the block entered when `%x u< 10`, `udiv i32 %x, 16` is `0`: the range

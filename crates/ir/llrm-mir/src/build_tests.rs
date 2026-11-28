@@ -325,7 +325,8 @@ fn a_global_named_after_the_first_lookup_is_found() {
 
 /// `select <4 x i1>` was "ill-typed": the check took only an `i1` condition,
 /// so LoopVectorize's widened selects failed verification. LLVM's
-/// `SelectInst::areInvalidOperands` takes a vector of `i1` with the values' lanes.
+/// `SelectInst::areInvalidOperands` takes a vector of `i1` with the values'
+/// lanes.
 #[test]
 fn a_select_by_a_vector_of_conditions_verifies_when_the_lanes_agree() {
     let select = |condition: &str| {

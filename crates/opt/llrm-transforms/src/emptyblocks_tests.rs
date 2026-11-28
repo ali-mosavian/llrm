@@ -121,10 +121,10 @@ b4:
     assert!(!text.contains("b1:"), "the empty case block goes: {text}");
 }
 
-/// A computed-goto dispatch (`indirectbr`) is a jump table as a `switch` is: its
-/// empty target blocks stay, and the copy for the join's phi goes in them. They
-/// were merged into the join, which gave the QB interpreter's `exec_loop` a
-/// dispatch block of 118 predecessors for the pin's 2; the pin's llc then
+/// A computed-goto dispatch (`indirectbr`) is a jump table as a `switch` is:
+/// its empty target blocks stay, and the copy for the join's phi goes in them.
+/// They were merged into the join, which gave the QB interpreter's `exec_loop`
+/// a dispatch block of 118 predecessors for the pin's 2; the pin's llc then
 /// made 65 threaded dispatches for its 123, and the bench ran 3.6% more
 /// instructions (m64 -O2).
 #[test]

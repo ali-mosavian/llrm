@@ -33,7 +33,8 @@ fn compiled(level: &str) -> String {
 fn test_a_short_counter_masked_into_an_index_is_not_a_16_bit_register() {
     for level in ["-O2", "-O3"] {
         let asm = compiled(level);
-        let sixteen: Vec<&str> = asm.lines().map(str::trim).filter(|line| line.contains(" cx,") || line.ends_with(" cx")).collect();
+        let sixteen: Vec<&str> =
+            asm.lines().map(str::trim).filter(|line| line.contains(" cx,") || line.ends_with(" cx")).collect();
         assert!(sixteen.is_empty(), "{level}: a 16-bit counter register:\n{}", sixteen.join("\n"));
     }
 }

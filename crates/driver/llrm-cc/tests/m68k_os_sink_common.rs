@@ -20,6 +20,7 @@ fn the_write_back_of_four_inlined_copies_is_stored_once_at_os() {
         .unwrap();
     assert!(run.status.success(), "{}", String::from_utf8_lossy(&run.stderr));
     let text = std::fs::read_to_string(dir.join("a.s")).unwrap();
-    let stores = text.lines().filter(|line| line.trim_start().starts_with("move.l\t%d") && line.contains(", (")).count();
+    let stores =
+        text.lines().filter(|line| line.trim_start().starts_with("move.l\t%d") && line.contains(", (")).count();
     assert_eq!(stores, 3, "each copy keeps its own three stores\n{text}");
 }

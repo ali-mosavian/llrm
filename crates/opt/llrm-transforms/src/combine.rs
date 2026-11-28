@@ -757,6 +757,7 @@ pub(crate) fn combine_with_declared(
     combine_with_sinking(context, globals, &Callees::default(), metadata, layout, function, visit, false, declared)
 }
 
+#[cfg(test)]
 pub(crate) fn combine_with_sinking(
     context: &mut Context,
     globals: &[GlobalValue],

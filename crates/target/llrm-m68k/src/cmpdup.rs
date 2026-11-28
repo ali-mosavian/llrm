@@ -12,8 +12,8 @@
 //! that could set the codes (a copy that becomes a `move`, a reload) keeps it.
 //!
 //! DEVIATE: the pin has no `optimizeCompareInstr` for m68k, and its machine CSE
-//! leaves a compare that defines the codes. Reason: best of gcc and clang is the
-//! goal, and gcc reuses the codes across the branch. Exit: 2026-11-12, the
+//! leaves a compare that defines the codes. Reason: best of gcc and clang is
+//! the goal, and gcc reuses the codes across the branch. Exit: 2026-11-12, the
 //! shared flow's peephole owns it (convergence step 5) or the pin's choice
 //! stands. Off for `Options::PINNED`.
 //!
@@ -24,9 +24,9 @@ use std::collections::HashMap;
 
 use llrm_spike_mf::{Inst, Kind, Operand, Reg};
 
+use crate::REGISTER_INFO;
 use crate::mfunc::MFunction;
 use crate::regalloc::Assignment;
-use crate::REGISTER_INFO;
 
 fn is_compare(inst: &Inst) -> bool {
     matches!(

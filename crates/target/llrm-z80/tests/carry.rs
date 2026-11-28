@@ -2,10 +2,7 @@
 
 use std::process::Command;
 
-fn assembly(
-    name: &str,
-    ir: &str,
-) -> String {
+fn assembly(ir: &str) -> String {
     let guard = tempfile::tempdir().unwrap();
     let dir = guard.path().to_path_buf();
     let source = dir.join("g.ll");
@@ -28,14 +25,14 @@ fn assembly(
 /// high word is `adc hl, rr`.
 #[test]
 fn a_long_add_carries_in_the_flag() {
-    let text = assembly("add", "define i32 @g(i32 %a, i32 %b) {\n  %r = add i32 %a, %b\n  ret i32 %r\n}\n");
+    let text = assembly("define i32 @g(i32 %a, i32 %b) {\n  %r = add i32 %a, %b\n  ret i32 %r\n}\n");
     assert!(text.contains("adc hl, ") && !text.contains("jr c"), "{text}");
 }
 
 /// The same for the borrow: `sbc hl, rr` after `sbc hl, rr`.
 #[test]
 fn a_long_subtract_borrows_in_the_flag() {
-    let text = assembly("sub", "define i32 @g(i32 %a, i32 %b) {\n  %r = sub i32 %a, %b\n  ret i32 %r\n}\n");
+    let text = assembly("define i32 @g(i32 %a, i32 %b) {\n  %r = sub i32 %a, %b\n  ret i32 %r\n}\n");
     assert!(text.matches("sbc hl, ").count() == 2 && !text.contains("jr c"), "{text}");
 }
 
@@ -45,7 +42,6 @@ fn a_long_subtract_borrows_in_the_flag() {
 #[test]
 fn a_long_grown_by_a_word_carries_in_the_flag() {
     let text = assembly(
-        "widened",
         "define i32 @g(i32 %a, i16 %b) {\n  %e = zext i16 %b to i32\n  %r = add i32 %a, %e\n  ret i32 %r\n}\n",
     );
     // the carry is taken from the flag: `adc hl, rr`, or `jr nc` over `inc rr`
@@ -62,7 +58,7 @@ fn a_long_grown_by_a_word_carries_in_the_flag() {
 /// the high word through the frame, add_ones in commute.rs.
 #[test]
 fn a_word_that_adds_only_the_carry_is_a_jump_over_an_inc() {
-    let text = assembly("carry_inc", "define i32 @g(i32 %a) {\n  %r = add i32 %a, 2\n  ret i32 %r\n}\n");
+    let text = assembly("define i32 @g(i32 %a) {\n  %r = add i32 %a, 2\n  ret i32 %r\n}\n");
     assert!(text.contains("jr nc") && text.contains("inc de") && !text.contains("adc hl, "), "{text}");
 }
 
@@ -72,14 +68,14 @@ fn a_word_that_adds_only_the_carry_is_a_jump_over_an_inc() {
 /// `add hl, rr` and three `adc hl, rr`.
 #[test]
 fn a_long_long_add_carries_in_the_flag() {
-    let text = assembly("add64", "define i64 @g(i64 %a, i64 %b) {\n  %r = add i64 %a, %b\n  ret i64 %r\n}\n");
+    let text = assembly("define i64 @g(i64 %a, i64 %b) {\n  %r = add i64 %a, %b\n  ret i64 %r\n}\n");
     assert!(text.matches("adc hl, ").count() >= 3 && !text.contains("jr c"), "{text}");
 }
 
 /// The same for the borrow: four words, `sbc hl, rr` in each.
 #[test]
 fn a_long_long_subtract_borrows_in_the_flag() {
-    let text = assembly("sub64", "define i64 @g(i64 %a, i64 %b) {\n  %r = sub i64 %a, %b\n  ret i64 %r\n}\n");
+    let text = assembly("define i64 @g(i64 %a, i64 %b) {\n  %r = sub i64 %a, %b\n  ret i64 %r\n}\n");
     assert!(text.matches("sbc hl, ").count() >= 4 && !text.contains("jr c"), "{text}");
 }
 
@@ -95,7 +91,7 @@ fn a_saturating_op_takes_the_carry_of_its_word_op() {
             "declare i{bits} @llvm.{op}.sat.i{bits}(i{bits}, i{bits})\n\
              define i{bits} @g(i{bits} %a, i{bits} %b) {{\n  %r = call i{bits} @llvm.{op}.sat.i{bits}(i{bits} %a, i{bits} %b)\n  ret i{bits} %r\n}}\n"
         );
-        let text = assembly("sat", &ir);
+        let text = assembly(&ir);
         assert!(text.contains("hl, "), "{op} {bits}:\n{text}");
     }
 }
@@ -107,7 +103,7 @@ fn a_saturating_op_takes_the_carry_of_its_word_op() {
 fn a_long_step_by_one_keeps_its_inc_and_zero_test() {
     for (op, step) in [("add", "inc"), ("sub", "dec")] {
         let ir = format!("define i32 @g(i32 %a) {{\n  %r = {op} i32 %a, 1\n  ret i32 %r\n}}\n");
-        let text = assembly("step", &ir);
+        let text = assembly(&ir);
         assert!(
             text.contains(&format!("{step} hl")) && !text.contains("adc hl, ") && !text.contains("sbc hl, "),
             "{op}:\n{text}"
@@ -120,22 +116,20 @@ fn a_long_step_by_one_keeps_its_inc_and_zero_test() {
 /// call_keeps was REFUSED with `b has no byte halves`.
 #[test]
 fn a_step_by_one_in_the_low_word_with_a_constant_above_compiles() {
-    let text = assembly(
-        "stepk",
-        "define i32 @g(i32 %a) {\n  %m = mul i32 %a, 3\n  %r = add i32 %m, -2147483647\n  ret i32 %r\n}\n",
-    );
+    let text =
+        assembly("define i32 @g(i32 %a) {\n  %m = mul i32 %a, 3\n  %r = add i32 %m, -2147483647\n  ret i32 %r\n}\n");
     assert!(text.contains("adc hl, ") || text.contains("add hl, "), "{text}");
-    let text = assembly("stepj", "define i32 @g(i32 %a) {\n  %r = add i32 %a, 65537\n  ret i32 %r\n}\n");
+    let text = assembly("define i32 @g(i32 %a) {\n  %r = add i32 %a, 65537\n  ret i32 %r\n}\n");
     assert!(!text.is_empty(), "{text}");
 }
 
-/// Eight long arguments on the stack, five adds of products: five of the seven carries were rebuilt by a compare (`pack` of
-/// os_locals_between_pushes at -O2: 9 instructions and a branch each, 362 B against SDCC's 270 B) where the same chain with seven
-/// arguments, or each add alone, took `adc hl, rr`.
+/// Eight long arguments on the stack, five adds of products: five of the seven
+/// carries were rebuilt by a compare (`pack` of os_locals_between_pushes at
+/// -O2: 9 instructions and a branch each, 362 B against SDCC's 270 B) where the
+/// same chain with seven arguments, or each add alone, took `adc hl, rr`.
 #[test]
 fn the_carries_of_a_chain_of_long_adds_over_stack_arguments_stay_in_the_flag() {
     let text = assembly(
-        "chain",
         "define i32 @g(i32 %a, i32 %b, i32 %c, i32 %d, i32 %e, i32 %f, i32 %g, i32 %h) {
   %a10 = mul i32 %a, 10
   %s1 = add i32 %a10, %b

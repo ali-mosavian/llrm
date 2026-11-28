@@ -82,7 +82,8 @@ pub fn predicated_in(
 ) -> bool {
     let (se, env) = session.split(layout, &outer.globals, &outer.metadata);
     let headers: Vec<BlockId> = {
-        let mut headers: Vec<BlockId> = env.loops.get_loops_in_visit_order().iter().map(|one| one.get_header()).collect();
+        let mut headers: Vec<BlockId> =
+            env.loops.get_loops_in_visit_order().iter().map(|one| one.get_header()).collect();
         crate::loopfilter::retain(&mut headers);
         headers
     };
@@ -378,14 +379,20 @@ impl Predicate<'_> {
     ) -> bool {
         let cx = self.env.cx(&*self.context, &*self.function);
         let l = cx.loops.get_loop_for(header).expect("a loop");
-        l.get_blocks().iter().flat_map(|&block| self.function.iter_block(block)).any(|inst| {
-            self.function.instruction(inst).result.is_some_and(|value| {
-                self.function
-                    .users(value)
-                    .iter()
-                    .any(|one| self.function.parent(one.user).is_some_and(|block| !l.contains(block)))
-            })
-        })
+        l.get_blocks()
+            .iter()
+            .flat_map(|&block| self.function.iter_block(block))
+            .any(
+                |inst| self.function
+                    .instruction(inst)
+                    .result
+                    .is_some_and(
+                        |value| self.function
+                            .users(value)
+                            .iter()
+                            .any(|one| self.function.parent(one.user).is_some_and(|block| !l.contains(block))),
+                    ),
+            )
     }
 
     /// `BadExit`: an exit that can't be predicated.

@@ -400,6 +400,12 @@ fn c_abi_of(target: &Target) -> Result<Option<CAbi>, String> {
     Ok(Some(sizes))
 }
 
+/// The inline-assembly facts of the target crate `description` names.
+pub fn inline_asm_facts(description: &str) -> Option<llrm_target::inline_asm::InlineAsm> {
+    let arm64: std::rc::Rc<dyn llrm_target::Target> = std::rc::Rc::new(llrm_arm64::description::Arm64);
+    llrm_driver::all().into_iter().chain([arm64]).find(|one| one.name() == description)?.inline_asm()
+}
+
 pub fn targets(text: &str) -> Result<BTreeMap<String, Target>, String> {
     let mut table: BTreeMap<String, Target> = toml::from_str(text).map_err(|error| format!("targets.toml: {error}"))?;
     for target in table.values_mut() {
@@ -1258,19 +1264,14 @@ fn build(
                     let fixed = text.replacen(&line, &format!("target datalayout = \"{}\"", target.datalayout), 1);
                     std::fs::write(&ir, fixed).map_err(|error| fail(format!("{}: {error}", ir.display())))?;
                 }
-                // flat x86 code: the mode the block is assembled and named in
-                let flat: Option<u8> = if target.triple.starts_with("aarch64") || target.triple.starts_with("arm64") {
-                    Some(llrm_mir::intrinsics::AARCH64)
-                } else if target.triple.starts_with("x86_64") {
-                    Some(64)
-                } else if target.triple.starts_with("i486")
-                    || target.triple.starts_with("i386") && !target.triple.contains("code16")
-                {
-                    Some(32)
+                let facts = if text.contains(" asm ") {
+                    target.description.as_deref().and_then(inline_asm_facts)
                 } else {
                     None
                 };
-                if text.contains(" asm ") && flat.is_some() || text.contains(" asm sideeffect ") {
+                if let Some(facts) = facts.filter(|one| one.flat || text.contains(" asm sideeffect ")) {
+                    // flat code: the mode the block is assembled and named in
+                    let flat = facts.flat.then_some(facts.bits);
                     let mut scratch_number = 0;
                     let mut assemble = |source: &str| -> Result<Vec<u8>, String> {
                         scratch_number += 1;
@@ -1318,12 +1319,17 @@ fn build(
                         std::fs::read(&b).map_err(|error| error.to_string())
                     };
                     let source = std::fs::read_to_string(&ir).map_err(|e| fail(e.to_string()))?;
-                    let translated = match flat {
-                        Some(bits) => inline_asm::translate_flat(&source, bits, &mut assemble),
-                        None => inline_asm::translate(&source, &mut assemble),
+                    let translated = if facts.flat {
+                        inline_asm::translate_flat(&source, facts, &mut assemble)
+                    } else {
+                        inline_asm::translate(&source, &facts, &mut assemble)
                     }
                     .map_err(|why| fail(format!("{path}: {why}")))?;
                     std::fs::write(&ir, translated).map_err(|error| fail(format!("{}: {error}", ir.display())))?;
+                } else if text.contains(" asm sideeffect ") {
+                    let source = std::fs::read_to_string(&ir).map_err(|e| fail(e.to_string()))?;
+                    std::fs::write(&ir, inline_asm::without_empty_asm(&source))
+                        .map_err(|error| fail(format!("{}: {error}", ir.display())))?;
                 }
                 let object = want(if build.stop == Stop::Assembly { "s" } else { "o" });
                 // A switch clang got as well is taken there.

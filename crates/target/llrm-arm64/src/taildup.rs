@@ -38,8 +38,8 @@
 //!
 //! DEVIATE ARM64-TD-AFTER-PLACEMENT (owner w11, exit 2026-12-06): the pin
 //! copies before block placement; this runs on the blocks placement ordered,
-//! then propagates copies forward and backward (`MachineCopyPropagation` follows
-//! `TailDuplicate` in `addMachineLateOptimization`).
+//! then propagates copies forward and backward (`MachineCopyPropagation`
+//! follows `TailDuplicate` in `addMachineLateOptimization`).
 
 use std::collections::{HashMap, HashSet};
 
@@ -108,8 +108,8 @@ pub fn tail_duplicate(
             .skip(1)
             .filter(|(_, block)| {
                 let goto = computed.contains(block.label.as_str());
-                // "Don't try to tail-duplicate single-block loops": a dispatch that
-                // can reach itself stays.
+                // "Don't try to tail-duplicate single-block loops": a dispatch
+                // that can reach itself stays.
                 let loops = indirect.iter().any(|(label, targets)| *label == block.label && targets.contains(label));
                 copyable(block, &block.label, size, goto) && !loops
             })
@@ -235,10 +235,9 @@ pub fn propagate_forward(blocks: &mut [Lowered]) {
                 continue;
             }
             match &block.insts[at] {
-                Inst::Label(_)
-                | Inst::Branch { link: true, .. }
-                | Inst::BranchReg { .. }
-                | Inst::Ret { .. } => copies.clear(),
+                Inst::Label(_) | Inst::Branch { link: true, .. } | Inst::BranchReg { .. } | Inst::Ret { .. } => {
+                    copies.clear()
+                }
                 inst => {
                     let (defs, _) = inst.defs_and_uses();
                     copies.retain(|&(d, s)| !defs.contains(&Reg::Gpr(d)) && !defs.contains(&Reg::Gpr(s)));
@@ -418,9 +417,10 @@ mod tests {
         blocks.remove(0).insts
     }
 
-    /// A dispatch copied into a handler kept `mov x20, x25 ... mov x25, x20`: the
-    /// carried value moved to a second register and straight back (arm64 QB
-    /// `exec_loop` -Os: one wasted instruction per dispatched op).
+    /// A dispatch copied into a handler kept `mov x20, x25 ... mov x25, x20`:
+    /// the carried value moved to a second register and straight back
+    /// (arm64 QB `exec_loop` -Os: one wasted instruction per dispatched
+    /// op).
     #[test]
     fn a_copy_back_onto_the_register_it_was_copied_from_goes() {
         let ret = Inst::Ret { rn: Gpr(30) };

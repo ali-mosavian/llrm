@@ -826,8 +826,7 @@ impl<'a, T: Target + Jump> Sink<'a, T> {
         }
         // recalculate the pressure after sinking into a block
         self.cached_pressure.clear();
-        if changed {
-            }
+        if changed {}
         changed
     }
 

@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/cgpretdup.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/cgpretdup.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/cgpretdup.rs sha256:f5c3f2b8cd206021c30a77baf4b4d2fb2120b4eb1a4b35d0a3c5a55fbfdef633 -->
+<!-- src: crates/opt/llrm-transforms/src/cgpretdup.rs sha256:49cf080a165bed856bd77f2cd0ca4ff6964255722794cb0ea54c9fab73c6e4c7 -->
 
 # cgpretdup
 
@@ -31,8 +31,9 @@ return lets the pin's `ShrinkWrap` find no restore point where ours found
 one (`x_mergesort` `msort`, -Os m32 +9 B).
 
 DEVIATE RD1: `mayBeEmittedAsTailCall` is `CI->isTailCall()` (x86's), read
-from the call's marker, where the target's `may_be_emitted_as_tail_call` allows; no bitcast of a pointer is looked through (MIR's
-pointers are opaque), and there are no fake uses or pseudo probes.
+from the call's marker, where the target's `may_be_emitted_as_tail_call`
+allows; no bitcast of a pointer is looked through (MIR's pointers are
+opaque), and there are no fake uses or pseudo probes.
 
 ## Example
 Before:

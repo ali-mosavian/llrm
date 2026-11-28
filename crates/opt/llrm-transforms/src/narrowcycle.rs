@@ -44,7 +44,8 @@
 //! [`crate::narrowiv`], [`crate::trunc_inst_combine`].
 //!
 //! # Example
-//! A 32-bit phi cycle that is only read in 16 bits is carried as a 16-bit cycle.
+//! A 32-bit phi cycle that is only read in 16 bits is carried as a 16-bit
+//! cycle.
 //!
 //! ```text
 //! %p = phi i32 [ %a, %e ], [ %r, %l ]       ; read only through & 0xFFFF

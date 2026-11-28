@@ -1,5 +1,6 @@
-//! `any_extend` of a byte is a register copy (DEVIATE M68K-ANYEXT). bench/tile -Os kept the pin's `MOVZXd32d8` under
-//! `and (any_extend i8), 63`: `moveq #0,%d2; move.b %d1,%d2; moveq #63,%d3; and.l %d3,%d2` (8 B) where gcc has
+//! `any_extend` of a byte is a register copy (DEVIATE M68K-ANYEXT). bench/tile
+//! -Os kept the pin's `MOVZXd32d8` under `and (any_extend i8), 63`: `moveq
+//! #0,%d2; move.b %d1,%d2; moveq #63,%d3; and.l %d3,%d2` (8 B) where gcc has
 //! `moveq #63,%d2; and.l %d1,%d2` (4 B), 124 B against gcc's 120.
 
 use llrm_m68k::driver::{Level, assembly, cpu_of};

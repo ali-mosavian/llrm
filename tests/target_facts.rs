@@ -367,7 +367,11 @@ fn shared_code_holds_no_copy_of_a_target_fact() {
         "the baseline lists {twice:?} twice, as a merge of two lowerings leaves it: LLRM_BLESS=1 cargo test --test target_facts"
     );
     let wrong = problems(root, &baseline());
-    assert!(wrong.is_empty(), "read the target's description instead of copying it; a PR that adds a fact carries its baseline bump, owner and exit date in the same PR:\n{}", wrong.join("\n"));
+    assert!(
+        wrong.is_empty(),
+        "read the target's description instead of copying it; a PR that adds a fact carries its baseline bump, owner and exit date in the same PR:\n{}",
+        wrong.join("\n")
+    );
 }
 
 /// This process's own directory under the build's scratch: two runs of this

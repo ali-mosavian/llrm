@@ -306,10 +306,15 @@ pub fn select_block(
 ) -> Result<Scheduled, Refusal> {
     LOWERINGS.with(|held| {
         let mut held = held.borrow_mut();
-        let at = held.iter().position(|(one, with, _)| *one == cpu && *with == features).unwrap_or_else(|| {
-            held.push((cpu, features, target_lowering(cpu, features)));
-            held.len() - 1
-        });
+        let at = held
+            .iter()
+            .position(|(one, with, _)| *one == cpu && *with == features)
+            .unwrap_or_else(
+                || {
+                    held.push((cpu, features, target_lowering(cpu, features)));
+                    held.len() - 1
+                },
+            );
         select_block_with(&held[at].2, dag, cpu, features, info, alias, optimize)
     })
 }

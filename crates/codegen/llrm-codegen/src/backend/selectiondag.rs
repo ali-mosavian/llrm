@@ -112,25 +112,24 @@ pub mod address_analysis;
 pub mod bitcast_combine;
 pub mod bitreverse_combine;
 pub mod bswap_combine;
-pub mod expand_is_fpclass;
 pub mod builder;
 pub mod chain_combine;
 pub mod combine_andnot;
-pub mod combine_hoist_logic;
 mod combine_avg;
+pub mod combine_extract;
 pub mod combine_funnel;
+pub mod combine_hoist_logic;
 pub mod combine_lifetime_end;
 pub mod combine_load;
 pub mod combine_load_combine;
 pub mod combine_mulo;
 pub mod combine_select_minmax;
-pub mod combine_vselect;
 pub mod combine_store_merge;
 pub mod combine_token_factor;
 pub mod combine_trunc_stores;
 pub mod combine_urem_eq;
-pub mod combine_extract;
 pub mod combine_vector;
+pub mod combine_vselect;
 pub mod ctcount_combine;
 pub mod dag;
 pub mod dag_combiner;
@@ -148,6 +147,7 @@ pub mod emit_api;
 pub mod expand_divrem_const;
 pub mod expand_fixed;
 pub mod expand_funnel;
+pub mod expand_is_fpclass;
 pub mod expand_overflow;
 pub mod expand_sat;
 #[cfg(test)]
@@ -198,11 +198,11 @@ pub mod x86_carry;
 #[path = "../../../../target/llrm-x86-backend/src/x86_lowering.rs"]
 pub mod x86_lowering;
 #[cfg(test)]
-#[path = "../../../../target/llrm-x86-backend/src/x86_vshift.rs"]
-pub mod x86_vshift;
-#[cfg(test)]
 #[path = "../../../../target/llrm-x86-backend/src/nodes.rs"]
 pub mod x86_nodes;
+#[cfg(test)]
+#[path = "../../../../target/llrm-x86-backend/src/x86_vshift.rs"]
+pub mod x86_vshift;
 #[cfg(test)]
 #[path = "../../../../target/llrm-x86-backend/src/x86isd.rs"]
 pub mod x86isd;
@@ -229,6 +229,8 @@ mod combine_avg_tests;
 #[cfg(test)]
 mod combine_parity_tests;
 #[cfg(test)]
+mod constrained_tests;
+#[cfg(test)]
 mod dag_function_aggregates_tests;
 #[cfg(test)]
 mod dag_function_calls_tests;
@@ -241,6 +243,8 @@ mod dag_function_float_tests;
 #[cfg(test)]
 mod dag_function_frame_tests;
 #[cfg(test)]
+mod dag_function_indirectbr_tests;
+#[cfg(test)]
 mod dag_function_m64_tests;
 #[cfg(test)]
 mod dag_function_odds_tests;
@@ -248,8 +252,6 @@ mod dag_function_odds_tests;
 mod dag_function_soft_float_tests;
 #[cfg(test)]
 mod dag_function_switch_tests;
-#[cfg(test)]
-mod dag_function_indirectbr_tests;
 #[cfg(test)]
 mod dag_function_tail_tests;
 #[cfg(test)]
@@ -262,15 +264,11 @@ mod dagisel_tests;
 #[cfg(test)]
 mod exact_shift_tests;
 #[cfg(test)]
-mod infer_ptr_align_tests;
-#[cfg(test)]
 mod extload_tests;
 #[cfg(test)]
 mod fallthrough_tests;
 #[cfg(test)]
 mod farptr_tests;
-#[cfg(test)]
-mod constrained_tests;
 #[cfg(test)]
 mod fpret_tests;
 #[cfg(test)]
@@ -279,6 +277,8 @@ mod fpround_tests;
 mod freeze_tests;
 #[cfg(test)]
 mod gaps_tests;
+#[cfg(test)]
+mod infer_ptr_align_tests;
 #[cfg(test)]
 mod invoke_tests;
 #[cfg(test)]

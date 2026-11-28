@@ -54,7 +54,7 @@ use llrm_mir::valuetracking::context::is_implied_condition_cmp;
 use llrm_mir::valuetracking::nonzero::strip_and_accumulate_constant_offsets;
 use llrm_mir::valuetracking::pattern::{CmpPredicate, Side};
 use llrm_mir::valuetracking::range::{self, SelectOperand, SelectPatternFlavor};
-use llrm_mir::valuetracking::{Query, known, pattern};
+use llrm_mir::valuetracking::{known, pattern};
 
 use crate::combine::{Combiner, Visit};
 use crate::combine_icmp_binop::fold_icmp_bin_op;

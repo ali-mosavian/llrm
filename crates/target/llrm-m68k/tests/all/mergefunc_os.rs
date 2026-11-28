@@ -1,5 +1,6 @@
-//! gcc folds identical functions at -Os (`-fipa-icf`: `.set shl2,shl`); the pin's pipeline has no `MergeFunctions`.
-//! shift_int32_variable -Os kept `shl` and `shl2`, `shr` and `shr2`, `sar` and `sar2` as six bodies: 258 B against
+//! gcc folds identical functions at -Os (`-fipa-icf`: `.set shl2,shl`); the
+//! pin's pipeline has no `MergeFunctions`. shift_int32_variable -Os kept `shl`
+//! and `shl2`, `shr` and `shr2`, `sar` and `sar2` as six bodies: 258 B against
 //! gcc's 224. DEVIATE MERGEFUNC-OS.
 
 use llrm_m68k::driver::{Level, assembly, cpu_of};

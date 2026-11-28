@@ -4,7 +4,7 @@
 mod common;
 
 use common::{op, v};
-use llrm_spike_mf::{Block, Inst, Kind, MFunction, Operand, Phi, Reg, dead_machine_instruction_elim};
+use llrm_spike_mf::{Block, Kind, MFunction, Operand, Phi, Reg, dead_machine_instruction_elim};
 
 fn function(blocks: Vec<Block>) -> MFunction<()> {
     let mut function = MFunction::new("f");
@@ -17,7 +17,13 @@ fn names(function: &MFunction<()>) -> Vec<Vec<&'static str>> {
     function
         .blocks
         .iter()
-        .map(|block| block.insts.iter().filter_map(|inst| if let Kind::Op(name) = inst.kind { Some(name) } else { None }).collect())
+        .map(|block| {
+            block
+                .insts
+                .iter()
+                .filter_map(|inst| if let Kind::Op(name) = inst.kind { Some(name) } else { None })
+                .collect()
+        })
         .collect()
 }
 
@@ -31,12 +37,12 @@ fn a_phi_nothing_reads_goes_with_the_chain_that_fed_it() {
     ret.terminator = true;
     ret.barrier = true;
     let mut f = function(vec![
-        Block { id: 0, insts: vec![op("lo", vec![Operand::Def(v(0))]), op("hi", vec![Operand::Def(v(2)), use_of(0)])], phis: vec![] },
         Block {
-            id: 1,
-            insts: vec![op("lo2", vec![Operand::Def(v(3)), use_of(0)])],
+            id: 0,
+            insts: vec![op("lo", vec![Operand::Def(v(0))]), op("hi", vec![Operand::Def(v(2)), use_of(0)])],
             phis: vec![],
         },
+        Block { id: 1, insts: vec![op("lo2", vec![Operand::Def(v(3)), use_of(0)])], phis: vec![] },
         Block {
             id: 2,
             insts: vec![ret],
@@ -62,7 +68,11 @@ fn side_effects_stay() {
     let mut volatile = op("ld", vec![Operand::Def(v(2))]);
     volatile.side_effects = true;
     let phys = op("mv", vec![Operand::Def(Reg::Phys(llrm_lir::registers::RegId::from_raw(0)))]);
-    let mut f = function(vec![Block { id: 0, insts: vec![call, store, volatile, phys, op("dead", vec![Operand::Def(v(3))])], phis: vec![] }]);
+    let mut f = function(vec![Block {
+        id: 0,
+        insts: vec![call, store, volatile, phys, op("dead", vec![Operand::Def(v(3))])],
+        phis: vec![],
+    }]);
     assert!(dead_machine_instruction_elim(&mut f));
     assert_eq!(names(&f), [vec!["jsr", "st", "ld", "mv"]]);
 }

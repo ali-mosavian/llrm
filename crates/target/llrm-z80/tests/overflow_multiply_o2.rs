@@ -1,6 +1,8 @@
-//! overflow_builtins -O2/-O3 (10890 B / 943576 T against 7493 B / 795223 T at -O1): its `llvm.*mul.with.overflow` of 32
-//! and 64 bits were 168 `__mulhi3` calls in `main` where -O1 has 72 and 24 `__umulhisi3`. A function with such a
-//! multiply is also selected with the product call, and the module price picks the smaller.
+//! overflow_builtins -O2/-O3 (10890 B / 943576 T against 7493 B / 795223 T at
+//! -O1): its `llvm.*mul.with.overflow` of 32 and 64 bits were 168 `__mulhi3`
+//! calls in `main` where -O1 has 72 and 24 `__umulhisi3`. A function with such
+//! a multiply is also selected with the product call, and the module price
+//! picks the smaller.
 
 use llrm_z80::compile::text;
 use llrm_z80::driver::{Level, Request};

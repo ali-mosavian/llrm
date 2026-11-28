@@ -606,7 +606,8 @@ pub struct Options {
     /// `-g` writes BC's own CodeView layout (what its /Zi writes) instead of
     /// standard CodeView 4, which debuggers other than BASIC's read.
     pub bc_codeview: bool,
-    /// The module zeroes its own `_BSS`, as the runtime it links does not (the Microsoft ones').
+    /// The module zeroes its own `_BSS`, as the runtime it links does not (the
+    /// Microsoft ones').
     pub zero_bss: bool,
 }
 
@@ -5302,7 +5303,8 @@ impl Compiler {
             self.data.len() - 1
         };
         let bytes = &mut self.data[index].bytes;
-        // The text as written, blanks and all: BC keeps it so and READ parses it at run time.
+        // The text as written, blanks and all: BC keeps it so and READ parses
+        // it at run time.
         bytes.extend_from_slice(text.as_bytes());
         bytes.push(0);
         Ok(())
@@ -10846,9 +10848,10 @@ impl Compiler {
         self.calls.last_mut().expect("a call just emitted").fills.push((operand, bytes));
     }
 
-    /// The module zeroes its own `_BSS` where its runtime does not (the Microsoft ones: the llrm
-    /// start-up does, and CLEAR's B$SCLR zeroes BC_DATA only). The driver lays the call down only
-    /// when `_BSS` holds something.
+    /// The module zeroes its own `_BSS` where its runtime does not (the
+    /// Microsoft ones: the llrm start-up does, and CLEAR's B$SCLR zeroes
+    /// BC_DATA only). The driver lays the call down only when `_BSS` holds
+    /// something.
     fn zero_bss(&mut self) {
         if self.options.zero_bss {
             self.emit_runtime_call("$QB$ZBSS", Vec::new(), Vec::new());
@@ -11468,13 +11471,14 @@ impl Compiler {
         // A loop that reaches no far allocation keeps every far descriptor's
         // words.
         for function in &self.functions {
-        // The runtime enters a module's body once and no statement calls it, so
-        // `__main` never runs inside itself: GlobalOpt localizes a global to
-        // its one accessing function only when that function says it does not
-        // recurse, which the pin's early pipeline cannot yet infer.
-        if let Some(main) = self.functions.iter().find(|one| one.name == "__main") {
-            facts.state(llrm_hir::facts::Subject::Callable(i64::from(main.id)), llrm_hir::facts::Fact::NoRecurse);
-        }
+            // The runtime enters a module's body once and no statement calls
+            // it, so `__main` never runs inside itself: GlobalOpt
+            // localizes a global to its one accessing function only
+            // when that function says it does not recurse, which
+            // the pin's early pipeline cannot yet infer.
+            if let Some(main) = self.functions.iter().find(|one| one.name == "__main") {
+                facts.state(llrm_hir::facts::Subject::Callable(i64::from(main.id)), llrm_hir::facts::Fact::NoRecurse);
+            }
             for &block in &function.quiet_loops {
                 facts.state(
                     llrm_hir::facts::Subject::Terminator { function: i64::from(function.id), block: i64::from(block) },

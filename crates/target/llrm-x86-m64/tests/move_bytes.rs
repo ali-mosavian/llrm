@@ -2,9 +2,9 @@
 
 use llrm_target::Target;
 
-/// m64 `jpeg_fixed` -Os grew 42 B: `operand_bytes` (8, the word) was taken for the
-/// size an instruction has without a prefix (4), so a dword counted a prefix and
-/// every dword zero was remade (`xor` 2 B against a "3 B" copy).
+/// m64 `jpeg_fixed` -Os grew 42 B: `operand_bytes` (8, the word) was taken for
+/// the size an instruction has without a prefix (4), so a dword counted a
+/// prefix and every dword zero was remade (`xor` 2 B against a "3 B" copy).
 #[test]
 fn a_dword_is_the_plain_operand_at_m64() {
     let bytes = llrm_x86_m64::M64.move_bytes().expect("x86 states its encodings");

@@ -190,9 +190,11 @@ pub fn do_instruction_selection_with(
         }
         adapter.dag.cur_order = adapter.dag.nodes()[node as usize].order;
         if select(&mut adapter, node) == Outcome::CannotSelect {
-            // The identity patterns of `X86InstrVecCompiler.td` (`(v2i64 (bitconvert (v4i32 VR128:$src))) ->
-            // $src`), for a target whose matcher has none: a bitcast of a vector to another of the same size
-            // changes the type the users matched on, not the register.
+            // The identity patterns of `X86InstrVecCompiler.td` (`(v2i64
+            // (bitconvert (v4i32 VR128:$src))) -> $src`), for a
+            // target whose matcher has none: a bitcast of a vector to another
+            // of the same size changes the type the users matched
+            // on, not the register.
             let at = SDValue { node, res: 0 };
             if adapter.dag.nodes()[node as usize].opcode == ISD::BitCast {
                 let (to, from) = (adapter.dag.value_type(at), adapter.dag.value_type(adapter.dag.operand(at, 0)));
@@ -202,7 +204,8 @@ pub fn do_instruction_selection_with(
                 }
             }
             let opcode = adapter.dag.nodes()[node as usize].opcode;
-            // The lane extract names the vector it reads: the first thing to know of a refusal.
+            // The lane extract names the vector it reads: the first thing to
+            // know of a refusal.
             let detail = if opcode == ISD::ExtractElement {
                 format!(" of {:?}", adapter.dag.value_type(adapter.dag.operand(at, 0)))
             } else {

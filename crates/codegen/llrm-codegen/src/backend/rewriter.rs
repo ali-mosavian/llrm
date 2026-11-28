@@ -117,12 +117,12 @@ pub fn rewrite(
     })
 }
 
-/// The instructions that define a narrower part of a value than the value is
-/// read at while the value is not live before them: what `VirtRegRewriter`
-/// gives an `implicit-def` of the super register and no implicit use, which
-/// `X86FixupBWInsts::getSuperRegDestIfDead` reads as "the rest is undefined".
-/// DEVIATE W1 above has no sub-register operands, so the widths of the value's
-/// operands stand in for the sub-register indices.
+// The instructions that define a narrower part of a value than the value is
+// read at while the value is not live before them: what `VirtRegRewriter`
+// gives an `implicit-def` of the super register and no implicit use, which
+// `X86FixupBWInsts::getSuperRegDestIfDead` reads as "the rest is undefined".
+// DEVIATE W1 above has no sub-register operands, so the widths of the value's
+// operands stand in for the sub-register indices.
 #[cfg(test)]
 thread_local! {
     pub(crate) static INTERVALS_WORKED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };

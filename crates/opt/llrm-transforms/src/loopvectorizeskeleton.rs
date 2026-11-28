@@ -43,7 +43,8 @@
 //!   the recipe extraction, LVP2.
 //!
 //! # Example
-//! A loop gets a trip-count check, a vector trip count `n.vec` and a scalar remainder loop around it.
+//! A loop gets a trip-count check, a vector trip count `n.vec` and a scalar
+//! remainder loop around it.
 //!
 //! ```text
 //! %n = sub %bound, %start

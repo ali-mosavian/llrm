@@ -39,10 +39,10 @@
 //! ```
 //!
 //! A constant factor that is a whole `K << scale` needs no range: the product
-//! `x * K * 2^scale` fits 64 bits and shifts back to `x * K`, which is `mul x, K`
-//! at 32 bits, wrapping as the wide form's low half does.
-//! The pin folds only `X * (1 << scale) -> X` (`simplifyIntrinsic`) and a zero or
-//! undef factor; no InstCombine or DAGCombiner `smul.fix` fold takes a whole
+//! `x * K * 2^scale` fits 64 bits and shifts back to `x * K`, which is `mul x,
+//! K` at 32 bits, wrapping as the wide form's low half does.
+//! The pin folds only `X * (1 << scale) -> X` (`simplifyIntrinsic`) and a zero
+//! or undef factor; no InstCombine or DAGCombiner `smul.fix` fold takes a whole
 //! multiple. `smul.fix.sat` is another intrinsic and keeps its call.
 //!
 //! DEVIATE LP-3 (no pin pass: SelectionDAG expands `smul.fix`

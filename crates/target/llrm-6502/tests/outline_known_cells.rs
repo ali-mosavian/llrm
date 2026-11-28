@@ -1,7 +1,7 @@
-//! `drop_known_loads` shortens one of two copies of a run (rc8 and rc9 are known
-//! zero in the first, `lda rc8` goes), so the copies were no longer equal and
-//! the outliner left both inline: object_extent_loop -Os, 205 B against 186 B
-//! before #10422 (one `jsr __outl_N` of the whole run at both places).
+//! `drop_known_loads` shortens one of two copies of a run (rc8 and rc9 are
+//! known zero in the first, `lda rc8` goes), so the copies were no longer equal
+//! and the outliner left both inline: object_extent_loop -Os, 205 B against 186
+//! B before #10422 (one `jsr __outl_N` of the whole run at both places).
 
 mod common;
 
@@ -20,7 +20,8 @@ fn a_run_the_known_loads_shorten_in_one_copy_is_still_one_routine() {
         datalayout()
     );
     let text = assembly(&ir, &Request::new(Level::Os)).unwrap_or_else(|e| panic!("{e}"));
-    // the stores of the second half of the argument block are in the routine, not in either caller
+    // the stores of the second half of the argument block are in the routine,
+    // not in either caller
     let stores = text.matches("  ldy #5\n  sta (rc18),y\n").count();
     assert_eq!(stores, 1, "the run is inline at {stores} places:\n{text}");
 }

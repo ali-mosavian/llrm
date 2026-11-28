@@ -1,10 +1,13 @@
-//! The -Os multiply trial priced the call of `__mulsi3` without the routine's 54 B, so a chain of adds that was a
-//! little larger than `pea 3; move.l %d2,-(%sp); jsr (%a2)` lost to the call, and the program linked the routine
-//! (div8_os 68000: 754 -> 800 B linked, 5.3 -> 7.5 M clocks). The build that calls it pays for it.
+//! The -Os multiply trial priced the call of `__mulsi3` without the routine's
+//! 54 B, so a chain of adds that was a little larger than `pea 3; move.l
+//! %d2,-(%sp); jsr (%a2)` lost to the call, and the program linked the routine
+//! (div8_os 68000: 754 -> 800 B linked, 5.3 -> 7.5 M clocks). The build that
+//! calls it pays for it.
 
 use llrm_m68k::driver::{Level, assembly, cpu_of};
 
-/// `total` of tests/run/c/div8_os.c as the shared mid-end leaves it: `sum * 3` in a loop beside byte divides.
+/// `total` of tests/run/c/div8_os.c as the shared mid-end leaves it: `sum * 3`
+/// in a loop beside byte divides.
 const TOTAL: &str = "target datalayout = \"E-m:e-p:32:16:32-i8:8:8-i16:16:16-i32:16:32-n8:16:32-a:0:16-S16\"
 define i32 @total() nounwind optsize minsize {
   br label %1
@@ -92,6 +95,9 @@ define i32 @total() nounwind optsize minsize {
 #[test]
 fn a_chain_of_adds_beats_a_call_that_links_the_multiply_routine() {
     let asm = assembly(TOTAL, cpu_of("68000").unwrap(), Level::Os).expect("compiles");
-    assert!(!asm.contains("__mulsi3"), "sum * 3 is a call, and links 54 B of __mulsi3:
-{asm}");
+    assert!(
+        !asm.contains("__mulsi3"),
+        "sum * 3 is a call, and links 54 B of __mulsi3:
+{asm}"
+    );
 }

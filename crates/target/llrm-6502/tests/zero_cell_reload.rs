@@ -1,7 +1,7 @@
 //! A cell the 65C02 zeroed with `stz` is known to hold 0, as one zeroed by
-//! `lda #0; sta` is: a reload of it while `a` holds 0 goes. `rep_count` -O1 kept
-//! two zero cells (`stz rc2; stz rc3`) and read one back before each of 16 zero
-//! stores through a pointer: 300 B on the 65C02 against 269 B on the 6502
+//! `lda #0; sta` is: a reload of it while `a` holds 0 goes. `rep_count` -O1
+//! kept two zero cells (`stz rc2; stz rc3`) and read one back before each of 16
+//! zero stores through a pointer: 300 B on the 65C02 against 269 B on the 6502
 //! (llvm-mos 294). Needs `llrm-cc` built (`LLRM_CC`).
 
 use std::process::Command;

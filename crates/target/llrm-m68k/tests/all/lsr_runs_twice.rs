@@ -1,7 +1,9 @@
-//! M68K-LSR-TWICE: the m68k mid-end runs LoopStrengthReduce after the shared pipeline's own run, so one loop is
-//! reduced twice; the pin runs it once. Removing the second run changes 107 programs (68000 O2 +136 B, Os +96 B) and
-//! its LoopSimplify adds the empty edge blocks known_loads_walks keeps. This pins the count: when it reads 1, the
-//! row's premise is gone, and the +12 blocks / +2 phis it names are the thing to re-measure.
+//! M68K-LSR-TWICE: the m68k mid-end runs LoopStrengthReduce after the shared
+//! pipeline's own run, so one loop is reduced twice; the pin runs it once.
+//! Removing the second run changes 107 programs (68000 O2 +136 B, Os +96 B) and
+//! its LoopSimplify adds the empty edge blocks known_loads_walks keeps. This
+//! pins the count: when it reads 1, the row's premise is gone, and the +12
+//! blocks / +2 phis it names are the thing to re-measure.
 
 use llrm_m68k::driver::{Level, assembly, cpu_of};
 use llrm_transforms::lsr_pass::runs_taken;

@@ -52,9 +52,11 @@ fn four_byte_stores_are_one_memset() {
 /// sees 5, a memset): +161 instructions at -O2, +401 at -O3.
 #[test]
 fn byte_stores_from_a_variable_row_pointer_are_one_memset() {
-    let mut body = String::from("  %row = getelementptr i8, ptr @a, i16 %i
+    let mut body = String::from(
+        "  %row = getelementptr i8, ptr @a, i16 %i
   store i8 0, ptr %row
-");
+",
+    );
     for at in 1..8 {
         body += &format!("  %p{at} = getelementptr i8, ptr %row, i16 {at}\n  store i8 0, ptr %p{at}\n");
     }

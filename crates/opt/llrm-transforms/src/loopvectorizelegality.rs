@@ -27,8 +27,8 @@
 //! - LV-D3 early-exit loops (`isVectorizableEarlyExitLoop`): read-only loops
 //!   whose loads are dereferenceable in the loop only; no stores (the pin's
 //!   `-enable-early-exit-vectorization-with-side-effects` is off), no
-//!   fault-only-first loads (`-enable-early-exit-with-ffload` is off), no
-//!   SCEV predicates. The planner takes them through `loopvectorizeearlyexit`.
+//!   fault-only-first loads (`-enable-early-exit-with-ffload` is off), no SCEV
+//!   predicates. The planner takes them through `loopvectorizeearlyexit`.
 //! - LV-D4 calls: an intrinsic `getVectorIntrinsicIDForCall` takes is legal (a
 //!   scalar operand loop invariant, L965); a call the `VFDatabase` or
 //!   `isTLIScalarize` would take is refused. The transform widens fewer.
@@ -142,8 +142,9 @@ pub fn can_vectorize(
 }
 
 /// `canVectorizeWithIfConvert` (L1449) for a loop whose blocks all run on
-/// every trip (LV-D2): the terminators are branches, and `blockNeedsPredication`
-/// (the block does not dominate the latch) is false everywhere.
+/// every trip (LV-D2): the terminators are branches, and
+/// `blockNeedsPredication` (the block does not dominate the latch) is false
+/// everywhere.
 fn can_vectorize_with_if_convert(
     cx: &Cx,
     the_loop: Loop,
@@ -154,7 +155,8 @@ fn can_vectorize_with_if_convert(
         let Some(term) = function.terminator(block) else { return Err(Refusal("Can't if-convert the loop")) };
         match function.instruction(term).opcode {
             Opcode::Br => {}
-            // A switch that exits the loop is refused in the pin; one that does not is predicated here.
+            // A switch that exits the loop is refused in the pin; one that does
+            // not is predicated here.
             Opcode::Switch => return Err(Refusal("Loop contains an unsupported switch")),
             _ => return Err(Refusal("Loop contains an unsupported terminator")),
         }
@@ -203,7 +205,8 @@ fn is_vectorizable_early_exit_loop(
         for inst in function.iter_block(block) {
             let data = function.instruction(inst);
             match data.opcode {
-                // Checked separately (the loads below); a store is a side effect.
+                // Checked separately (the loads below); a store is a side
+                // effect.
                 Opcode::Load { .. } | Opcode::Phi | Opcode::Br => {}
                 Opcode::Store { .. } => {
                     return Err(Refusal("Cannot vectorize early exit loop with side effects"));
@@ -252,10 +255,15 @@ fn is_safe_to_speculate(
     match data.opcode {
         Opcode::Binary(BinaryOp::UDiv | BinaryOp::SDiv | BinaryOp::URem | BinaryOp::SRem) => {
             let q = llrm_mir::valuetracking::Query::bare(cx.context, cx.function, cx.layout);
-            data.operands.get(1).and_then(|&divisor| q.int_constant(divisor)).is_some_and(|(bits, width)| {
-                let all_ones = if width >= 128 { u128::MAX } else { (1u128 << width) - 1 };
-                bits != 0 && bits != all_ones
-            })
+            data.operands
+                .get(1)
+                .and_then(|&divisor| q.int_constant(divisor))
+                .is_some_and(
+                    |(bits, width)| {
+                        let all_ones = if width >= 128 { u128::MAX } else { (1u128 << width) - 1 };
+                        bits != 0 && bits != all_ones
+                    },
+                )
         }
         Opcode::Binary(_)
         | Opcode::Cast(_)

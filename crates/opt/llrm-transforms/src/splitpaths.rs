@@ -5,15 +5,19 @@
 //!
 //!
 //! # How it works
-//! A loop's latch `J` that is the join of an if-then-else diamond (`d` ends in a conditional, each arm of `J` is `d`
-//! or a block that only `d` reaches and that only reaches `J`) is copied into the arm that has a block of its own and
-//! merged into it. The phis of `J` take the arm's value in the copy, so what read them (an address, an index, the
-//! loop's test) is computed from a constant or a value the arm already has, and `J` and its copy are two latches.
+//! A loop's latch `J` that is the join of an if-then-else diamond (`d` ends in
+//! a conditional, each arm of `J` is `d` or a block that only `d` reaches and
+//! that only reaches `J`) is copied into the arm that has a block of its own
+//! and merged into it. The phis of `J` take the arm's value in the copy, so
+//! what read them (an address, an index, the loop's test) is computed from a
+//! constant or a value the arm already has, and `J` and its copy are two
+//! latches.
 //!
-//! `is_feasible_trace` decides: the join must be small (under 15 statements), must not look like an if-conversion
-//! candidate (two arms of one statement each that feed the same phi), and must have a phi that something in the join
-//! uses (a use that is only a compare does not count), or a header phi with an unchanged path, or an equality the
-//! dominating branch decides.
+//! `is_feasible_trace` decides: the join must be small (under 15 statements),
+//! must not look like an if-conversion candidate (two arms of one statement
+//! each that feed the same phi), and must have a phi that something in the join
+//! uses (a use that is only a compare does not count), or a header phi with an
+//! unchanged path, or an equality the dominating branch decides.
 //!
 //! | # | DEVIATE |
 //! |---|---|
@@ -48,10 +52,12 @@
 //!   ...
 //! ```
 //!
-//! From unit test `test_a_join_of_an_empty_arm_is_copied_into_it` in `splitpaths_tests.rs`.
+//! From unit test `test_a_join_of_an_empty_arm_is_copied_into_it` in
+//! `splitpaths_tests.rs`.
 //!
 //! # Runs
-//! Once per body, at -O3 on a target that asks, after `cgpaddr` and before `ree`. With `wanted("splitpaths")`.
+//! Once per body, at -O3 on a target that asks, after `cgpaddr` and before
+//! `ree`. With `wanted("splitpaths")`.
 //!
 //! # Needs
 //! Dominators and loops.
@@ -60,7 +66,8 @@
 //! Nothing.
 //!
 //! # See also
-//! Tests: `llrm-transforms/src/splitpaths_tests.rs`. Levels: `docs/reference/levels.md`.
+//! Tests: `llrm-transforms/src/splitpaths_tests.rs`. Levels:
+//! `docs/reference/levels.md`.
 
 use std::collections::BTreeSet;
 
@@ -98,7 +105,12 @@ impl FunctionPass for SplitPaths {
             .function
             .attrs
             .iter()
-            .any(|attr| matches!(attr, Attribute::Flag(flag) if flag == "optsize" || flag == "minsize"));
+            .any(
+                |attr| matches!(
+                    attr,
+                    Attribute::Flag(flag) if flag == "optsize" || flag == "minsize"
+                ),
+            );
         // gcc: at least two real blocks and a back edge.
         if !wanted || for_size || unit.function.layout().len() < 3 {
             return PreservedAnalyses::all();
@@ -109,8 +121,7 @@ impl FunctionPass for SplitPaths {
         let mut taken = BTreeSet::new();
         for one in loops.get_loops_in_preorder().into_iter().rev() {
             let Some(latch) = one.get_loop_latch(&*unit.function) else { continue };
-            let Some(plan) = find_block_to_duplicate_for_splitting_paths(unit.function, one.get_header(), latch)
-            else {
+            let Some(plan) = find_block_to_duplicate_for_splitting_paths(unit.function, one.get_header(), latch) else {
                 continue;
             };
             let blocks = [plan.join, plan.dominator, plan.arm, plan.other];
@@ -130,8 +141,9 @@ impl FunctionPass for SplitPaths {
     }
 }
 
-/// The diamond `find_block_to_duplicate_for_splitting_paths` found: `join` is the loop's latch, `dominator` ends in
-/// the conditional, `arm` is the predecessor of `join` that has a block of its own.
+/// The diamond `find_block_to_duplicate_for_splitting_paths` found: `join` is
+/// the loop's latch, `dominator` ends in the conditional, `arm` is the
+/// predecessor of `join` that has a block of its own.
 struct Plan {
     header: BlockId,
     join: BlockId,
@@ -149,7 +161,10 @@ fn ends_in_conditional(
     let Some(last) = function.terminator(block) else { return false };
     let last = function.instruction(last);
     last.opcode == Opcode::Br
-        && matches!(last.operands[..], [_, Operand::Block(taken), Operand::Block(other)] if taken != other)
+        && matches!(
+            last.operands[..],
+            [_, Operand::Block(taken), Operand::Block(other)] if taken != other
+        )
 }
 
 /// A block that ends in an unconditional `br`.
@@ -157,19 +172,25 @@ fn ends_in_jump(
     function: &Function,
     block: BlockId,
 ) -> bool {
-    function.terminator(block).is_some_and(|last| {
-        let last = function.instruction(last);
-        last.opcode == Opcode::Br && last.operands.len() == 1
-    })
+    function
+        .terminator(block)
+        .is_some_and(
+            |last| {
+                let last = function.instruction(last);
+                last.opcode == Opcode::Br && last.operands.len() == 1
+            },
+        )
 }
 
-/// `find_block_to_duplicate_for_splitting_paths`: the latch `join` of the loop, when it joins an if-then-else.
+/// `find_block_to_duplicate_for_splitting_paths`: the latch `join` of the loop,
+/// when it joins an if-then-else.
 fn find_block_to_duplicate_for_splitting_paths(
     function: &Function,
     header: BlockId,
     join: BlockId,
 ) -> Option<Plan> {
-    // gcc's latch forwarder has one predecessor, `join`, whose conditional leaves the loop or goes round.
+    // gcc's latch forwarder has one predecessor, `join`, whose conditional
+    // leaves the loop or goes round.
     if join == header || !ends_in_conditional(function, join) {
         return None;
     }
@@ -178,7 +199,8 @@ fn find_block_to_duplicate_for_splitting_paths(
     if first == join || second == join {
         return None;
     }
-    // The dominator ends in a conditional too, and each predecessor is it or a block only it reaches.
+    // The dominator ends in a conditional too, and each predecessor is it or a
+    // block only it reaches.
     let only_pred = |block: BlockId| {
         let preds = function.predecessors(block);
         (preds.len() == 1).then(|| preds[0])
@@ -212,8 +234,8 @@ fn body(
     function.iter_block(block).filter(|&inst| function.instruction(inst).opcode != Opcode::Phi).collect()
 }
 
-/// The statements of `block` as gcc counts them: its body without the jump that falls into the next block (gcc has
-/// no statement for an unconditional edge).
+/// The statements of `block` as gcc counts them: its body without the jump that
+/// falls into the next block (gcc has no statement for an unconditional edge).
 fn statements(
     function: &Function,
     block: BlockId,
@@ -258,7 +280,8 @@ fn set_phi_arms(
     function.set_operands(phi, arms.iter().flat_map(|(value, from)| [*value, Operand::Block(*from)]).collect());
 }
 
-/// `count_stmts_in_block`, of a predecessor only where it has one way out (gcc's `num_stmts_in_pred`).
+/// `count_stmts_in_block`, of a predecessor only where it has one way out
+/// (gcc's `num_stmts_in_pred`).
 fn statements_of_arm(
     function: &Function,
     block: BlockId,
@@ -266,7 +289,8 @@ fn statements_of_arm(
     if function.successors(block).len() == 1 { statements(function, block).len() } else { 0 }
 }
 
-/// `poor_ifcvt_candidate_code`: a statement that does not if-convert to one instruction.
+/// `poor_ifcvt_candidate_code`: a statement that does not if-convert to one
+/// instruction.
 fn poor_ifcvt_candidate(
     function: &Function,
     inst: InstId,
@@ -274,14 +298,18 @@ fn poor_ifcvt_candidate(
     function.instruction(inst).opcode == Opcode::Select
 }
 
-/// What `GIMPLE_ASSIGN` is in MIR: an instruction that makes a value without a side effect or a branch.
+/// What `GIMPLE_ASSIGN` is in MIR: an instruction that makes a value without a
+/// side effect or a branch.
 fn is_assignment(
     function: &Function,
     inst: InstId,
 ) -> bool {
     let opcode = &function.instruction(inst).opcode;
     function.instruction(inst).result.is_some()
-        && !matches!(opcode, Opcode::Phi | Opcode::Call(_) | Opcode::Invoke(_) | Opcode::Atomic(_) | Opcode::VaArg)
+        && !matches!(
+            opcode,
+            Opcode::Phi | Opcode::Call(_) | Opcode::Invoke(_) | Opcode::Atomic(_) | Opcode::VaArg
+        )
 }
 
 /// `is_feasible_trace`: whether duplicating the join is worth it.
@@ -296,7 +324,8 @@ fn is_feasible_trace(
         return false;
     }
     let (first, second) = (plan.arm, plan.other);
-    // SP-1: the arms of one assignment each that feed the same phi are an if-conversion candidate.
+    // SP-1: the arms of one assignment each that feed the same phi are an
+    // if-conversion candidate.
     if statements_of_arm(function, first) == 1 && statements_of_arm(function, second) == 1 {
         let (a, b) = (statements(function, first)[0], statements(function, second)[0]);
         if is_assignment(function, a)
@@ -322,8 +351,8 @@ fn is_feasible_trace(
             }
         }
     }
-    // A phi with a use that can be simplified in the copy, or that makes the loop's own phi's unchanged path a
-    // threading opportunity.
+    // A phi with a use that can be simplified in the copy, or that makes the
+    // loop's own phi's unchanged path a threading opportunity.
     let header = Some(plan.header);
     let mut found_useful_phi = false;
     'phis: for phi in phis_of(function, join) {
@@ -344,7 +373,10 @@ fn is_feasible_trace(
                         let Some(block) = block else { continue };
                         if block != join && tree.dominates(block, join) {
                             let decider = function.instruction(second_use.user);
-                            if matches!(decider.opcode, Opcode::ICmp(IntPredicate::Eq | IntPredicate::Ne)) {
+                            if matches!(
+                                decider.opcode,
+                                Opcode::ICmp(IntPredicate::Eq | IntPredicate::Ne)
+                            ) {
                                 found_useful_phi = true;
                             }
                             break;
@@ -357,12 +389,16 @@ fn is_feasible_trace(
             }
         }
     }
-    // The exception: an equality the dominating branch decides, which holds in the join.
+    // The exception: an equality the dominating branch decides, which holds in
+    // the join.
     let mut found_cprop_opportunity = false;
     if let Some(last) = function.terminator(plan.dominator)
         && let Some(Operand::Value(condition)) = function.instruction(last).operands.first().copied()
         && let llrm_mir::module::ValueDef::Instruction(compare) = function.value(condition).def
-        && matches!(function.instruction(compare).opcode, Opcode::ICmp(IntPredicate::Eq | IntPredicate::Ne))
+        && matches!(
+            function.instruction(compare).opcode,
+            Opcode::ICmp(IntPredicate::Eq | IntPredicate::Ne)
+        )
     {
         for operand in function.instruction(compare).operands.clone() {
             if let Operand::Value(value) = operand
@@ -376,8 +412,8 @@ fn is_feasible_trace(
     found_useful_phi || found_cprop_opportunity
 }
 
-/// `transform_duplicate`: a copy of the join, merged into the arm `plan.arm`; the phis of the join take the arm's
-/// values in the copy.
+/// `transform_duplicate`: a copy of the join, merged into the arm `plan.arm`;
+/// the phis of the join take the arm's values in the copy.
 fn transform_duplicate(
     context: &Context,
     layout: &DataLayout,
@@ -411,7 +447,8 @@ fn transform_duplicate(
         Operand::Value(value) => map.values.get(&value).copied().unwrap_or(operand),
         other => other,
     };
-    // The successors of the join are the copy's too: their phis hear from the arm.
+    // The successors of the join are the copy's too: their phis hear from the
+    // arm.
     for successor in function.successors(join) {
         for phi in phis_of(function, successor) {
             let mut arms = phi_arms(function, phi);
@@ -433,9 +470,12 @@ fn transform_duplicate(
             Some(&copy) => copy,
             None => continue,
         };
-        let uses: Vec<Use> = function.users(result).iter().copied().filter(|one| {
-            function.parent(one.user) != Some(join) && function.parent(one.user) != Some(arm)
-        }).collect();
+        let uses: Vec<Use> = function
+            .users(result)
+            .iter()
+            .copied()
+            .filter(|one| function.parent(one.user) != Some(join) && function.parent(one.user) != Some(arm))
+            .collect();
         if uses.is_empty() {
             continue;
         }

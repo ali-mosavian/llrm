@@ -100,10 +100,7 @@ impl Combiner<'_> {
                 }
                 let base = instruction.operands[0];
                 let same_size = self.int_width(ptr_int) == self.pointer_bits(self.address_space(self.type_of(base)));
-                if same_size
-                    && self.address_space(self.type_of(base)) == space
-                    && self.uses_pointer_as_int(cast)
-                {
+                if same_size && self.address_space(self.type_of(base)) == space && self.uses_pointer_as_int(cast) {
                     let byte = self.context.types.int(8);
                     return self.replace_with_new(
                         cast,
@@ -130,17 +127,22 @@ impl Combiner<'_> {
                 Opcode::ICmp(_) | Opcode::Cast(CastOp::PtrToInt)
             )
         };
-        self.function.users(result).iter().all(|used| {
-            let user = used.user;
-            if is_int_use(user) {
-                return true;
-            }
-            if self.function.instruction(user).opcode == Opcode::Phi {
-                let phi = self.function.instruction(user).result.expect("a value");
-                return self.function.users(phi).only().is_some_and(|only| is_int_use(only.user));
-            }
-            false
-        })
+        self.function
+            .users(result)
+            .iter()
+            .all(
+                |used| {
+                    let user = used.user;
+                    if is_int_use(user) {
+                        return true;
+                    }
+                    if self.function.instruction(user).opcode == Opcode::Phi {
+                        let phi = self.function.instruction(user).result.expect("a value");
+                        return self.function.users(phi).only().is_some_and(|only| is_int_use(only.user));
+                    }
+                    false
+                },
+            )
     }
 
     /// `visitPtrToInt` (:2749).
@@ -194,7 +196,10 @@ impl Combiner<'_> {
             && int_ty == index_ty
         {
             cast.operands[0]
-        } else if matches!(base, Operand::Constant(id) if matches!(self.context.get(id).kind, llrm_mir::context::ConstantKind::Null)) {
+        } else if matches!(
+            base,
+            Operand::Constant(id) if matches!(self.context.get(id).kind, llrm_mir::context::ConstantKind::Null)
+        ) {
             self.int(index_ty, 0)
         } else {
             return None;

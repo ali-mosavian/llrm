@@ -28,9 +28,9 @@
 //! SB1, owner arm64-phi, exit with the first model that turns them on.
 //!
 //! # Example
-//! On an unbuffered machine a node released with a ready cycle after the current
-//! one goes to `Pending`; `bumpNode` and the clock move it to `Available`
-//! (the cycles are illustrative).
+//! On an unbuffered machine a node released with a ready cycle after the
+//! current one goes to `Pending`; `bumpNode` and the clock move it to
+//! `Available` (the cycles are illustrative).
 //!
 //! ```text
 //! now = 4, release node ready at cycle 6  -> Pending

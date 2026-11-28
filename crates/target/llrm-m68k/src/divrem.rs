@@ -80,7 +80,8 @@ pub fn remainders_from_quotients(function: &mut MFunction) {
                 at += 1;
                 continue;
             };
-            // The multiply reads the quotient or the copy its two-address form makes of it.
+            // The multiply reads the quotient or the copy its two-address form
+            // makes of it.
             let mut copies = vec![quotient];
             let mut found = None;
             for (offset, inst) in block.insts[at + 1..].iter().enumerate() {
@@ -93,7 +94,8 @@ pub fn remainders_from_quotients(function: &mut MFunction) {
                         let by_quotient =
                             (copies.contains(&x) && same(y, divisor)) || (copies.contains(&y) && same(x, divisor));
                         if by_quotient {
-                            // the product read as its own tied operand is the multiply's, not a reader
+                            // the product read as its own tied operand is the
+                            // multiply's, not a reader
                             let own = u32::from(x == *product) + u32::from(y == *product);
                             found = Some((*product, at + 1 + offset, own));
                             break;
@@ -121,8 +123,10 @@ pub fn remainders_from_quotients(function: &mut MFunction) {
                 at += 1;
                 continue;
             };
-            // The multiply's codes may not be read. The subtract's may: a `tst` of the remainder gives the codes the
-            // compare elimination took from it (`divsl.l` sets them from the quotient).
+            // The multiply's codes may not be read. The subtract's may: a `tst`
+            // of the remainder gives the codes the
+            // compare elimination took from it (`divsl.l` sets them from the
+            // quotient).
             let multiply_is_read = flags_read_after(&block.insts, back) != Some(0);
             let Some(read) = flags_read_after(&block.insts, subtract).filter(|_| !multiply_is_read) else {
                 at += 1;
@@ -160,8 +164,10 @@ fn drop_dead_copies(function: &mut MFunction) {
         for block in &mut function.blocks {
             let before = block.insts.len();
             block.insts.retain(|inst| {
-                !matches!((&inst.kind, &inst.operands[..]),
-                    (Kind::Copy, [Operand::Def(Reg::Virt(to)), Operand::Use(Reg::Virt(_))]) if uses[*to as usize] == 0)
+                !matches!(
+                    (&inst.kind, &inst.operands[..]),
+                    (Kind::Copy, [Operand::Def(Reg::Virt(to)), Operand::Use(Reg::Virt(_))]) if uses[*to as usize] == 0
+                )
             });
             removed |= block.insts.len() != before;
         }

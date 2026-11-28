@@ -731,7 +731,8 @@ impl<'a> Rewrite<'a> {
         if !has_non_feasible_edges {
             return false;
         }
-        // SCCP can only determine non-feasible edges for br, switch and indirectbr.
+        // SCCP can only determine non-feasible edges for br, switch and
+        // indirectbr.
         debug_assert!(
             matches!(function.instruction(term).opcode, Opcode::Br | Opcode::Switch | Opcode::IndirectBr),
             "Terminator must be a br, switch or indirectbr"

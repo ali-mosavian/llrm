@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/genericsched.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/genericsched.rs); edit the header, not this file.
-<!-- src: crates/codegen/llrm-codegen/src/backend/genericsched.rs sha256:8c579bd4e611a5bc9ba3123b3304d30d4b72c50c7146c74e7634608103e2d7a9 -->
+<!-- src: crates/codegen/llrm-codegen/src/backend/genericsched.rs sha256:2cb3d64e38987f0d14820e738c7d06cef6a954441d1e696504b11dadb173bb9d -->
 
 # genericsched
 
@@ -26,7 +26,9 @@ of a bidirectional region): only the heuristics that compare across zones
 apply.
 
 ## Reasons (pin d1106deb71cc)
-The enum is [`CandReason`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/CodeGen/MachineScheduler.h#L1099); each reason is set at:
+The enum is
+[`CandReason`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/CodeGen/MachineScheduler.h#L1099);
+each reason is set at:
 
 | reason | set at |
 |---|---|

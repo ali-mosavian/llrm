@@ -1,9 +1,10 @@
-//! x86-64: the allocator's numbering has the instructions of the pin's. The pin brackets every call
-//! with `ADJCALLSTACKDOWN64`/`UP64`, a zero-byte pair too, and removes them after allocation; ours
-//! emitted the pair only for a call that passes stack bytes, so a function with two calls was
-//! numbered 11 where the pin has 14 (15 with the argument-definition entry ours carries): every
-//! live range was 0.82x as long, and its spill weight, queue priority and local-split estimate
-//! with it. Needs `LLRM_LLC`.
+//! x86-64: the allocator's numbering has the instructions of the pin's. The pin
+//! brackets every call with `ADJCALLSTACKDOWN64`/`UP64`, a zero-byte pair too,
+//! and removes them after allocation; ours emitted the pair only for a call
+//! that passes stack bytes, so a function with two calls was numbered 11 where
+//! the pin has 14 (15 with the argument-definition entry ours carries): every
+//! live range was 0.82x as long, and its spill weight, queue priority and
+//! local-split estimate with it. Needs `LLRM_LLC`.
 
 use std::path::Path;
 use std::process::Command;

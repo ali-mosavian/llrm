@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/lftr.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/lftr.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/lftr.rs sha256:8ebfba5984e4441209c0729cffb115496052f08016cb99af9a777d859c070236 -->
+<!-- src: crates/opt/llrm-transforms/src/lftr.rs sha256:107f2b138b776bb52acc81e288d0e8d43a459fb3706a3292cac8d8efdcbc72d0 -->
 
 # lftr
 
@@ -17,9 +17,9 @@ conditional branch and belongs to the loop itself:
   (`isHighCostExpansion`, budget 4) and is safe to expand.
 - `FindLoopCounter` picks a header phi that is a counter (a unit stride, or
   a constant one that cannot wrap where the target sets
-  `Tuning::lftr_any_stride`: DEVIATE LFTR1) at least as wide as the
-  count, with a concrete start, preferring one that counts from zero or is
-  wider, and not one that only this test keeps alive.
+  `Tuning::lftr_any_stride`: DEVIATE LFTR1) at least as wide as the count,
+  with a concrete start, preferring one that counts from zero or is wider,
+  and not one that only this test keeps alive.
 - `genLoopLimit` writes the counter's value after the count (a post-inc
   value where the test is in the latch) before the branch, and the branch
   tests `counter != limit` (`==` where the loop is left on true). A counter
