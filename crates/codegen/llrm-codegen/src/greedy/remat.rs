@@ -111,6 +111,12 @@ pub fn is_trivially_re_materializable(
         (Operation::FloatLoad, Some("fld"), [Loc::Mem(_)]) => {
             invariant && def.uses.is_empty() && def.spread.is_empty() && !def.volatile
         }
+        // `V_SET0`, `FsFLD0SS`, `FsFLD0SD` (X86InstrSSE.td#L113, #L134):
+        // `isReMaterializable`; the emitter writes them `xorps r, r`, which
+        // reads nothing.
+        (Operation::Binary, Some("xorps"), [Loc::Held(a), Loc::Held(b)]) => {
+            def.uses.is_empty() && a.value == into.value && b.value == into.value
+        }
         // `LD_Fp064` / `LD_Fp164`
         // (X86InstrFPStack.td#L526): `isReMaterializable`.
         (Operation::FloatLoad, Some("fld1" | "fldz"), []) => def.uses.is_empty() && !def.volatile,
