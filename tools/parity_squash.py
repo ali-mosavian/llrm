@@ -909,21 +909,23 @@ def squash(number: str, info: dict, body: str, run=subprocess.run, update=update
             print(f"#{number}: REFUSED: not merged: {why}")
         return False
     print(f"#{number}: vouched: {vouch_line(number, info.get('vouchedHead') or info['headRefOid'])}")
+    if body:
+        print(f"#{number}: {body}")  # the squash body stays empty (rule 11-04): the note is the log's
     stage(f"squash #{number}")
-    done = run(["gh", "pr", "merge", number, "--squash", "--match-head-commit", info["headRefOid"], "--subject", squash_subject(number, info["title"]), "--body", body], capture_output=True, text=True, errors="replace")
+    done = run(["gh", "pr", "merge", number, "--squash", "--match-head-commit", info["headRefOid"], "--subject", squash_subject(number, info["title"]), "--body", ""], capture_output=True, text=True, errors="replace")
     if done.returncode and "out of date" in f"{done.stderr}{done.stdout}".lower() and info.get("headRefName"):
         # Another landing moved release/next between the batch and this squash: the owner did nothing. Fresh parity is merged into the head once (a merge commit, no
         # force-push), only when it is conflict-free, and the squash retried once; a second refusal, or a conflict, is the owner's.
         if fresh := merge(info["headRefOid"], info["headRefName"]):
             print(f"#{number}: head out of date: merged parity {fresh[:9]}, retried")
             time.sleep(settle)  # GitHub takes the pushed head as the PR's before a --match-head-commit squash accepts it
-            done = run(["gh", "pr", "merge", number, "--squash", "--match-head-commit", fresh, "--subject", squash_subject(number, info["title"]), "--body", body], capture_output=True, text=True, errors="replace")
+            done = run(["gh", "pr", "merge", number, "--squash", "--match-head-commit", fresh, "--subject", squash_subject(number, info["title"]), "--body", ""], capture_output=True, text=True, errors="replace")
         else:
             print(f"#{number}: head out of date and {BRANCH} does not merge into it cleanly: the owner merges fresh {BRANCH}")
     if done.returncode and any(one in f"{done.stderr}{done.stdout}" for one in GITHUB_TRANSIENT):
         print(f"#{number}: GitHub failed on its side, retrying once after {retry_wait:g} s")
         time.sleep(retry_wait)
-        done = run(["gh", "pr", "merge", number, "--squash", "--match-head-commit", info["headRefOid"], "--subject", squash_subject(number, info["title"]), "--body", body], capture_output=True, text=True, errors="replace")
+        done = run(["gh", "pr", "merge", number, "--squash", "--match-head-commit", info["headRefOid"], "--subject", squash_subject(number, info["title"]), "--body", ""], capture_output=True, text=True, errors="replace")
     if done.returncode and "Head branch was modified" in f"{done.stderr}{done.stdout}":
         HEAD_MOVED.add(number)
         print(f"#{number}: LEFT OUT (head moved): pushed while the batch ran; it re-enters the queue with its new head, not refused")
@@ -1655,6 +1657,20 @@ def _base_red(by_package: dict[str, set[str]]) -> set[tuple[str, str]]:
 def _failing_on_head(by_package: dict[str, set[str]]) -> set[str]:
     clean_checkout(BASE)
     return {f"unit {package}::{test}" for package, tests in by_package.items() for test in failing_on_checkout(package, tests)}
+
+
+def expected_tree(start: str, heads: list[str], cwd: Path = ROOT) -> tuple[str, str]:
+    """(tree, ""): commit `start` with `heads` merged in order, as the squashes of those heads make it; ("", why) when one does not merge. Re-derives what the
+    batch should land when a head changed after its test (the runner's fmt or docs commit) or a member did not land: no set lands uncompared."""
+    identity = ["-c", "user.name=parity_squash", "-c", "user.email=parity_squash@localhost"]
+    commit = start
+    for head in heads:
+        merged = subprocess.run(["git", "merge-tree", "--write-tree", commit, head], cwd=cwd, capture_output=True, text=True, errors="replace")
+        if merged.returncode:
+            return "", f"{head[:9]} does not merge onto {commit[:9]}"
+        tree = merged.stdout.split("\n", 1)[0].strip()
+        commit = git(*identity, "commit-tree", tree, "-p", commit, "-p", head, "-m", "expected", cwd=cwd).strip()
+    return git("rev-parse", f"{commit}^{{tree}}", cwd=cwd).strip(), ""
 
 
 def tree_mismatch(tested_tree: str, ref: str = BASE, cwd: Path = ROOT) -> str:
@@ -2563,26 +2579,36 @@ def merge_batch(numbers: list[str], known: dict[str, str] | None = None) -> int:
     with land_lock():
         if git("status", "--porcelain", "--untracked-files=no").strip():
             raise SystemExit("this checkout has uncommitted changes")
-        tested: dict[tuple[str, ...], tuple[str, dict[str, str]]] = {}
+        tested: dict[tuple[str, ...], tuple[str, str, str, dict[str, str]]] = {}
 
         def tested_passes(group: list[str]) -> bool:
             ok = passes(group)
             if ok:
-                tested[tuple(group)] = (git("rev-parse", "HEAD^{tree}").strip(), {n: infos[n]["headRefOid"] for n in group if n not in left_out})
+                tested[tuple(group)] = (
+                    git("rev-parse", "HEAD^{tree}").strip(),
+                    git("rev-parse", "HEAD").strip(),
+                    git("rev-parse", BASE).strip(),
+                    {n: infos[n]["headRefOid"] for n in group if n not in left_out},
+                )
             return ok
 
         def compare_tree(group: list[str]) -> None:
-            tree, heads = tested.get(tuple(group), ("", {}))
+            tree, commit, base, heads = tested.get(tuple(group), ("", "", "", {}))
             if not heads:
                 return
-            if unlanded := [n for n in heads if n not in landed]:
-                print(f"tree not compared: {' '.join('#' + n for n in unlanded)} did not land")
-            elif changed := [n for n, head in heads.items() if infos[n]["headRefOid"] != head]:
-                print(f"tree not compared: {' '.join('#' + n for n in changed)} formatted or synced after the test")
+            unlanded = [n for n in heads if n not in landed]
+            changed = [n for n, head in heads.items() if infos[n]["headRefOid"] != head and n in landed]
+            if unlanded:  # the set that landed was not the set tested: what its squashes make on the tested base
+                tree, why = expected_tree(base, [infos[n]["headRefOid"] for n in heads if n in landed])
+            elif changed:  # the runner's own fmt or docs commits on top of the tested tree
+                tree, why = expected_tree(commit, [infos[n]["headRefOid"] for n in changed])
             else:
-                git("fetch", "-q", "origin", BRANCH)
-                if why := tree_mismatch(tree):
-                    raise TreeMismatch(why)
+                why = ""
+            if why:
+                raise TreeMismatch(f"the landed tree cannot be re-derived: {why}")
+            git("fetch", "-q", "origin", BRANCH)
+            if why := tree_mismatch(tree):
+                raise TreeMismatch(why)
 
         try:
             batch(list(numbers), tested_passes, land, refuse, offending if FAST else None, compare_tree)
@@ -2897,7 +2923,9 @@ def _merge(number: str, known: dict[str, str] | None = None) -> int:
         print(f"REFUSED: #{number} not merged: {why}")
         return 1
     print(f"#{number}: vouched: {vouch_line(number, info['headRefOid'])}")
-    done = gh_run(["gh", "pr", "merge", number, "--squash", "--match-head-commit", info["headRefOid"], "--subject", squash_subject(number, info["title"]), "--body", known_red_line(known)])
+    if note := known_red_line(known):
+        print(f"#{number}: {note}")
+    done = gh_run(["gh", "pr", "merge", number, "--squash", "--match-head-commit", info["headRefOid"], "--subject", squash_subject(number, info["title"]), "--body", ""])
     if done.returncode:
         return done.returncode
     git("fetch", "-q", "origin", BRANCH)
