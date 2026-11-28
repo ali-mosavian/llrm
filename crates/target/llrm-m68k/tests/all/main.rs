@@ -279,6 +279,7 @@ mod regimm;
 mod relation_threading;
 mod relax_classes;
 mod relax_trial;
+mod release_store_order;
 mod rem32;
 mod results;
 mod return_dup;

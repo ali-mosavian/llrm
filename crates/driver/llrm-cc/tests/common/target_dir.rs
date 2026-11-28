@@ -16,3 +16,10 @@ pub fn from(
 ) -> PathBuf {
     set.map(PathBuf::from).unwrap_or_else(|| root.join("target"))
 }
+
+/// The llc to run: `LLRM_LLC` when it is set, else the release `llrm-llc` the
+/// gate builds. A test that panicked without `LLRM_LLC` failed every batch.
+#[allow(dead_code, reason = "each test file includes this module; not all of them run llc")]
+pub fn llc(root: &Path) -> OsString {
+    std::env::var_os("LLRM_LLC").unwrap_or_else(|| of(root).join("release/llrm-llc").into())
+}
