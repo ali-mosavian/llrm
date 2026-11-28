@@ -103,6 +103,22 @@ def test_a_dist_is_refused_unless_every_compiler_is_the_sha_clean(tmp_path):
         stamp.require_clean(dist(tmp_path, "empty"), "aaaa1111")
 
 
+def test_a_backend_without_a_stamp_counts_only_as_part_of_llrm_llcs_build(tmp_path, capsys):
+    """A tree from before a backend printed a stamp (llrm-6502-llc) was refused outright, so no pre-stamp base could be measured;
+    let through on its own, an old unstamped backend copied into a fresh dist would stand for the sha. It is the sha only when
+    written in llrm-llc's build run, and every figure names it."""
+    fresh = dist(tmp_path, "fresh", llrm_llc="aaaa1111")
+    stub(fresh, "llrm-6502-llc", "")
+    assert stamp.require_clean(fresh, "aaaa1111") == "aaaa1111"
+    assert "unstamped (pre-stamp tree): llrm-6502-llc" in capsys.readouterr().err
+    copied = dist(tmp_path, "copied", llrm_llc="aaaa1111")
+    old = stub(copied, "llrm-6502-llc", "")
+    day_before = (copied / "llrm-llc").stat().st_mtime - 86400
+    os.utime(old, (day_before, day_before))
+    with pytest.raises(SystemExit, match="llrm-6502-llc prints no stamp and is not from llrm-llc's build"):
+        stamp.require_clean(copied, "aaaa1111")
+
+
 def test_identity_refuses_a_dist_that_is_not_the_named_sha(tmp_path):
     """The identity gate names the commits it compares (LLRM_EXPECT_BASE_SHA, LLRM_EXPECT_SHA) and refuses a dirty build before compiling."""
     base = dist(tmp_path, "base", llrm_llc="aaaa1111")
