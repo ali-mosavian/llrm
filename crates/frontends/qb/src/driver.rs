@@ -84,7 +84,8 @@ pub struct Frontend {
     pub error_lines: bool,
     /// `-g` in BC's CodeView layout, not standard CodeView 4: `--bc-codeview`.
     pub bc_codeview: bool,
-    /// The module zeroes its own `_BSS`, as the runtime it links does not (the Microsoft ones').
+    /// The module zeroes its own `_BSS`, as the runtime it links does not (the
+    /// Microsoft ones').
     pub zero_bss: bool,
     /// Built for the run-time module BRUN45, as BC without /O:
     /// `--run-time-module`.

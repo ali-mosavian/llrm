@@ -999,9 +999,10 @@ b0:
     assert!(after.contains("shl nuw nsw i32 %1, 8"), "{after}");
 }
 
-/// DEVIATE 6 (gcc `match.pd`): `(x + 262144) >> 18` with the add `nuw` is `(x >> 18) + 1`, through a tree of one-use
-/// `add nuw`s too (nbody_fixed -Os: `add`, `lsr`, `add` where gcc has `asr`, `add`; the sum `dx*dx + dy*dy + 512*512`
-/// has the constant under the first add).
+/// DEVIATE 6 (gcc `match.pd`): `(x + 262144) >> 18` with the add `nuw` is `(x
+/// >> 18) + 1`, through a tree of one-use `add nuw`s too (nbody_fixed -Os:
+/// `add`, `lsr`, `add` where gcc has `asr`, `add`; the sum `dx*dx + dy*dy +
+/// 512*512` has the constant under the first add).
 #[test]
 fn a_shifted_constant_leaves_an_nuw_add() {
     check(
@@ -1018,8 +1019,8 @@ fn a_shifted_constant_leaves_an_nuw_add() {
     );
 }
 
-/// The wrap case: without `nuw` `(200 + 64) >> 6` is 0 and `(200 >> 6) + 1` is 4. The add stays, and the
-/// interpreter agrees over every input.
+/// The wrap case: without `nuw` `(200 + 64) >> 6` is 0 and `(200 >> 6) + 1` is
+/// 4. The add stays, and the interpreter agrees over every input.
 #[test]
 fn a_shifted_constant_stays_where_the_add_can_wrap() {
     let text = "define i8 @f(i8 %x) {\nb0:\n  %a = add i8 %x, 64\n  %r = lshr i8 %a, 6\n  ret i8 %r\n}\n";
@@ -1030,15 +1031,17 @@ fn a_shifted_constant_stays_where_the_add_can_wrap() {
     assert_eq!(combined(text), text);
 }
 
-/// A constant that is not a multiple of `2^s` has bits that carry into the result: it stays.
+/// A constant that is not a multiple of `2^s` has bits that carry into the
+/// result: it stays.
 #[test]
 fn a_shifted_constant_stays_where_it_is_not_a_multiple() {
     let text = "define i32 @f(i32 %x) {\nb0:\n  %a = add nuw i32 %x, 65\n  %r = lshr i32 %a, 3\n  ret i32 %r\n}\n";
     assert_eq!(combined(text), text);
 }
 
-/// `ashr` needs `nsw` and the direct add: `(x + 64) >>s 3` is `(x >>s 3) + 8`, negative `x` included; a tree is
-/// left (a regrouped partial sum may leave the range the original did not).
+/// `ashr` needs `nsw` and the direct add: `(x + 64) >>s 3` is `(x >>s 3) + 8`,
+/// negative `x` included; a tree is left (a regrouped partial sum may leave the
+/// range the original did not).
 #[test]
 fn an_arithmetic_shifted_constant_leaves_an_nsw_add() {
     check(

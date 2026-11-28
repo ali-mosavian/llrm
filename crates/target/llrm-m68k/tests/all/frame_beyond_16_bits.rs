@@ -1,6 +1,7 @@
-//! A frame of 65 KB put the saved registers' `movem` at a displacement past 16 bits and the
-//! compiler stopped: `MOVM32pm: operand 0 = 65308 does not fit its 16-bit field` (QuickrBasic
-//! `indent.c`, refused at -O2/-Os on every 68020 cell).
+//! A frame of 65 KB put the saved registers' `movem` at a displacement past 16
+//! bits and the compiler stopped: `MOVM32pm: operand 0 = 65308 does not fit its
+//! 16-bit field` (QuickrBasic `indent.c`, refused at -O2/-Os on every 68020
+//! cell).
 
 use llrm_m68k::dagisel::hooks::Cpu;
 use llrm_m68k::driver::{Level, assembly};

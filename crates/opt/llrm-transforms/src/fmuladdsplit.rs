@@ -30,8 +30,8 @@
 //! product is split here.
 //!
 //! # Example
-//! A `llvm.fmuladd` in a loop whose factors are defined outside it and whose addend
-//! is not becomes `fmul` and `fadd`, so LICM hoists the multiply.
+//! A `llvm.fmuladd` in a loop whose factors are defined outside it and whose
+//! addend is not becomes `fmul` and `fadd`, so LICM hoists the multiply.
 //!
 //! ```text
 //! loop:  %p = call fmuladd(%r, 6.7e7, %x)        loop:  %m = fmul %r, 6.7e7

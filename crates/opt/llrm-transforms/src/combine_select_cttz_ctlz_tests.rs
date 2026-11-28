@@ -55,7 +55,8 @@ fn a_zero_guarded_count_is_the_intrinsic_with_zero_defined() {
         );
         assert!(!out.contains("select"), "{name} {cmp}: {out}");
         // The count is unguarded now, so its zero case must be defined: with
-        // `i1 true` it returned garbage for 0 (x86-64 `lead0(0)` was 29, not 32).
+        // `i1 true` it returned garbage for 0 (x86-64 `lead0(0)` was 29, not
+        // 32).
         assert!(out.contains("i1 false") && !out.contains("i1 true"), "{name} {cmp}: {out}");
     }
 }

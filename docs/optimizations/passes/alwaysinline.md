@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/alwaysinline.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/alwaysinline.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/alwaysinline.rs sha256:c0d4a740555ebe553891378f6c4b5586a74173bfef1b351bac7520bfe75e12db -->
+<!-- src: crates/opt/llrm-transforms/src/alwaysinline.rs sha256:f14b7ddc108eec2bcbe8bfe8dc79f9e841fc6e3235d1e18c67c06b8da7d6aa25 -->
 
 # alwaysinline
 
@@ -26,8 +26,8 @@ Once per compile, before `Walk`.
 `pipeline`.
 
 ## Example
-A call of an `alwaysinline` function is replaced by a copy of its body, and the
-function is dropped once nothing calls or addresses it.
+A call of an `alwaysinline` function is replaced by a copy of its body, and
+the function is dropped once nothing calls or addresses it.
 
 ```text
 define internal i32 @f(i32 %x) alwaysinline { %r = add i32 %x, 1 ; ret i32 %r }

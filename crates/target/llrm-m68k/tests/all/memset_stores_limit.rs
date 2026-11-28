@@ -1,5 +1,6 @@
-//! The pin's M68k lets a constant memset be 8 stores (4 at -Os), as memcpy and memmove: the shared
-//! table was x86's, 16 (8), so a 64-byte clear was 16 inline `move.l` where the pin calls `memset`.
+//! The pin's M68k lets a constant memset be 8 stores (4 at -Os), as memcpy and
+//! memmove: the shared table was x86's, 16 (8), so a 64-byte clear was 16
+//! inline `move.l` where the pin calls `memset`.
 
 use llrm_m68k::driver::{Level, assembly, cpu_of};
 

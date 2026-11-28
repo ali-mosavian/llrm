@@ -13,7 +13,8 @@ define i32 @g(i32 %x) {
   ret i32 %r
 }";
 
-/// At speed the zero is `pea 0:w`: 6 clk faster than `clr.l -(%sp)` on the 68000.
+/// At speed the zero is `pea 0:w`: 6 clk faster than `clr.l -(%sp)` on the
+/// 68000.
 #[test]
 fn a_zero_argument_is_pushed_as_pea_at_o2() {
     for cpu in ["68000", "68020", "68040", "68060"] {

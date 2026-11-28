@@ -883,7 +883,11 @@ mod tests {
         }
         let index = (0..blocks.len()).map(|place| (place as i64, place)).collect();
         let edges = size_edges(&blocks, &index, None);
-        assert!(edges.iter().all(|edge| edge.src != 0), "the dispatch has {} jumps", edges.iter().filter(|edge| edge.src == 0).count());
+        assert!(
+            edges.iter().all(|edge| edge.src != 0),
+            "the dispatch has {} jumps",
+            edges.iter().filter(|edge| edge.src == 0).count()
+        );
         assert_eq!(edges.len(), 400, "each case still jumps back to the dispatch");
     }
 

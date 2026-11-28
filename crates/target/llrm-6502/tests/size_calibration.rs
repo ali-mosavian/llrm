@@ -33,12 +33,15 @@ fn audits(cpu: Cpu) -> Vec<(String, i64, i64)> {
         .iter()
         .map(|path| {
             let name = path.file_stem().unwrap().to_str().unwrap().to_string();
-            // The fixtures carry no datalayout: the target's own, whatever it is this month.
+            // The fixtures carry no datalayout: the target's own, whatever it
+            // is this month.
             let text = std::fs::read_to_string(path)
                 .unwrap()
                 .lines()
                 .filter(|line| !line.starts_with("target datalayout"))
-                .fold(format!("target datalayout = \"{}\"\n", Mos.layout().datalayout), |text, line| text + line + "\n");
+                .fold(format!("target datalayout = \"{}\"\n", Mos.layout().datalayout), |text, line| {
+                    text + line + "\n"
+                });
             let mut request = Request::new(Level::Os);
             request.cpu = cpu;
             let rows = driver::size_audit(&text, &request).unwrap_or_else(|why| panic!("{name}: {why}"));

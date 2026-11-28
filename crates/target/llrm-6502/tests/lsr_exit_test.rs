@@ -72,7 +72,11 @@ fn arithmetic_on_some_trips_does_not_get_a_counter() {
         std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../tests/run/c/switch_jump_table.c"),
     )
     .unwrap();
-    let text = assembly_of("jump_table", &source, &["-fsigned-char", "-fwhole-program", "-fno-unroll-loops", "-fno-peel-loops"]);
+    let text = assembly_of(
+        "jump_table",
+        &source,
+        &["-fsigned-char", "-fwhole-program", "-fno-unroll-loops", "-fno-peel-loops"],
+    );
     let pushes = text.matches("\n  pha").count();
     assert!(pushes <= 5, "{pushes} cells are saved and the loop's counters live in them:\n{text}");
 }

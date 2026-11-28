@@ -790,10 +790,11 @@ fn dropped_unrun(text: &str) -> String {
     after[after.find("@f(").unwrap()..].to_owned()
 }
 
-/// MemorySSA gave a `noalias.scope.decl` a MemoryDef (the pin's `createNewAccess`
-/// gives it none), so the load of other bytes before it read as a clobber and the
-/// byte store a later `i64` store covers survived: bitfield_long_long wasm32 +12 B
-/// (`i32.const 12; i32.store8` beside the covering `i64.store`).
+/// MemorySSA gave a `noalias.scope.decl` a MemoryDef (the pin's
+/// `createNewAccess` gives it none), so the load of other bytes before it read
+/// as a clobber and the byte store a later `i64` store covers survived:
+/// bitfield_long_long wasm32 +12 B (`i32.const 12; i32.store8` beside the
+/// covering `i64.store`).
 #[test]
 fn a_noalias_scope_declaration_does_not_keep_a_covered_store() {
     let text = dropped_unrun(
@@ -822,10 +823,12 @@ b0:
     assert!(!text.contains("store i8 12"), "{text}");
 }
 
-/// A memset cut at its start kept `align 16` on its moved destination: `memset(@a + 2, 0, 126) align 16` was stored
-/// with `movaps` at an address 2 bytes off a 16-byte boundary, a segfault (pattern_fill -O3 once the loop around it
-/// unrolled). The pin keeps the alignment true: a cut of less than one alignment is not made, a longer one is made as
-/// far as a multiple of it (`tryToShorten`).
+/// A memset cut at its start kept `align 16` on its moved destination:
+/// `memset(@a + 2, 0, 126) align 16` was stored with `movaps` at an address 2
+/// bytes off a 16-byte boundary, a segfault (pattern_fill -O3 once the loop
+/// around it unrolled). The pin keeps the alignment true: a cut of less than
+/// one alignment is not made, a longer one is made as far as a multiple of it
+/// (`tryToShorten`).
 #[test]
 fn a_memset_is_cut_only_where_its_alignment_stays_true() {
     let two_bytes = "  store i16 1, ptr @a\n";

@@ -9,12 +9,12 @@
 
 use std::process::Command;
 
-use crate::support;
-
 use llrm_m68k::compile::{Item, Options, items_with};
 use llrm_m68k::dagisel::hooks::Cpu;
 use llrm_m68k::encode::encode;
 use llrm_m68k::object::{assemble, executable, start, write_executable};
+
+use crate::support;
 
 const DATALAYOUT: &str = "E-m:e-p:32:16:32-i8:8:8-i16:16:16-i32:16:32-n8:16:32-a:0:16-S16";
 

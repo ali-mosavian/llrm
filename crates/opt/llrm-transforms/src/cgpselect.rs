@@ -38,8 +38,8 @@
 //! `optimizeSelectInst` guards with `freeze`.
 //!
 //! # Example
-//! A `fptosi` of a select with a constant arm becomes a branch, the conversion made
-//! on the other arm only.
+//! A `fptosi` of a select with a constant arm becomes a branch, the conversion
+//! made on the other arm only.
 //!
 //! ```text
 //!  %s = select c, -3.0, %x            br c, %join, %other

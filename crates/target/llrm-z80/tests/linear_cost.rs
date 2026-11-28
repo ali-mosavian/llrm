@@ -23,10 +23,12 @@ fn within(
     assert!(took < budget, "{what} took {took:?}, over {budget:?}");
 }
 
-/// `sink_closed_groups` -O2 on `select_of_constants`'s `main` (6132 instructions in one block): 95% of a
-/// compile spent in the fixpoint that drops the members the group cannot keep, one round for each member of a
-/// dependent chain and a scan of the block for each check. A chain of 1500 whose last link is also read by the
-/// branch's other successor drops one member a round: 1500 rounds, 10 s.
+/// `sink_closed_groups` -O2 on `select_of_constants`'s `main` (6132
+/// instructions in one block): 95% of a compile spent in the fixpoint that
+/// drops the members the group cannot keep, one round for each member of a
+/// dependent chain and a scan of the block for each check. A chain of 1500
+/// whose last link is also read by the branch's other successor drops one
+/// member a round: 1500 rounds, 10 s.
 #[test]
 fn a_long_dependent_chain_leaves_the_sink_in_linear_time() {
     let n = 1500;
@@ -50,10 +52,11 @@ fn a_long_dependent_chain_leaves_the_sink_in_linear_time() {
     });
 }
 
-/// The same function with 400 call sites that save two words and read them back in the order they were saved:
-/// each run's reorder was tried on its own with a report of the whole function, 400 of them, and none alone makes
-/// the slot a push (the other 399 runs still cross). 3 s in release, over 10 s in debug; one report each way
-/// nests all of them.
+/// The same function with 400 call sites that save two words and read them back
+/// in the order they were saved: each run's reorder was tried on its own with a
+/// report of the whole function, 400 of them, and none alone makes the slot a
+/// push (the other 399 runs still cross). 3 s in release, over 10 s in debug;
+/// one report each way nests all of them.
 #[test]
 fn many_crossed_reload_runs_are_nested_with_one_report() {
     let save = |slot, from| Inst::new(Kind::Op("SPILL16"), vec![Operand::Frame(slot), Operand::Use(Reg::Phys(from))]);

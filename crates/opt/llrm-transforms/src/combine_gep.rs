@@ -71,7 +71,8 @@ pub(crate) struct GepFlags {
     pub nuw: bool,
 }
 
-/// LLVM's `GEPOperator`: a `getelementptr` instruction or a constant expression.
+/// LLVM's `GEPOperator`: a `getelementptr` instruction or a constant
+/// expression.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub(crate) enum GepRef {
     Inst(InstId),

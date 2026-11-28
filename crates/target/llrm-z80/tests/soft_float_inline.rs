@@ -1,6 +1,7 @@
-//! A soft-float operation is a call to the runtime, and the inliner prices it as one. x87rotate -O2: `rot` (external,
-//! ten `fmuladd` in its loop and epilogue, each a `__mulsf3` and an `__addsf3`) priced 21 units, was inlined into its
-//! one caller and the body stood twice: 3764 B against SDCC's 3500.
+//! A soft-float operation is a call to the runtime, and the inliner prices it
+//! as one. x87rotate -O2: `rot` (external, ten `fmuladd` in its loop and
+//! epilogue, each a `__mulsf3` and an `__addsf3`) priced 21 units, was inlined
+//! into its one caller and the body stood twice: 3764 B against SDCC's 3500.
 
 use llrm_z80::compile::text;
 use llrm_z80::driver::{Level, Request};

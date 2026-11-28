@@ -1,8 +1,8 @@
-//! x86-32 -Os: the size trials kept the smaller shape whatever it cost in clocks.
-//! `x_switch_ranges` refused its lookup table for 35 B at +11% clk (127,846
-//! against 115,143). The cap keeps the pin's shape where the work the smaller one
-//! adds is over `os_trial_clock_cap_percent`. The copy-loop trial is exempt (the
-//! words copied are not known). Needs `LLRM_LLC`.
+//! x86-32 -Os: the size trials kept the smaller shape whatever it cost in
+//! clocks. `x_switch_ranges` refused its lookup table for 35 B at +11% clk
+//! (127,846 against 115,143). The cap keeps the pin's shape where the work the
+//! smaller one adds is over `os_trial_clock_cap_percent`. The copy-loop trial
+//! is exempt (the words copied are not known). Needs `LLRM_LLC`.
 
 use std::path::Path;
 use std::process::Command;

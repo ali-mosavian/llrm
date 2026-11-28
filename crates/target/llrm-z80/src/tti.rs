@@ -178,9 +178,9 @@ pub const SPEED_MILLICLOCKS_PER_BYTE: i64 = 3000;
 impl Tti for Z80Tti {
     /// DEVIATE COMMON-INSTS-O1 (owner wasm-3, exit 2026-12-12, row
     /// COMMON-INSTS-O1): the -O2 function pipeline's hoisting and sinking
-    /// SimplifyCFG (L832) also runs at -O1, as before the pin's plain one (L621)
-    /// was mirrored; the flip is not measured here (computed_goto -O1 +369 B,
-    /// word_compare_branches +265 B on 6502 without it).
+    /// SimplifyCFG (L832) also runs at -O1, as before the pin's plain one
+    /// (L621) was mirrored; the flip is not measured here (computed_goto
+    /// -O1 +369 B, word_compare_branches +265 B on 6502 without it).
     fn common_insts_at_o1(&self) -> bool {
         true
     }

@@ -18,8 +18,10 @@ pub fn drop_jumps_to_next(functions: &mut [(String, Vec<Item>)]) {
         let next = after[0].0.as_str();
         let items = &mut before[at - 1].1;
         let Some(last) = items.iter().rposition(|item| !matches!(item, Item::Loc(_))) else { continue };
-        let jumps = matches!(&items[last], Item::Inst(inst)
-            if inst.opcode.starts_with("BRA") && matches!(&inst.operands[..], [Operand::Symbol(target, 0)] if target == next));
+        let jumps = matches!(
+            &items[last],
+            Item::Inst(inst) if inst.opcode.starts_with("BRA") && matches!(&inst.operands[..], [Operand::Symbol(target, 0)] if target == next)
+        );
         if jumps {
             items.truncate(last);
         }

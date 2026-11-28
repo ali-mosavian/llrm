@@ -511,7 +511,10 @@ fn bytes_at_o2(ir: &str) -> u32 {
     bytes_at(ir, Level::O2)
 }
 
-fn bytes_at(ir: &str, level: Level) -> u32 {
+fn bytes_at(
+    ir: &str,
+    level: Level,
+) -> u32 {
     let request = Request::new(level);
     let text = assembly(&module(ir), &request).unwrap();
     llrm_6502::timing::estimate(request.cpu, &text).unwrap().bytes
@@ -524,7 +527,8 @@ fn bytes_at(ir: &str, level: Level) -> u32 {
 /// is checked to see the table when it is there.
 #[test]
 fn crc16_is_the_small_loop_and_the_bound_sees_the_table() {
-    // -Os: the 8-trip bit loop is unrolled at -O2 (170 B) where the clocks repay it; bytes come first here
+    // -Os: the 8-trip bit loop is unrolled at -O2 (170 B) where the clocks
+    // repay it; bytes come first here
     let looped = bytes_at(
         r#"define i16 @crc16(ptr %p, i8 %n) {
   %crc = alloca i16
@@ -1352,11 +1356,12 @@ fn a_float_global_is_emitted_as_its_bits() {
     );
 }
 
-/// (A compare is `__lesf2`, the core `lt`, `le`, `eq` and `ne` share: `with_soft_compare_classes`.)
-/// A float add, a multiply, an int-to-float and a compare are calls of the
-/// softfloat routines (`SoftenFloatRes_Binary`, `_XINT_TO_FP`, `softenSetCC`):
-/// each stopped at "the target names no routine" or, for the compare, at a
-/// `CALL` the selector cannot take (the call was built for x86).
+/// (A compare is `__lesf2`, the core `lt`, `le`, `eq` and `ne` share:
+/// `with_soft_compare_classes`.) A float add, a multiply, an int-to-float and a
+/// compare are calls of the softfloat routines (`SoftenFloatRes_Binary`,
+/// `_XINT_TO_FP`, `softenSetCC`): each stopped at "the target names no routine"
+/// or, for the compare, at a `CALL` the selector cannot take (the call was
+/// built for x86).
 #[test]
 fn a_float_operation_is_a_call_of_its_softfloat_routine() {
     let request = Request::new(Level::O2);
@@ -2523,8 +2528,9 @@ fn a_callee_emptied_by_a_fold_in_its_caller_is_inlined_by_the_second_walk() {
     request.passes.push("-fno-second-inline".to_owned());
     let once = assembly(ir, &request).unwrap();
     let twice = assembly(ir, &Request::new(Level::Os)).unwrap();
-    // -Os sinks common code (`sink_common_at_size`): `bar` is smaller before the
-    // fold, and the first walk may already take it; the second walk never leaves it
+    // -Os sinks common code (`sink_common_at_size`): `bar` is smaller before
+    // the fold, and the first walk may already take it; the second walk
+    // never leaves it
     assert!(!twice.contains("jsr bar"), "the callee is still called:\n{twice}");
     let size = |text: &str| text.lines().filter(|line| line.starts_with("  ")).count();
     assert!(size(&twice) <= size(&once), "{} instructions against {}", size(&twice), size(&once));
@@ -2757,8 +2763,8 @@ fn indirect_call_return_labels_are_unique_across_functions() {
     assert_ne!(labels[0], labels[1], "{text}");
 }
 
-/// A 32-bit product of the counter is not called per trip at speed. #7343 meant a
-/// running sum (LSR on the addrec `{0,+,n}`); measured on release/next
+/// A 32-bit product of the counter is not called per trip at speed. #7343 meant
+/// a running sum (LSR on the addrec `{0,+,n}`); measured on release/next
 /// 03aa3b55d3, a loop that keeps the products still calls `__mulsi3_fast` per
 /// trip, so that premise was already dead (row 6502-LSR-IV-PRODUCT). This
 /// fixture folds to `n * 120`, which passes by expansion or by one tail `jmp`.
@@ -2793,9 +2799,9 @@ exit:
 }",
     );
     let fast = assembly(&ir, &Request::new(Level::O2)).unwrap();
-    // The two loops fold to `n * 120`: expanded inline, or one tail `jmp` of the
-    // byte entry where its bytes are fewer. Either way no call of the multiply
-    // is made per trip (`jsr`).
+    // The two loops fold to `n * 120`: expanded inline, or one tail `jmp` of
+    // the byte entry where its bytes are fewer. Either way no call of the
+    // multiply is made per trip (`jsr`).
     assert!(!fast.contains("jsr __mulsi3"), "{fast}");
 }
 
@@ -3049,8 +3055,9 @@ fn a_carry_branch_on_the_old_counter_is_compared_before_the_step() {
     let ir = counter_loop("samesign ult i16 %i, 63");
     for level in [Level::Os, Level::O2] {
         let text = assembly(&ir, &Request::new(level)).unwrap();
-        // `txa; cmp #63` is `cpx #63` where `a` is dead after it. The exit may instead test the new
-        // counter for equality after the step (`iny; cpy #64; bne`, LFTR): `inx`/`iny` keep carry and
+        // `txa; cmp #63` is `cpx #63` where `a` is dead after it. The exit may
+        // instead test the new counter for equality after the step
+        // (`iny; cpy #64; bne`, LFTR): `inx`/`iny` keep carry and
         // no carry branch is left to read it.
         let compare = text.find("cmp #63").or(text.find("cpx #63")).or(text.find("cpy #63"));
         let step = text.find("inx").or(text.find("iny"));
@@ -3332,10 +3339,7 @@ fn a_module_takes_the_speed_multiply_where_the_clocks_it_saves_are_its_own() {
     let text = assembly(&in_loop, &Request::new(Level::Os)).unwrap();
     assert!(text.contains("__mulsi3_fast"), "{text}");
     let work = "store volatile i32 %x, ptr @g0\n  ".repeat(12);
-    let beside = multiplies(
-        &format!("{work}%r2 = shl i32 %x, 3"),
-        "%r3 = mul i32 %t3, %b",
-    );
+    let beside = multiplies(&format!("{work}%r2 = shl i32 %x, 3"), "%r3 = mul i32 %t3, %b");
     let text = assembly(&beside, &Request::new(Level::Os)).unwrap();
     assert!(text.contains("__mulsi3\n") && !text.contains("__mulsi3_fast"), "{text}");
 }

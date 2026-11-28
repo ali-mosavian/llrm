@@ -12,8 +12,9 @@ fn compiled(
     text(&format!("{LAYOUT}{ir}"), "run", 0, &Request::new(level)).expect("compiles")
 }
 
-/// inlined_tail_call_keeps_frame_stores `run` stored its local's second word by `ld -2(ix), #2; ld -1(ix), #0`
-/// (8 B, 38 T) after `push af; push af`: 60 B against SDCC's 59. The word is the push: `ld hl, #2; push hl` (4 B).
+/// inlined_tail_call_keeps_frame_stores `run` stored its local's second word by
+/// `ld -2(ix), #2; ld -1(ix), #0` (8 B, 38 T) after `push af; push af`: 60 B
+/// against SDCC's 59. The word is the push: `ld hl, #2; push hl` (4 B).
 #[test]
 fn a_constant_stored_to_a_frame_word_at_entry_is_a_push() {
     let ir = "declare void @set(ptr)
@@ -33,8 +34,9 @@ define i16 @run() {
     }
 }
 
-/// With an argument held in every pair at entry no pair is free to carry the constant: the store stays two bytes
-/// of the frame (a push through `hl` would have clobbered the first argument).
+/// With an argument held in every pair at entry no pair is free to carry the
+/// constant: the store stays two bytes of the frame (a push through `hl` would
+/// have clobbered the first argument).
 #[test]
 fn no_pair_is_loaded_while_every_pair_holds_an_argument() {
     let ir = "define i16 @run(i16 %a, i16 %b, i16 %c) {

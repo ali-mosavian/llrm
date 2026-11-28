@@ -2,9 +2,7 @@
 
 use std::process::Command;
 
-fn assembly(
-    ir: &str,
-) -> String {
+fn assembly(ir: &str) -> String {
     let guard = tempfile::tempdir().unwrap();
     let dir = guard.path().to_path_buf();
     let source = dir.join("g.ll");
@@ -118,17 +116,17 @@ fn a_long_step_by_one_keeps_its_inc_and_zero_test() {
 /// call_keeps was REFUSED with `b has no byte halves`.
 #[test]
 fn a_step_by_one_in_the_low_word_with_a_constant_above_compiles() {
-    let text = assembly(
-        "define i32 @g(i32 %a) {\n  %m = mul i32 %a, 3\n  %r = add i32 %m, -2147483647\n  ret i32 %r\n}\n",
-    );
+    let text =
+        assembly("define i32 @g(i32 %a) {\n  %m = mul i32 %a, 3\n  %r = add i32 %m, -2147483647\n  ret i32 %r\n}\n");
     assert!(text.contains("adc hl, ") || text.contains("add hl, "), "{text}");
     let text = assembly("define i32 @g(i32 %a) {\n  %r = add i32 %a, 65537\n  ret i32 %r\n}\n");
     assert!(!text.is_empty(), "{text}");
 }
 
-/// Eight long arguments on the stack, five adds of products: five of the seven carries were rebuilt by a compare (`pack` of
-/// os_locals_between_pushes at -O2: 9 instructions and a branch each, 362 B against SDCC's 270 B) where the same chain with seven
-/// arguments, or each add alone, took `adc hl, rr`.
+/// Eight long arguments on the stack, five adds of products: five of the seven
+/// carries were rebuilt by a compare (`pack` of os_locals_between_pushes at
+/// -O2: 9 instructions and a branch each, 362 B against SDCC's 270 B) where the
+/// same chain with seven arguments, or each add alone, took `adc hl, rr`.
 #[test]
 fn the_carries_of_a_chain_of_long_adds_over_stack_arguments_stay_in_the_flag() {
     let text = assembly(

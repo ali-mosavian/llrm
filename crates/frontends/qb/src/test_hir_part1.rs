@@ -112,12 +112,17 @@ fn test_qb45_numeric_read_data_reaches_typed_hir_and_fresh_omf() {
     assert!(listing.contains("call far ptr B$RDR4"));
 }
 
-/// Every BASIC variable starts at zero, and each was stored in BC_DATA: jpeg_fixed's 28 KB of arrays were data bytes of the image, 29135 B
-/// against BC's 4483. llrm's runtime zeroes the BSS class at start-up, so its zero variables go in `_BSS` (group DGROUP, no stored byte);
-/// the Microsoft runtimes' module zeroes its own `_BSS` (below).
+/// Every BASIC variable starts at zero, and each was stored in BC_DATA:
+/// jpeg_fixed's 28 KB of arrays were data bytes of the image, 29135 B
+/// against BC's 4483. llrm's runtime zeroes the BSS class at start-up, so its
+/// zero variables go in `_BSS` (group DGROUP, no stored byte); the Microsoft
+/// runtimes' module zeroes its own `_BSS` (below).
 const ZERO_ARRAY: &[u8] = b"DEFINT A-Z\r\nDIM SHARED a(0 TO 99)\r\nDIM SHARED k AS INTEGER\r\nREAD k\r\na(k) = k\r\nPRINT a(k + 1)\r\nDATA 7\r\n";
 
-fn stored(records: &[std::rc::Rc<omf::Record>], wanted: &str) -> usize {
+fn stored(
+    records: &[std::rc::Rc<omf::Record>],
+    wanted: &str,
+) -> usize {
     let (index, _) = segment(records, wanted);
     omf::ledata(records).iter().filter(|(_, at, _, _)| *at == index).map(|(_, _, _, bytes)| bytes.len()).sum()
 }
@@ -137,7 +142,12 @@ fn test_the_llrm_runtime_keeps_zero_variables_in_an_unstored_bss() {
 /// The bytes of the module's code, from its listing's object.
 fn code_bytes(program: &model::Program) -> usize {
     let records = records(program, "bss.bas");
-    omf::segments(&records).iter().flatten().filter(|(name, _)| name.contains("CODE") || name.ends_with("_TEXT")).map(|(_, size)| *size as usize).sum()
+    omf::segments(&records)
+        .iter()
+        .flatten()
+        .filter(|(name, _)| name.contains("CODE") || name.ends_with("_TEXT"))
+        .map(|(_, size)| *size as usize)
+        .sum()
 }
 
 fn microsoft_program(source: &std::path::Path) -> model::Program {
@@ -145,8 +155,10 @@ fn microsoft_program(source: &std::path::Path) -> model::Program {
     qb_driver::parsed(source, &frontend, None).expect("parses")
 }
 
-/// The Microsoft runtimes' start-up zeroes no BSS and their CLEAR (B$SCLR) only BC_DATA: the module zeroes `_BSS` itself, in a routine called at
-/// entry and after each CLEAR. Where that costs more than it saves (30 B) the variables stay in BC_DATA, and no routine is written.
+/// The Microsoft runtimes' start-up zeroes no BSS and their CLEAR (B$SCLR) only
+/// BC_DATA: the module zeroes `_BSS` itself, in a routine called at
+/// entry and after each CLEAR. Where that costs more than it saves (30 B) the
+/// variables stay in BC_DATA, and no routine is written.
 #[test]
 fn test_the_microsoft_runtimes_get_a_module_that_zeroes_its_own_bss() {
     let tmp = tempfile::TempDir::new().unwrap();
@@ -159,10 +171,17 @@ fn test_the_microsoft_runtimes_get_a_module_that_zeroes_its_own_bss() {
     assert!(text.contains("call far ptr $QB$ZBSS"), "the entry zeroes it:\n{text}");
     assert!(text.contains("$QB$ZBSS proc far"), "the routine is the module's:\n{text}");
     let bare = qb_driver::parsed(&source, &qb_driver::Frontend::new("qb45", "qb45"), None).expect("parses");
-    assert_eq!(code_bytes(&program) - code_bytes(&bare), llrm_codegen::driver::basic::ZEROING_COST, "the threshold is what the routine and its call weigh");
+    assert_eq!(
+        code_bytes(&program) - code_bytes(&bare),
+        llrm_codegen::driver::basic::ZEROING_COST,
+        "the threshold is what the routine and its call weigh"
+    );
     let small = written(&tmp, "small.bas", b"DEFINT A-Z\r\nDIM SHARED a(0 TO 3)\r\nDIM SHARED k AS INTEGER\r\nREAD k\r\na(k) = k\r\nPRINT a(k + 1)\r\nDATA 1\r\n");
     let little = microsoft_program(&small);
-    assert!(!omf::segments(&records(&little, "small.bas")).iter().flatten().any(|(name, _)| name == "_BSS"), "ten bytes cost less stored");
+    assert!(
+        !omf::segments(&records(&little, "small.bas")).iter().flatten().any(|(name, _)| name == "_BSS"),
+        "ten bytes cost less stored"
+    );
     assert!(!listing(&little).contains("$QB$ZBSS"), "and nothing zeroes them");
 }
 
@@ -177,8 +196,10 @@ fn test_zeroing_bss_raises_nothing_under_on_error() {
     assert!(text.contains("call far ptr $QB$ZBSS"), "the entry zeroes it:\n{text}");
 }
 
-/// A DATA line was stored re-rendered with ", " between its values: jpeg_fixed's ten rows of "362,502,473" grew 118 B of BC_DS over BC's, which
-/// keeps the text as written (checked on BC 4.5's object: spaced, quoted and commented lines are all verbatim).
+/// A DATA line was stored re-rendered with ", " between its values:
+/// jpeg_fixed's ten rows of "362,502,473" grew 118 B of BC_DS over BC's, which
+/// keeps the text as written (checked on BC 4.5's object: spaced, quoted and
+/// commented lines are all verbatim).
 #[test]
 fn test_data_text_is_stored_as_written() {
     let tmp = tempfile::TempDir::new().unwrap();
@@ -492,7 +513,8 @@ fn test_qb_numeric_procedure_emits_a_fresh_far_pascal_object() {
     let (segment, offset) = public["ADDONE"];
     let image = omf::segment_image(&records, segment, segments[segment as usize].as_ref().unwrap().1);
     let procedure = &image[offset as usize..];
-    // `mov bp, sp` is `89 e5`, the pin's register-to-register form (#7550), not `8b ec`.
+    // `mov bp, sp` is `89 e5`, the pin's register-to-register form (#7550), not
+    // `8b ec`.
     let statement_table = procedure[3..].windows(3).position(|bytes| bytes == [0x55, 0x89, 0xe5]).map(|at| at + 3);
     assert!(statement_table.is_some_and(|at| at > 0));
     assert!(procedure[..statement_table.unwrap()].ends_with(&[0xca, 0x04, 0x00]));

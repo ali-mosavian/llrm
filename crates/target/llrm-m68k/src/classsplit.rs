@@ -207,10 +207,15 @@ pub fn hold_in_data_registers(function: &mut MFunction) -> usize {
                 used[b] = true;
                 match inst.kind {
                     Kind::Copy => {
-                        let into = inst.operands.iter().find_map(|o| match o {
-                            Operand::Def(Reg::Virt(d)) => Some(*d as usize),
-                            _ => None,
-                        });
+                        let into = inst
+                            .operands
+                            .iter()
+                            .find_map(
+                                |o| match o {
+                                    Operand::Def(Reg::Virt(d)) => Some(*d as usize),
+                                    _ => None,
+                                },
+                            );
                         if into.is_some_and(|d| addressy[d]) {
                             copies.push(b);
                         } else {

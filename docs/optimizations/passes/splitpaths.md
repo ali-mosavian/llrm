@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/splitpaths.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/splitpaths.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/splitpaths.rs sha256:14afadf9359d9419121edde019fa0a39a8625d626e87fd9f5ce1ac84dfd4c832 -->
+<!-- src: crates/opt/llrm-transforms/src/splitpaths.rs sha256:59e46bc741f2788e14d28f8ad17f8a4b16bab324c939dc73d342b177d63c3a19 -->
 
 # splitpaths
 
@@ -9,15 +9,19 @@ Path splitting: gcc's
 
 
 ## How it works
-A loop's latch `J` that is the join of an if-then-else diamond (`d` ends in a conditional, each arm of `J` is `d`
-or a block that only `d` reaches and that only reaches `J`) is copied into the arm that has a block of its own and
-merged into it. The phis of `J` take the arm's value in the copy, so what read them (an address, an index, the
-loop's test) is computed from a constant or a value the arm already has, and `J` and its copy are two latches.
+A loop's latch `J` that is the join of an if-then-else diamond (`d` ends in
+a conditional, each arm of `J` is `d` or a block that only `d` reaches and
+that only reaches `J`) is copied into the arm that has a block of its own
+and merged into it. The phis of `J` take the arm's value in the copy, so
+what read them (an address, an index, the loop's test) is computed from a
+constant or a value the arm already has, and `J` and its copy are two
+latches.
 
-`is_feasible_trace` decides: the join must be small (under 15 statements), must not look like an if-conversion
-candidate (two arms of one statement each that feed the same phi), and must have a phi that something in the join
-uses (a use that is only a compare does not count), or a header phi with an unchanged path, or an equality the
-dominating branch decides.
+`is_feasible_trace` decides: the join must be small (under 15 statements),
+must not look like an if-conversion candidate (two arms of one statement
+each that feed the same phi), and must have a phi that something in the join
+uses (a use that is only a compare does not count), or a header phi with an
+unchanged path, or an equality the dominating branch decides.
 
 | # | DEVIATE |
 |---|---|
@@ -52,10 +56,12 @@ j:
   ...
 ```
 
-From unit test `test_a_join_of_an_empty_arm_is_copied_into_it` in `splitpaths_tests.rs`.
+From unit test `test_a_join_of_an_empty_arm_is_copied_into_it` in
+`splitpaths_tests.rs`.
 
 ## Runs
-Once per body, at -O3 on a target that asks, after `cgpaddr` and before `ree`. With `wanted("splitpaths")`.
+Once per body, at -O3 on a target that asks, after `cgpaddr` and before
+`ree`. With `wanted("splitpaths")`.
 
 ## Needs
 Dominators and loops.
@@ -64,4 +70,5 @@ Dominators and loops.
 Nothing.
 
 ## See also
-Tests: `llrm-transforms/src/splitpaths_tests.rs`. Levels: `docs/reference/levels.md`.
+Tests: `llrm-transforms/src/splitpaths_tests.rs`. Levels:
+`docs/reference/levels.md`.

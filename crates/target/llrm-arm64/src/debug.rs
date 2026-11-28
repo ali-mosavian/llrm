@@ -107,7 +107,8 @@ pub fn info(
             }
             let Some(one) = di::read_variable(module, node) else { continue };
             // A variable of an inlined callee is that callee's, not this
-            // function's: the writer has no inlined-subroutine scopes to put it in.
+            // function's: the writer has no inlined-subroutine scopes to put it
+            // in.
             if one.scope != procedure.name {
                 continue;
             }
@@ -120,7 +121,10 @@ pub fn info(
                     ranges
                         .into_iter()
                         .map(|(gpr, begin, end)| {
-                            (Range { section: 0, offset: begin, length: end - begin }, Location::Register(format!("x{}", gpr.0)))
+                            (
+                                Range { section: 0, offset: begin, length: end - begin },
+                                Location::Register(format!("x{}", gpr.0)),
+                            )
                         })
                         .collect(),
                 ),
@@ -273,8 +277,9 @@ fn register_variables(
             if inst.is_directive() {
                 continue;
             }
-            // A move follows the value: the variable is in the copy from after it
-            // (`VarLoc`'s transfer on a copy), and in the source no more.
+            // A move follows the value: the variable is in the copy from after
+            // it (`VarLoc`'s transfer on a copy), and in the source
+            // no more.
             if let Inst::LogicShifted {
                 op: crate::mc::inst::Logic::Orr,
                 invert: false,
@@ -291,7 +296,10 @@ fn register_variables(
                 close(&mut open, &|one| one.1 != *rd && one.1 != *rm, at);
                 close(&mut open, &|one| one.1 != *rm, at + 4);
                 open.extend(moved.into_iter().map(|variable| (variable, *rd, at + 4)));
-            } else if matches!(inst, Inst::Branch { link: true, .. } | Inst::BranchReg { link: true, .. }) {
+            } else if matches!(
+                inst,
+                Inst::Branch { link: true, .. } | Inst::BranchReg { link: true, .. }
+            ) {
                 // AAPCS64: x0-x18 and the link register do not survive a call.
                 close(&mut open, &|one| one.1.0 > 18 && one.1.0 != 30, at);
             } else {

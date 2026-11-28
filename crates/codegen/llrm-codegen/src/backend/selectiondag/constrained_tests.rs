@@ -240,19 +240,84 @@ fn constrained_forms_select_to_sse_at_m64() {
     let e = "metadata !\"round.dynamic\", metadata !\"fpexcept.strict\"";
     let x = "metadata !\"fpexcept.strict\"";
     let cases: Vec<(&str, String, &str, &str)> = vec![
-        ("double", format!("fadd.f64(double %d, double %d, {e})"), "double @llvm.experimental.constrained.fadd.f64(double, double, metadata, metadata)", "addsd"),
-        ("double", format!("fpext.f64.f32(float %s, {x})"), "double @llvm.experimental.constrained.fpext.f64.f32(float, metadata)", "cvtss2sd"),
-        ("float", format!("fptrunc.f32.f64(double %d, {e})"), "float @llvm.experimental.constrained.fptrunc.f32.f64(double, metadata, metadata)", "cvtsd2ss"),
-        ("double", format!("sitofp.f64.i32(i32 %i, {e})"), "double @llvm.experimental.constrained.sitofp.f64.i32(i32, metadata, metadata)", "cvtsi2sd"),
-        ("double", format!("sitofp.f64.i64(i64 %l, {e})"), "double @llvm.experimental.constrained.sitofp.f64.i64(i64, metadata, metadata)", "cvtsi2sd"),
-        ("double", format!("sitofp.f64.i16(i16 %h, {e})"), "double @llvm.experimental.constrained.sitofp.f64.i16(i16, metadata, metadata)", "cvtsi2sd"),
-        ("i32", format!("fptosi.i32.f64(double %d, {x})"), "i32 @llvm.experimental.constrained.fptosi.i32.f64(double, metadata)", "cvttsd2si"),
-        ("i64", format!("fptosi.i64.f64(double %d, {x})"), "i64 @llvm.experimental.constrained.fptosi.i64.f64(double, metadata)", "cvttsd2si"),
-        ("i16", format!("fptosi.i16.f64(double %d, {x})"), "i16 @llvm.experimental.constrained.fptosi.i16.f64(double, metadata)", "cvttsd2si"),
-        ("i1", format!("fcmps.f64(double %d, double %d, metadata !\"olt\", {x})"), "i1 @llvm.experimental.constrained.fcmps.f64(double, double, metadata, metadata)", "comisd"),
-        ("i1", format!("fcmp.f64(double %d, double %d, metadata !\"une\", {x})"), "i1 @llvm.experimental.constrained.fcmp.f64(double, double, metadata, metadata)", "ucomisd"),
-        ("x86_fp80", format!("sitofp.f80.i64(i64 %l, {e})"), "x86_fp80 @llvm.experimental.constrained.sitofp.f80.i64(i64, metadata, metadata)", "fild"),
-        ("i64", format!("fptosi.i64.f80(x86_fp80 %a, {x})"), "i64 @llvm.experimental.constrained.fptosi.i64.f80(x86_fp80, metadata)", "fisttp"),
+        (
+            "double",
+            format!("fadd.f64(double %d, double %d, {e})"),
+            "double @llvm.experimental.constrained.fadd.f64(double, double, metadata, metadata)",
+            "addsd",
+        ),
+        (
+            "double",
+            format!("fpext.f64.f32(float %s, {x})"),
+            "double @llvm.experimental.constrained.fpext.f64.f32(float, metadata)",
+            "cvtss2sd",
+        ),
+        (
+            "float",
+            format!("fptrunc.f32.f64(double %d, {e})"),
+            "float @llvm.experimental.constrained.fptrunc.f32.f64(double, metadata, metadata)",
+            "cvtsd2ss",
+        ),
+        (
+            "double",
+            format!("sitofp.f64.i32(i32 %i, {e})"),
+            "double @llvm.experimental.constrained.sitofp.f64.i32(i32, metadata, metadata)",
+            "cvtsi2sd",
+        ),
+        (
+            "double",
+            format!("sitofp.f64.i64(i64 %l, {e})"),
+            "double @llvm.experimental.constrained.sitofp.f64.i64(i64, metadata, metadata)",
+            "cvtsi2sd",
+        ),
+        (
+            "double",
+            format!("sitofp.f64.i16(i16 %h, {e})"),
+            "double @llvm.experimental.constrained.sitofp.f64.i16(i16, metadata, metadata)",
+            "cvtsi2sd",
+        ),
+        (
+            "i32",
+            format!("fptosi.i32.f64(double %d, {x})"),
+            "i32 @llvm.experimental.constrained.fptosi.i32.f64(double, metadata)",
+            "cvttsd2si",
+        ),
+        (
+            "i64",
+            format!("fptosi.i64.f64(double %d, {x})"),
+            "i64 @llvm.experimental.constrained.fptosi.i64.f64(double, metadata)",
+            "cvttsd2si",
+        ),
+        (
+            "i16",
+            format!("fptosi.i16.f64(double %d, {x})"),
+            "i16 @llvm.experimental.constrained.fptosi.i16.f64(double, metadata)",
+            "cvttsd2si",
+        ),
+        (
+            "i1",
+            format!("fcmps.f64(double %d, double %d, metadata !\"olt\", {x})"),
+            "i1 @llvm.experimental.constrained.fcmps.f64(double, double, metadata, metadata)",
+            "comisd",
+        ),
+        (
+            "i1",
+            format!("fcmp.f64(double %d, double %d, metadata !\"une\", {x})"),
+            "i1 @llvm.experimental.constrained.fcmp.f64(double, double, metadata, metadata)",
+            "ucomisd",
+        ),
+        (
+            "x86_fp80",
+            format!("sitofp.f80.i64(i64 %l, {e})"),
+            "x86_fp80 @llvm.experimental.constrained.sitofp.f80.i64(i64, metadata, metadata)",
+            "fild",
+        ),
+        (
+            "i64",
+            format!("fptosi.i64.f80(x86_fp80 %a, {x})"),
+            "i64 @llvm.experimental.constrained.fptosi.i64.f80(x86_fp80, metadata)",
+            "fisttp",
+        ),
     ];
     for (ty, call, decl, want) in cases {
         let text = format!(
@@ -260,7 +325,8 @@ fn constrained_forms_select_to_sse_at_m64() {
         );
         let module = llrm_mir::parse::module(&text).expect("parses");
         let cpu = crate::backend::cpu::tuned_for(&llrm_x86_m64::M64, llrm_x86_m64::CPUS[0], false).expect("a cpu");
-        let done = selected(&module, "f", &llrm_x86_m64::M64, cpu, &[]).unwrap_or_else(|why| panic!("{call}: {}", why.0));
+        let done =
+            selected(&module, "f", &llrm_x86_m64::M64, cpu, &[]).unwrap_or_else(|why| panic!("{call}: {}", why.0));
         let names: Vec<String> = done
             .body
             .insns()

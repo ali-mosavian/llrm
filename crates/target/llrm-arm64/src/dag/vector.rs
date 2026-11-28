@@ -864,10 +864,10 @@ fn reduction_node(
 ) -> SDValue {
     let vector = dag.operand(node, 0);
     let reduced = dag.get_node(ISD::Target(opcode), dag.value_type(vector), &[vector]);
-    // DEVIATE VEC9 (owner llrm-arm64-vec, exit 2026-11-24): the pin takes lane 0
-    // of a 64-bit result by `EXTRACT_VECTOR_ELT` of the widened vector; no 64-bit
-    // vector is extracted from here, so the register is read whole (`fmov`), the
-    // same instruction the pin ends on.
+    // DEVIATE VEC9 (owner llrm-arm64-vec, exit 2026-11-24): the pin takes lane
+    // 0 of a 64-bit result by `EXTRACT_VECTOR_ELT` of the widened vector;
+    // no 64-bit vector is extracted from here, so the register is read
+    // whole (`fmov`), the same instruction the pin ends on.
     if dag.value_type(vector).size_in_bits() == 64 {
         let whole = dag.get_node(ISD::BitCast, EVT::I64, &[reduced]);
         return dag.get_any_ext_or_trunc(whole, dag.value_type(node));

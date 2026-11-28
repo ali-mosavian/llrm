@@ -130,8 +130,7 @@ const OPERATIONS: [&str; 45] = [
 /// What a function costs beyond its operations, stated in `[size]` only: the
 /// bytes it carries (`function`) and the percent its estimate is scaled by
 /// (`function_scale`), measured against objects.
-const FUNCTION_KEYS: [&str; 4] =
-    ["function", "function_scale", "size_caller_function", "size_caller_scale"];
+const FUNCTION_KEYS: [&str; 4] = ["function", "function_scale", "size_caller_function", "size_caller_scale"];
 
 impl Description {
     pub fn parse(text: &str) -> Result<Self, String> {

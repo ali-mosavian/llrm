@@ -1,13 +1,15 @@
-//! The -Os size bound kept `blend` a call in the inner loop of a fill (a site 961 times the
-//! caller's entry), where the pin's `optsize` threshold takes it: QuickrBasic `pixmem.c`, `q45d25`
-//! 2,335,019 instructions against clang's 1,443,306. The hot-site yield trusts the units' growth,
-//! which can cost bytes (`suggest.c` +92 B), so HOT-INLINE-TRIAL compiles again with the calls kept
+//! The -Os size bound kept `blend` a call in the inner loop of a fill (a site
+//! 961 times the caller's entry), where the pin's `optsize` threshold takes it:
+//! QuickrBasic `pixmem.c`, `q45d25` 2,335,019 instructions against clang's
+//! 1,443,306. The hot-site yield trusts the units' growth, which can cost bytes
+//! (`suggest.c` +92 B), so HOT-INLINE-TRIAL compiles again with the calls kept
 //! and the finished object decides. Needs `LLRM_LLC`.
 
 use std::path::Path;
 use std::process::Command;
 
-/// The object of `m32_os_hot_site_inline.c` at -Os: its listing and its code and data bytes.
+/// The object of `m32_os_hot_site_inline.c` at -Os: its listing and its code
+/// and data bytes.
 fn object(trial: bool) -> (String, u32) {
     let llc = std::env::var_os("LLRM_LLC").expect("LLRM_LLC is not set: this test needs it and does not skip");
     let name = format!("x86-os-hot-site-inline-{}-{trial}", std::process::id());

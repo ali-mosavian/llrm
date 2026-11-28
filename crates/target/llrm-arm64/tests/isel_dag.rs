@@ -33,7 +33,8 @@ fn f_is_the_pins_add_and_ret_and_g_is_selected() {
     assert!(ok, "dag takes g: {why}");
     let f = &asm[asm.find("_f:").unwrap()..asm.find("_g:").unwrap()];
     let lines: Vec<&str> = f.lines().skip(1).map(str::trim).filter(|l| !l.is_empty() && !l.starts_with('.')).collect();
-    // The printer spells an `ADDWrs` with a zero shift this way; it encodes as `add w0, w0, w1`.
+    // The printer spells an `ADDWrs` with a zero shift this way; it encodes as
+    // `add w0, w0, w1`.
     assert_eq!(lines, ["add w0, w0, w1, lsl #0", "ret x30"], "{f}");
 }
 

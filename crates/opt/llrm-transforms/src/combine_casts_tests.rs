@@ -734,8 +734,8 @@ j:
 ";
 
 /// early_exit_widths -Os, x86-64: `(early_exit() != want)` of a phi of 0 and 1
-/// and a `zext i1` stayed `cmp; setne; xor` (11 B) where gcc's `xor` is 3: +20 B
-/// in four tests.
+/// and a `zext i1` stayed `cmp; setne; xor` (11 B) where gcc's `xor` is 3: +20
+/// B in four tests.
 #[test]
 fn a_not_equal_of_two_truth_values_is_an_xor() {
     let out = combined_truth(TRUTH_COMPARE, true);
@@ -754,10 +754,9 @@ fn a_target_that_declines_keeps_the_compare_of_two_truth_values() {
 /// A value with more than the low bit possible is not a truth value.
 #[test]
 fn a_not_equal_of_a_wider_value_is_kept() {
-    let text = TRUTH_COMPARE.replace("define i32 @f(i1 %c, i1 %d)", "define i32 @f(i1 %c, i1 %d, i32 %x)").replace(
-        "%w = zext i1 %d to i32",
-        "%w = and i32 %x, 3",
-    );
+    let text = TRUTH_COMPARE
+        .replace("define i32 @f(i1 %c, i1 %d)", "define i32 @f(i1 %c, i1 %d, i32 %x)")
+        .replace("%w = zext i1 %d to i32", "%w = and i32 %x, 3");
     let out = combined_truth(&text, true);
     assert!(out.contains("icmp ne i32 %p, %w"), "{out}");
 }
@@ -766,7 +765,8 @@ fn a_not_equal_of_a_wider_value_is_kept() {
 /// read the width of a pointer compare.
 #[test]
 fn a_not_equal_of_pointers_is_left_alone() {
-    let text = "define i32 @f(ptr %a, ptr %b) {\nb0:\n  %n = icmp ne ptr %a, %b\n  %r = zext i1 %n to i32\n  ret i32 %r\n}\n";
+    let text =
+        "define i32 @f(ptr %a, ptr %b) {\nb0:\n  %n = icmp ne ptr %a, %b\n  %r = zext i1 %n to i32\n  ret i32 %r\n}\n";
     let out = combined_truth(text, true);
     assert!(out.contains("icmp ne ptr %a, %b"), "{out}");
 }

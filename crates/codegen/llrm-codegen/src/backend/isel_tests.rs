@@ -511,8 +511,8 @@ fn test_an_odd_width_promoted_is_selected() {
 
 /// A shift counts from cl: the count as a word printed `shl ax, cx`. The sum
 /// of the quotient and the remainder (a copy out of dx, #9857) is an `add`
-/// then a copy, as the pin's `addl %edx, %esi; shll %cl, %esi; movl %esi, %eax`,
-/// not a `lea` the walk no longer converts it to.
+/// then a copy, as the pin's `addl %edx, %esi; shll %cl, %esi; movl %esi,
+/// %eax`, not a `lea` the walk no longer converts it to.
 #[test]
 fn test_division_and_variable_shifts() {
     let text = "define i16 @f(i16 %a, i16 %b) addrspace(1) {
@@ -976,9 +976,10 @@ define cc1000 void @MAIN() addrspace(1) {
     );
 }
 
-/// m16 stft_single -O2: two string literals of 15 B came first, so `align 2` padded the next datum
-/// (+1 B of data against bcc, jpeg_single +2). A private constant of no alignment goes last.
-/// Two procedures read it: one reader alone moves it into its code segment (cs_tables).
+/// m16 stft_single -O2: two string literals of 15 B came first, so `align 2`
+/// padded the next datum (+1 B of data against bcc, jpeg_single +2). A private
+/// constant of no alignment goes last. Two procedures read it: one reader alone
+/// moves it into its code segment (cs_tables).
 #[test]
 fn test_a_string_literal_follows_the_aligned_data_and_the_pool() {
     let text = "@.str = private unnamed_addr constant [3 x i8] c\"ab\\00\"
@@ -997,8 +998,17 @@ define cc1000 void @OTHER() addrspace(1) {
 }
 ";
     let got = assembled(text);
-    let data: Vec<&str> = got.lines().map(str::trim).skip_while(|line| *line != ".data").take_while(|line| !line.starts_with("extern") && !line.starts_with(".code")).collect();
-    assert_eq!(data, [".data", "align 2", "count label byte", "db 005h,000h", "G$0$str label byte", "db 061h,062h,000h"], "{got}");
+    let data: Vec<&str> = got
+        .lines()
+        .map(str::trim)
+        .skip_while(|line| *line != ".data")
+        .take_while(|line| !line.starts_with("extern") && !line.starts_with(".code"))
+        .collect();
+    assert_eq!(
+        data,
+        [".data", "align 2", "count label byte", "db 005h,000h", "G$0$str label byte", "db 061h,062h,000h"],
+        "{got}"
+    );
 }
 
 /// An intrinsic is no symbol: declaring one refused the module as "no
@@ -1883,8 +1893,9 @@ define i1 @uge(double %a, double %b) addrspace(1) {
             .filter(|line| !prologue.contains(&line.as_str()) && !line.ends_with(':') && !compares(line))
             .collect::<Vec<_>>()
     };
-    // DEVIATE X87-FCMP-AH: the status word's carry bit is `test ah, 1` only where the clock it saves pays for its two
-    // bytes at the speed rate; m16's 500 milliclocks a byte make it a tie, which keeps `sahf` (#9259).
+    // DEVIATE X87-FCMP-AH: the status word's carry bit is `test ah, 1` only
+    // where the clock it saves pays for its two bytes at the speed rate;
+    // m16's 500 milliclocks a byte make it a tie, which keeps `sahf` (#9259).
     let (ult, uge) = (answered("ult"), answered("uge"));
     assert_eq!(ult, ["setb al"]);
     assert_eq!(uge, ["setbe al"]);
@@ -4541,7 +4552,8 @@ b2:
         .map(|line| line.trim().to_owned())
         .collect();
     let writes_ax = |one: &str| {
-        // `test` and `cmp` read their first operand (the 486 tests `ah` instead of `sahf`).
+        // `test` and `cmp` read their first operand (the 486 tests `ah` instead
+        // of `sahf`).
         !one.starts_with("test ")
             && !one.starts_with("cmp ")
             && one
@@ -6237,7 +6249,10 @@ b1:
     let names =
         crate::backend::globals::names(&module, &llrm_x86_m16::spaces(), &|name| qb().linked(name)).expect("names");
     let datums = crate::backend::globals::datums(&module, module.named("t").expect("a global"), &names).expect("data");
-    assert!(matches!(&datums[..], [_, Datum::Pointer(pointer)] if pointer.name.contains("BA") && !pointer.far), "{datums:?}");
+    assert!(
+        matches!(&datums[..], [_, Datum::Pointer(pointer)] if pointer.name.contains("BA") && !pointer.far),
+        "{datums:?}"
+    );
 }
 
 /// A load only an add reads is the add's memory operand, as `ADD32rm` is

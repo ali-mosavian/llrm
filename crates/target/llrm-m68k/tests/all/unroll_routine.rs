@@ -1,11 +1,14 @@
-//! The -Os unroll trial priced the loop and its six-fold unrolling by their own bytes. Unrolled, `seen * 3 + i` six
-//! times is `seen * 729 + 543`: a call of `__mulsi3` at the 68000, 42 B against the loop's 60 B, which links the
-//! routine's 54 B (switch_empty_cases 68000 -Os: 96 B against gcc's 48). The build that calls it pays for it.
+//! The -Os unroll trial priced the loop and its six-fold unrolling by their own
+//! bytes. Unrolled, `seen * 3 + i` six times is `seen * 729 + 543`: a call of
+//! `__mulsi3` at the 68000, 42 B against the loop's 60 B, which links the
+//! routine's 54 B (switch_empty_cases 68000 -Os: 96 B against gcc's 48). The
+//! build that calls it pays for it.
 
 use llrm_m68k::driver::{Level, assembly, cpu_of};
 
 /// tests/run/c/switch_empty_cases.c, as clang emits it before any pass.
-const SWITCH_EMPTY_CASES: &str = "target datalayout = \"E-m:e-p:32:16:32-i8:8:8-i16:16:16-i32:16:32-n8:16:32-a:0:16-S16\"
+const SWITCH_EMPTY_CASES: &str =
+    "target datalayout = \"E-m:e-p:32:16:32-i8:8:8-i16:16:16-i32:16:32-n8:16:32-a:0:16-S16\"
 @seen = internal global i32 0, align 2
 define dso_local i32 @main() nounwind optsize {
   %1 = alloca i32, align 2
@@ -64,6 +67,9 @@ define internal void @bump(i32 noundef %0) nounwind optsize {
 #[test]
 fn an_unrolling_that_links_the_multiply_routine_pays_for_its_bytes() {
     let asm = assembly(SWITCH_EMPTY_CASES, cpu_of("68000").unwrap(), Level::Os).expect("compiles");
-    assert!(!asm.contains("__mulsi3"), "the loop was unrolled into a multiply by 729, which links __mulsi3:
-{asm}");
+    assert!(
+        !asm.contains("__mulsi3"),
+        "the loop was unrolled into a multiply by 729, which links __mulsi3:
+{asm}"
+    );
 }

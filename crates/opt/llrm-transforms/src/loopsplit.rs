@@ -31,10 +31,10 @@ use llrm_analysis::scev::analysis::ScevSession;
 use llrm_analysis::scev::expr::{Kind, Use, flags};
 use llrm_analysis::scev::{Cx, ScalarEvolution};
 use llrm_mir::context::{ConstantKind, Context, mask};
+use llrm_mir::dense::{IdMap, IdSet};
 use llrm_mir::domtree::DomTree;
 use llrm_mir::edit::{Position, ValueMap};
 use llrm_mir::loopinfo::LoopInfo;
-use llrm_mir::dense::{IdMap, IdSet};
 use llrm_mir::memory::Callees;
 use llrm_mir::module::{BlockId, Function, InstId, Operand, ValueDef, ValueId};
 use llrm_mir::opcode::{Attribute, BinaryOp, Flags, IntPredicate, Opcode};
@@ -879,9 +879,9 @@ impl FunctionPass for LoopSplit {
         if !self.cleanup {
             return PreservedAnalyses::none();
         }
-        // `pass_split_loop` returns `TODO_cleanup_cfg`: the arms of each copy are
-        // folded into straight code, as the vectorizer reads only loops whose
-        // blocks all run.
+        // `pass_split_loop` returns `TODO_cleanup_cfg`: the arms of each copy
+        // are folded into straight code, as the vectorizer reads only
+        // loops whose blocks all run.
         let spec = crate::twoentryphi::Speculation { tti: &*tti, layout: unit.layout, outer: &outer };
         crate::simplifycfg::simplified_with(
             &crate::simplifycfg::Options { loop_form_kept: false, ..Default::default() },

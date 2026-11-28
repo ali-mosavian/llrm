@@ -18,9 +18,10 @@ fn compile(level: Level) -> String {
     assembly(&ir, &Request::new(level)).unwrap()
 }
 
-/// `la[i]` of sat_builtins: the element is 4 bytes, so the index was `zext i8 << 2` in a word, built with
-/// 16-bit `asl; rol` twice and added to the address in a pointer pair (13 B and `(zp),y` a site). The extent
-/// of `@g` (32 B) makes the offset a byte: `asl a; asl a; tax; lda g,x`.
+/// `la[i]` of sat_builtins: the element is 4 bytes, so the index was `zext i8
+/// << 2` in a word, built with 16-bit `asl; rol` twice and added to the address
+/// in a pointer pair (13 B and `(zp),y` a site). The extent of `@g` (32 B)
+/// makes the offset a byte: `asl a; asl a; tax; lda g,x`.
 #[test]
 fn a_scaled_byte_index_into_a_small_global_is_absolute_x() {
     for level in [Level::O2, Level::Os] {

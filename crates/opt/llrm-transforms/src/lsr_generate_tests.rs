@@ -81,7 +81,14 @@ fn generated_sized(
     };
     let mut se = ScalarEvolution::new();
     let header = loops.top_level_loops().next().expect("a loop").get_header();
-    let env = Env { safe_to_speculate: &|_: InstId| true, ephemeral: &|_| false, native_widths: &[], use_list_order: false, phi_operand_uses: false, phi_users_first: false };
+    let env = Env {
+        safe_to_speculate: &|_: InstId| true,
+        ephemeral: &|_| false,
+        native_widths: &[],
+        use_list_order: false,
+        phi_operand_uses: false,
+        phi_users_first: false,
+    };
     let mut users = IvUsers::of(&mut se, &cx, header, &env);
     if post_inc {
         let conds: Vec<InstId> = users
@@ -178,7 +185,10 @@ fn every_generated_formula_is_legal_canonical_and_distinct() {
             let mut keys = llrm_support::hash::HashSet::default();
             for f in &lu.formulae {
                 assert!(f.is_canonical(se, header), "{f:?}");
-                assert!(is_legal_use_formula(&tti, se, lu.min_offset, lu.max_offset, lu.kind, lu.access_ty, f), "{f:?}");
+                assert!(
+                    is_legal_use_formula(&tti, se, lu.min_offset, lu.max_offset, lu.kind, lu.access_ty, f),
+                    "{f:?}"
+                );
                 let mut key = f.base_regs.clone();
                 key.extend(f.scaled_reg);
                 key.sort_unstable();

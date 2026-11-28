@@ -224,10 +224,12 @@ fn kept_atomics(module: &Module) -> Vec<String> {
     names
 }
 
-/// x86 selected only `xchg`: `atomicrmw add` and `cmpxchg` were "not lowered for this target yet", so QuickrBasic's
-/// `pmou.c` (`__atomic_add_fetch`, `__atomic_compare_exchange_n`) did not compile on m32 or m64. At a 486 and
-/// later they stay for the target to select as `lock xadd`, `lock add` and `lock cmpxchg`
-/// (`X86TargetLowering::shouldExpandAtomicRMWInIR`: no expansion).
+/// x86 selected only `xchg`: `atomicrmw add` and `cmpxchg` were "not lowered
+/// for this target yet", so QuickrBasic's `pmou.c` (`__atomic_add_fetch`,
+/// `__atomic_compare_exchange_n`) did not compile on m32 or m64. At a 486 and
+/// later they stay for the target to select as `lock xadd`, `lock add` and
+/// `lock cmpxchg` (`X86TargetLowering::shouldExpandAtomicRMWInIR`: no
+/// expansion).
 #[test]
 fn an_x86_add_sub_unread_or_and_cmpxchg_stay_for_the_target_to_select() {
     let mut module = parse::module(LOCKED).unwrap();
@@ -243,8 +245,9 @@ fn an_x86_add_sub_unread_or_and_cmpxchg_stay_for_the_target_to_select() {
     assert!(lowered(&mut old, 32, true, true, false).unwrap_err().contains("not lowered"));
 }
 
-/// An `and`, `or` or `xor` whose result is read, and a `nand`, `max` or `min`, are `AtomicExpandPass`'s
-/// compare-exchange loop: refused by name, never a plain access.
+/// An `and`, `or` or `xor` whose result is read, and a `nand`, `max` or `min`,
+/// are `AtomicExpandPass`'s compare-exchange loop: refused by name, never a
+/// plain access.
 #[test]
 fn an_x86_read_modify_write_that_needs_a_cmpxchg_loop_is_refused_by_name() {
     for op in ["or", "and", "xor"] {

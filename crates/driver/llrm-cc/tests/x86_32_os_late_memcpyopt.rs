@@ -33,4 +33,3 @@ fn a_compound_literal_is_built_in_place_at_os() {
     let copies = text.lines().filter(|line| line.contains("rep movs")).count();
     assert_eq!(copies, 0, "the literal is copied out of a stack temporary\n{text}");
 }
-

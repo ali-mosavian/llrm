@@ -1,7 +1,8 @@
 //! A frame of 512 bytes or more pushes the saved registers first and takes the
 //! locals after (`shouldCombineCSRLocalStackBump` is off): a 4 KB buffer was
 //! one `sub sp` of 4128 bytes made through `x16`, and the saves were stored
-//! through `x16`/`x17` addresses (quicksort -Os: 8 instructions more than clang).
+//! through `x16`/`x17` addresses (quicksort -Os: 8 instructions more than
+//! clang).
 
 use llrm_arm64::driver::{self, Level};
 use llrm_arm64::machine::Platform;

@@ -1570,8 +1570,8 @@ fn transform_zext_icmp(
             }
         }
     }
-    // DEVIATE X64-TRUTH-XOR: zext (X != Y) --> X ^ Y where X and Y are each 0 or
-    // 1 (GCC `simplify_truth_ops_using_ranges`, `vr-values.cc`).
+    // DEVIATE X64-TRUTH-XOR: zext (X != Y) --> X ^ Y where X and Y are each 0
+    // or 1 (GCC `simplify_truth_ops_using_ranges`, `vr-values.cc`).
     if c.env.hooks.truth_compare_xor
         && pred == IntPredicate::Ne
         && op1_const.is_none()

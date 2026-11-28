@@ -13,8 +13,8 @@ use llrm_mir::target::{AddressForm, Machine as _, OperationCosts};
 use llrm_target::calling::{Calling, Convention};
 use llrm_target::{CostModel, Target};
 
-use crate::machine::{Arm64Machine, Platform};
 use crate::REGISTER_INFO;
+use crate::machine::{Arm64Machine, Platform};
 
 static CALLING: LazyLock<Calling> =
     LazyLock::new(|| Calling::parse(include_str!("machines/calling.toml")).expect("calling.toml parses"));
@@ -448,26 +448,29 @@ mod tests {
         let regs = llrm_lir::registers::Regs(Arm64.registers());
         let segments = Segments::of(&Arm64.machine(), regs, Arm64.operand_bytes());
         assert_eq!(segments.data, None);
-        let build = |omitted: &[&str]| llrm_codegen::flow::machine_with(
-            &Default::default(),
-            None,
-            None,
-            None,
-            false,
-            tuned_for(&Arm64, "generic", false).expect("generic has a profile"),
-            &segments,
-            &std::rc::Rc::new(RegisterClasses::of(&Arm64)),
-            &Rules::NONE,
-            &Arm64.frame_registers(),
-            llrm_codegen::backend::shadow::Selector::Old,
-            omitted,
-        )
-        .unwrap_or_else(|error| panic!("{error}"));
+        let build = |omitted: &[&str]| {
+            llrm_codegen::flow::machine_with(
+                &Default::default(),
+                None,
+                None,
+                None,
+                false,
+                tuned_for(&Arm64, "generic", false).expect("generic has a profile"),
+                &segments,
+                &std::rc::Rc::new(RegisterClasses::of(&Arm64)),
+                &Rules::NONE,
+                &Arm64.frame_registers(),
+                llrm_codegen::backend::shadow::Selector::Old,
+                omitted,
+            )
+            .unwrap_or_else(|error| panic!("{error}"))
+        };
         let omitted: Vec<&str> = Arm64.omitted_phases().iter().map(|(name, _)| *name).collect();
         let phases = build(&omitted);
         let names: Vec<&str> = phases.iter().map(|phase| phase.class_name()).collect();
         println!("{} phases: {}", names.len(), names.join(" "));
-        // A shared phase added to the registry runs here until it is omitted above: name it, or this fails.
+        // A shared phase added to the registry runs here until it is omitted
+        // above: name it, or this fails.
         let kept = "EarlyTailDuplicate OptimizePHIs DeadMachineInstructionElim SharedConstants ProcessImplicitDefs MachineCombiner \
             MachineLICM IvShare IvZero MachineCSE MachineSink PeepholeOptimizer DeadMachineInstructionElim \
             LiveRangeShrink PhiElimination TwoAddress JoinStackPointer Coalescer MachineScheduler RegAlloc ParallelCopy ReserveCallFrame Prologue LateCleanup Peephole \

@@ -1,6 +1,6 @@
-//! The pin's early MachineLICM hoists the address of a global out of a loop. m68k kept
-//! `lea (l,%pc), %a0` in the loop: `word_array_abs_x` -O2 ran 32657 clk at 68020 against
-//! gcc's 26266 with two `lea`s a trip.
+//! The pin's early MachineLICM hoists the address of a global out of a loop.
+//! m68k kept `lea (l,%pc), %a0` in the loop: `word_array_abs_x` -O2 ran 32657
+//! clk at 68020 against gcc's 26266 with two `lea`s a trip.
 
 use llrm_m68k::driver::{Level, assembly, cpu_of};
 
@@ -37,7 +37,10 @@ fn the_address_of_a_global_is_made_before_the_loop_at_speed() {
     for cpu in ["68000", "68020"] {
         for level in [Level::O2, Level::O3] {
             let asm = assembly(LOOP, cpu_of(cpu).unwrap(), level).expect("compiles");
-            assert!(position(&asm, "lea") < position(&asm, ".LBB0_1:"), "{cpu} {level:?}: the lea is in the loop:\n{asm}");
+            assert!(
+                position(&asm, "lea") < position(&asm, ".LBB0_1:"),
+                "{cpu} {level:?}: the lea is in the loop:\n{asm}"
+            );
         }
     }
 }

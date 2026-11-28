@@ -1,7 +1,8 @@
-//! The Watcom-dialect `llrm-c` front end is gone: `llrm-cc` over clang is the only C front end.
+//! The Watcom-dialect `llrm-c` front end is gone: `llrm-cc` over clang is the
+//! only C front end.
 
-/// The workspace still had an `llrm-c` member, its bin and the `c-legacy`/`wccq`
-/// features, 11.9 k lines nothing but opt-in tests built.
+/// The workspace still had an `llrm-c` member, its bin and the
+/// `c-legacy`/`wccq` features, 11.9 k lines nothing but opt-in tests built.
 #[test]
 fn the_workspace_has_no_llrm_c_member() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));

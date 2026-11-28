@@ -225,7 +225,8 @@ impl LoopOptions {
         let id = lp.get_loop_latch(function).and_then(|latch| function.terminator(latch)).and_then(|term| {
             function.instruction(term).metadata.iter().find(|(kind, _)| kind == "llvm.loop").map(|(_, id)| *id)
         });
-        // The loop ID may be one the vectorizer made earlier in this run: not yet in the module's table.
+        // The loop ID may be one the vectorizer made earlier in this run: not
+        // yet in the module's table.
         let node =
             |at: llrm_mir::module::MetadataId| crate::loopvectorizeskeleton::node_at(&*run.declared, run.metadata, at);
         let Some(id) = id else { return Self(Vec::new()) };
@@ -1877,11 +1878,12 @@ fn try_to_unroll_loop(
 
     let opt_for_size = run.options.opt_size;
     let has_calls = loop_has_calls(run, lp);
-    // DEVIATE UNROLL-O3: the target's raised -O3 threshold is not for an innermost loop the early
-    // `LoopFullUnrollPass` meets: the vectorizer widens only those, and gcc completely unrolls after
-    // `pass_vectorize` (tile -O3: a 64-trip init loop unrolled to 16,147 instructions against
-    // clang's 6,130). A loop with an inner loop keeps it: its copies expose the inner trip counts
-    // (object_extent_loop).
+    // DEVIATE UNROLL-O3: the target's raised -O3 threshold is not for an
+    // innermost loop the early `LoopFullUnrollPass` meets: the vectorizer
+    // widens only those, and gcc completely unrolls after `pass_vectorize`
+    // (tile -O3: a 64-trip init loop unrolled to 16,147 instructions against
+    // clang's 6,130). A loop with an inner loop keeps it: its copies expose the
+    // inner trip counts (object_extent_loop).
     let raised_threshold = run.options.target_unrolling || !lp.is_innermost();
     let mut up = gather_unrolling_preferences(run, has_calls, raised_threshold);
 
@@ -2057,8 +2059,9 @@ fn try_to_unroll_loop(
         && trial::speed_unroll().is_none()
         && (count > 0 || trip_count > 0)
     {
-        // DEVIATE UNROLL-SPEED-TRIAL: the same question asked under each variant; a driver compiles a variant only
-        // where an answer differs.
+        // DEVIATE UNROLL-SPEED-TRIAL: the same question asked under each
+        // variant; a driver compiles a variant only where an answer
+        // differs.
         let variant = if count > 0 {
             Some(trial::SpeedUnroll::NoGrow)
         } else if run.options.opt_level == 2 && up.threshold < trial::WIDE_THRESHOLD {

@@ -532,8 +532,7 @@ fn items_trials(
     } else {
         tuning.trial_insts_max
     };
-    if cap.is_some_and(|most| kept.iter().filter(|item| matches!(item, Item::Inst(_))).count() > most)
-    {
+    if cap.is_some_and(|most| kept.iter().filter(|item| matches!(item, Item::Inst(_))).count() > most) {
         prefixes.capped.set(true);
         return Ok((kept, false, options, (false, false)));
     }

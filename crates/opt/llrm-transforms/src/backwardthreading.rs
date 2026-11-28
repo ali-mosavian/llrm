@@ -153,8 +153,7 @@ impl FunctionPass for BackwardThreading {
         // trip until the cap (QuickrBasic `B_GGET` -O2: 16 copies of
         // the pixel loop's header, +576 B). The paths of one block keep
         // the old rule until judged.
-        let originals: Option<IdSet<BlockId>> =
-            (chain > 1).then(|| unit.function.layout().iter().copied().collect());
+        let originals: Option<IdSet<BlockId>> = (chain > 1).then(|| unit.function.layout().iter().copied().collect());
         for _ in 0..self.max_threads {
             let dt = DomTree::of(unit.function);
             let loops = LoopInfo::analyze(unit.function, || DomTree::of(unit.function));

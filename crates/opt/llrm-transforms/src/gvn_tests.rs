@@ -1323,9 +1323,11 @@ b4:
     assert!(problems.is_empty(), "{problems:?}\n{}", printed(&module));
 }
 
-/// A switch with two cases to the join is two predecessors of it (`predecessors(CurrentBlock)` once per edge). With the
-/// value unavailable in the switch's block that is two predecessors without it, and the pin's scalar PRE refuses
-/// (`NumWithOut > 1`); walking each block once inserted into the switch block and made the phi.
+/// A switch with two cases to the join is two predecessors of it
+/// (`predecessors(CurrentBlock)` once per edge). With the value unavailable in
+/// the switch's block that is two predecessors without it, and the pin's scalar
+/// PRE refuses (`NumWithOut > 1`); walking each block once inserted into the
+/// switch block and made the phi.
 #[test]
 fn test_a_value_missing_on_two_edges_of_a_switch_is_not_made_available_by_pre() {
     let text = "define i16 @f(i16 %x, i16 %y, i1 %c) {

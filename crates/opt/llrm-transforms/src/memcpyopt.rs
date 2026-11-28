@@ -162,7 +162,10 @@ impl FunctionPass for MemCpyOpt {
             &*unit.function,
             Ok(Rc::new(llrm_analysis::manager::MssaGraph::new(mssa, Some(Rc::new(accesses))))),
         );
-        PreservedAnalyses::none().preserve::<Dominators>().preserve::<Loops>().preserve_updated::<llrm_analysis::manager::MemorySsa>()
+        PreservedAnalyses::none()
+            .preserve::<Dominators>()
+            .preserve::<Loops>()
+            .preserve_updated::<llrm_analysis::manager::MemorySsa>()
     }
 }
 

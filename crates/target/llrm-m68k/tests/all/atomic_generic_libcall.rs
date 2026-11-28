@@ -1,6 +1,7 @@
-//! clang leaves `_Atomic int` access on M68k as the generic `__atomic_load` / `__atomic_store` call (its target info
-//! sets no inline atomic width); QuickrBasic `tick.c` Os was 700 B against gcc's 362 B with 15 such calls. A 4-byte
-//! access is a plain `move` (M68kInstrAtomics.td).
+//! clang leaves `_Atomic int` access on M68k as the generic `__atomic_load` /
+//! `__atomic_store` call (its target info sets no inline atomic width);
+//! QuickrBasic `tick.c` Os was 700 B against gcc's 362 B with 15 such calls. A
+//! 4-byte access is a plain `move` (M68kInstrAtomics.td).
 
 use llrm_m68k::driver::{Level, assembly, cpu_of};
 
@@ -9,20 +10,24 @@ fn a_generic_atomic_load_or_store_of_a_long_is_a_move_not_a_call() {
     let source = include_str!("../data/atomic_generic_libcall.ll");
     for cpu in ["68000", "68020"] {
         let text = assembly(source, cpu_of(cpu).unwrap(), Level::Os).unwrap_or_else(|why| panic!("{cpu}: {why}"));
-        let body = |name: &str| text.split_once(&format!("{name}:")).map_or("", |(_, rest)| rest.split(".globl").next().unwrap_or(""));
+        let body = |name: &str| {
+            text.split_once(&format!("{name}:")).map_or("", |(_, rest)| rest.split(".globl").next().unwrap_or(""))
+        };
         for name in ["started_now", "start"] {
             assert!(!body(name).contains("__atomic"), "{cpu}: {name} stayed a call:\n{text}");
         }
         assert!(body("started_now").contains("started"), "{cpu}: no access to the flag:\n{text}");
-        // an address that may be odd (a 68000 address error) or unknown keeps the call
+        // an address that may be odd (a 68000 address error) or unknown keeps
+        // the call
         for name in ["odd_now", "through_pointer"] {
             assert!(body(name).contains("__atomic_load"), "{cpu}: {name} lost its call:\n{text}");
         }
     }
 }
 
-/// Linked with no atomic routine, the object runs at 68000 and 68020: the program stores through the generic store,
-/// reads back through the generic load and returns the value plus one.
+/// Linked with no atomic routine, the object runs at 68000 and 68020: the
+/// program stores through the generic store, reads back through the generic
+/// load and returns the value plus one.
 #[test]
 fn the_inlined_generic_accesses_run_at_68000_and_68020() {
     use std::process::Command;

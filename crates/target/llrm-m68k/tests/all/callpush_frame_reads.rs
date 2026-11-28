@@ -1,11 +1,14 @@
-//! u64_shift_variable_kinds -Os (68000/68020, +102/+104 B against gcc): volatile locals passed to a shift libcall are
-//! read from `(k,%sp)` between the argument stores. Any instruction naming `%sp` made the window unconvertible, so the
-//! fused store (`move.l (20,%sp), (4,%sp)`, 6 B) was never planned and each word cost a load into `%a1` and a store (8 B).
+//! u64_shift_variable_kinds -Os (68000/68020, +102/+104 B against gcc):
+//! volatile locals passed to a shift libcall are read from `(k,%sp)` between
+//! the argument stores. Any instruction naming `%sp` made the window
+//! unconvertible, so the fused store (`move.l (20,%sp), (4,%sp)`, 6 B) was
+//! never planned and each word cost a load into `%a1` and a store (8 B).
 
 use llrm_m68k::driver::{Level, assembly, cpu_of};
 
-/// `x << n` and `x >> n` of a volatile `u64` for several counts, each result reported in two words: the shifts stay
-/// libcalls (`__ashldi3`, `__lshrdi3`) and their arguments are frame words.
+/// `x << n` and `x >> n` of a volatile `u64` for several counts, each result
+/// reported in two words: the shifts stay libcalls (`__ashldi3`, `__lshrdi3`)
+/// and their arguments are frame words.
 fn ir() -> String {
     let mut text = String::from(
         "target datalayout = \"E-m:e-p:32:16:32-i8:8:8-i16:16:16-i32:16:32-n8:16:32-a:0:16-S16\"\n\
@@ -32,7 +35,8 @@ fn ir() -> String {
     text + "  ret i32 0\n}\n"
 }
 
-/// A frame word that only becomes a call argument is moved memory to memory, not through `%a1`.
+/// A frame word that only becomes a call argument is moved memory to memory,
+/// not through `%a1`.
 #[test]
 fn a_frame_word_passed_as_an_argument_is_not_loaded_into_a_register() {
     for cpu in ["68000", "68020"] {

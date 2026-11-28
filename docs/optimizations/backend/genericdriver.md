@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/genericdriver.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/genericdriver.rs); edit the header, not this file.
-<!-- src: crates/codegen/llrm-codegen/src/backend/genericdriver.rs sha256:eb6365edd03d483797451dc4cf29a966d4ac8dd56abca2996012258d33babeb8 -->
+<!-- src: crates/codegen/llrm-codegen/src/backend/genericdriver.rs sha256:088406900bf2039df09717e8bb83c68283fb569a0147a537d63067ab84c1da7b -->
 
 # genericdriver
 
@@ -30,10 +30,10 @@ L4300) and `ScheduleDAGMI::schedule`, `releaseSucc`, `releasePred`.
 - SB4: `computeCyclicCriticalPath`: `IsAcyclicLatencyLimited` stays off. It
   is only asked of a model with a micro-op buffer (Cyclone), not the
   in-order A510.
-- SB5b: the fast-cluster path of `BaseMemOpClusterMutation` (threshold 1000).
-- SB5: macro fusion, and
-  `tryBiasPhysRegs`/`reschedulePhysReg` (no region holds a physical
-  register, MS4).
+- SB5b: the fast-cluster path of `BaseMemOpClusterMutation` (threshold
+  1000).
+- SB5: macro fusion, and `tryBiasPhysRegs`/`reschedulePhysReg` (no region
+  holds a physical register, MS4).
 
 - SB9: a pre/post-indexed access reports no memory operand to the cluster
   mutation (`getMemOperandsWithOffsetWidth`); it exists only after
@@ -42,9 +42,9 @@ L4300) and `ScheduleDAGMI::schedule`, `releaseSucc`, `releasePred`.
 Owner arm64-phi; exit with the model branch that first needs each.
 
 ## Example
-A region where `A` and `B` have no predecessor, `C` reads both and `D` reads `C`.
-Picking `A` (top), `D` (bottom), `B` (top), `C` (bottom) gives the order below
-(node names are illustrative).
+A region where `A` and `B` have no predecessor, `C` reads both and `D` reads
+`C`. Picking `A` (top), `D` (bottom), `B` (top), `C` (bottom) gives the
+order below (node names are illustrative).
 
 ```text
 top picks:     A  B

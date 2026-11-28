@@ -59,15 +59,14 @@ fn a_counter_compared_before_its_increment_moves_between_no_registers() {
 fn a_compare_is_not_moved_above_a_step_that_writes_carry() {
     for level in ["-O2", "-Os"] {
         let text = assembly_of("../../../tests/run/c/counter_compare_after_step.c", level);
-        // the counter in `a` is compared with `cmp`; in `x` or `y` (`inx`/`iny` keep carry) with `cpx`/`cpy`
+        // the counter in `a` is compared with `cmp`; in `x` or `y` (`inx`/`iny`
+        // keep carry) with `cpx`/`cpy`
         let ops = ["cmp", "cpx", "cpy"];
         let before = ops.iter().any(|op| text.contains(&format!("  {op} #11\n  bcs")));
         let steps = ["adc #1", "inx", "iny"];
-        let after = steps
-            .iter()
-            .any(|step| ops.iter().any(|op| text.contains(&format!("{step}\n  {op} #12\n  beq"))));
-        // -O2 unrolls the 12-trip loop where the clocks repay the bytes (no compare left): only the
-        // rolled form has one to look for
+        let after = steps.iter().any(|step| ops.iter().any(|op| text.contains(&format!("{step}\n  {op} #12\n  beq"))));
+        // -O2 unrolls the 12-trip loop where the clocks repay the bytes (no
+        // compare left): only the rolled form has one to look for
         assert!(level == "-O2" || before || after, "{level}: the loop's compare is gone:\n{text}");
         let stale = ops.iter().any(|op| text.contains(&format!("adc #1\n  {op} #11\n  bcs")));
         assert!(!stale, "{level}: `bcs` reads the step's carry:\n{text}");

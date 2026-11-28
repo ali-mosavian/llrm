@@ -1,17 +1,19 @@
-//! A restore of the condition codes from the register that still holds them is dropped:
-//! `cmp.l (%a1), %d3; move.w %sr, %d4; scs %d5; move.w %d4, %ccr; bls` is the same without the
-//! `move.w %d4, %ccr` (`scs` leaves the codes alone).
+//! A restore of the condition codes from the register that still holds them is
+//! dropped: `cmp.l (%a1), %d3; move.w %sr, %d4; scs %d5; move.w %d4, %ccr; bls`
+//! is the same without the `move.w %d4, %ccr` (`scs` leaves the codes alone).
 //!
 //! # How it works
-//! [`drop_redundant_restores`] runs on the allocated function. Walking a block, the register a
-//! `CCR_SAVE` wrote holds the codes until an instruction sets them again (a flag setter, a copy
-//! or load that becomes a `move`, a call) or writes that register. A `CCR_RESTORE` from it while
-//! it does is a no-op and goes.
+//! [`drop_redundant_restores`] runs on the allocated function. Walking a block,
+//! the register a `CCR_SAVE` wrote holds the codes until an instruction sets
+//! them again (a flag setter, a copy or load that becomes a `move`, a call) or
+//! writes that register. A `CCR_RESTORE` from it while it does is a no-op and
+//! goes.
 //!
-//! DEVIATE: the pin keeps both copies (`copyPhysReg` of `$ccr` is never pruned; the emitter
-//! saves where the DAG order had a setter between, and a later sink may move it out). Reason:
-//! `move to ccr` is 12 clk at 68000, a restore of nothing. Exit: 2026-12-10, when the shared
-//! flow's copy propagation owns `$ccr` copies.
+//! DEVIATE: the pin keeps both copies (`copyPhysReg` of `$ccr` is never pruned;
+//! the emitter saves where the DAG order had a setter between, and a later sink
+//! may move it out). Reason: `move to ccr` is 12 clk at 68000, a restore of
+//! nothing. Exit: 2026-12-10, when the shared flow's copy propagation owns
+//! `$ccr` copies.
 
 use llrm_lir::registers::RegId;
 use llrm_spike_mf::{Kind, Operand};
@@ -39,10 +41,15 @@ pub fn drop_redundant_restores(
                     };
                 }
                 Kind::Op("CCR_RESTORE") => {
-                    let from = inst.operands.iter().find_map(|operand| match operand {
-                        Operand::Use(register) => Some(root(*register, assignment)),
-                        _ => None,
-                    });
+                    let from = inst
+                        .operands
+                        .iter()
+                        .find_map(
+                            |operand| match operand {
+                                Operand::Use(register) => Some(root(*register, assignment)),
+                                _ => None,
+                            },
+                        );
                     if held.is_some() && held == from {
                         block.insts.remove(at);
                         dropped += 1;
@@ -56,7 +63,12 @@ pub fn drop_redundant_restores(
                     let rewrites_held = held.is_some_and(|register| {
                         inst.operands
                             .iter()
-                            .any(|operand| matches!(operand, Operand::Def(def) if root(*def, assignment) == register))
+                            .any(
+                                |operand| matches!(
+                                    operand,
+                                    Operand::Def(def) if root(*def, assignment) == register
+                                ),
+                            )
                     });
                     if clobbers_codes || rewrites_held {
                         held = None;

@@ -5,8 +5,9 @@
 //! [`select`] morphs `any_extend` from `i8` or `i16` to a wider type into
 //! `TargetOpcode::COPY` (the machine function sees a copy of the narrow
 //! register into a wide one; where the two are one data register it is no
-//! code at all). `and (any_extend x), 63` is then `moveq #63,%d1; and.l %d0,%d1`
-//! (4 B), not `moveq #0,%d1; move.b %d0,%d1; moveq #63,%d2; and.l %d2,%d1`.
+//! code at all). `and (any_extend x), 63` is then `moveq #63,%d1; and.l
+//! %d0,%d1` (4 B), not `moveq #0,%d1; move.b %d0,%d1; moveq #63,%d2; and.l
+//! %d2,%d1`.
 //!
 //! DEVIATE M68K-ANYEXT: the pin selects `(i32 (anyext i8))` as `MOVZXd32d8`
 //! and `(i16 (anyext i8))` as its low word
@@ -37,7 +38,10 @@ pub fn select(
     let source = adapter.dag.operand(here, 0);
     let from = adapter.dag.value_type(source);
     let to = adapter.dag.value_type(here);
-    if !matches!((from, to), (EVT::I8, EVT::I16 | EVT::I32) | (EVT::I16, EVT::I32)) {
+    if !matches!(
+        (from, to),
+        (EVT::I8, EVT::I16 | EVT::I32) | (EVT::I16, EVT::I32)
+    ) {
         return None;
     }
     let value = Dag::operand(adapter, node, 0);

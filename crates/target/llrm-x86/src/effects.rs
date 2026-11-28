@@ -377,15 +377,20 @@ pub fn effects(
         // Nothing is read, but the address of a memory operand would be; there
         // is none.
     }
-    // A shift by a count that is none in the operand's count mask changes no flag: five bits, six for a 64-bit operand
-    // (`shr rax, 32` does).
+    // A shift by a count that is none in the operand's count mask changes no
+    // flag: five bits, six for a 64-bit operand (`shr rax, 32` does).
     let operand = match what.dests.first() {
         Some(Loc::Held(held)) => Some(held.width),
         Some(place) => bytes_of(place),
         None => None,
     };
     let count_mask = if operand == Some(8) { 63 } else { 31 };
-    if row.writes.contains(&"count") && matches!(sources.last(), Some(Loc::Imm(count)) if count.value & count_mask == 0) {
+    if row.writes.contains(&"count")
+        && matches!(
+            sources.last(),
+            Some(Loc::Imm(count)) if count.value & count_mask == 0
+        )
+    {
         (found.flags_read, found.flags_written) = (0, 0);
     }
     let mut writes = Vec::new();

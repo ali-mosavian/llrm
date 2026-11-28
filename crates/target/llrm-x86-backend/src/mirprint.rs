@@ -524,7 +524,8 @@ fn instruction(
             writeln!(out, "    {}{}{form} {}, {right}, {eflags}", op.to_uppercase(), bits(m.width)?, cell(m, symbols)?)
                 .unwrap()
         }
-        // The carry half of a wide add of a cell (`add [c], 1` then `adc [c+4], 0`).
+        // The carry half of a wide add of a cell (`add [c], 1` then `adc [c+4],
+        // 0`).
         (op @ ("adc" | "sbb"), Some(Loc::Mem(m)), [Loc::Mem(read), rhs]) if read == m => {
             let (form, right) = match rhs {
                 Loc::Held(b) => ("mr", vreg(b)?),
@@ -1830,13 +1831,20 @@ mod tests {
         assert!(text.contains("%4 = COPY $rsi\n    %5 = COPY $rdi\n    %6 = COPY $rcx"), "{text}");
     }
 
-    /// `adc [cell], imm` (the high half of QB's 64-bit instruction counter, `EXEC_COUNT`) was refused ("`adc` (Binary) with 1 destinations and 2
-    /// sources"), so `exec_loop` at m32 never reached `LLRM_MIR_PRINT`: the pin's MIR of it could not be compared with ours.
+    /// `adc [cell], imm` (the high half of QB's 64-bit instruction counter,
+    /// `EXEC_COUNT`) was refused ("`adc` (Binary) with 1 destinations and 2
+    /// sources"), so `exec_loop` at m32 never reached `LLRM_MIR_PRINT`: the
+    /// pin's MIR of it could not be compared with ours.
     #[test]
     fn test_an_add_with_carry_to_a_cell_prints_as_adc32mi() {
         use llrm_lir::Mem;
         let cell = Mem { width: 4, ..Mem::new(None, 0) };
-        let adc = insn("adc", Operation::Binary, vec![Loc::Mem(cell.clone())], vec![Loc::Mem(cell), Loc::Imm(Imm { value: 0, width: 4, address: None })]);
+        let adc = insn(
+            "adc",
+            Operation::Binary,
+            vec![Loc::Mem(cell.clone())],
+            vec![Loc::Mem(cell), Loc::Imm(Imm { value: 0, width: 4, address: None })],
+        );
         let ret = insn("", Operation::Return, vec![], vec![]);
         let blocks = vec![Block::from(LirBlock::new(0, vec![adc, ret]))];
         let body = LirBody::new("adc", 0, blocks, IndexMap::default(), IndexMap::default());
@@ -1844,13 +1852,25 @@ mod tests {
         assert!(text.contains("ADC32mi") && text.contains("implicit-def dead $eflags, implicit $eflags"), "{text}");
     }
 
-    /// `call [table + 4 * index]` (QB's opcode handler call) was refused ("`call` (Call) with 0 destinations and 1 sources"), so `exec_loop` at
+    /// `call [table + 4 * index]` (QB's opcode handler call) was refused
+    /// ("`call` (Call) with 0 destinations and 1 sources"), so `exec_loop` at
     /// m32 printed nothing.
     #[test]
     fn test_a_call_through_a_cell_prints_as_call32m() {
         use llrm_lir::{Addr, Mem, Space};
-        let table = Mem { width: 4, scale: 4, index: Some(Held { value: 2, width: 4, offset: 0 }), ..Mem::new(Some(Addr::new(Space::Segment, 1)), 0) };
-        let what = Semantics { name: Some("call".into()), dests: vec![], sources: vec![Loc::Mem(table)], indirect: true, ..Semantics::new(Operation::Call) };
+        let table = Mem {
+            width: 4,
+            scale: 4,
+            index: Some(Held { value: 2, width: 4, offset: 0 }),
+            ..Mem::new(Some(Addr::new(Space::Segment, 1)), 0)
+        };
+        let what = Semantics {
+            name: Some("call".into()),
+            dests: vec![],
+            sources: vec![Loc::Mem(table)],
+            indirect: true,
+            ..Semantics::new(Operation::Call)
+        };
         let call = Arc::new(Insn::new(0, None, Some(what), vec![], vec![2]));
         let ret = insn("", Operation::Return, vec![], vec![]);
         let blocks = vec![Block::from(LirBlock::new(0, vec![call, ret]))];
