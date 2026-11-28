@@ -17,7 +17,7 @@
 //! # Used by
 //! The shadow harness (sdag-d) through `llrm_dagisel::interp::Selector`.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
 use llrm_dagisel::addr::{AddrDag, Symbol, SymbolKind, Wrapped};
 use llrm_dagisel::dag::{Dag, FpClass, LoadExt, MemRef, SDValue as PinValue};
@@ -954,7 +954,7 @@ impl Dag for DagisAdapter<'_> {
         node: u32,
     ) -> bool {
         match self.dag.nodes()[node as usize].data {
-            NodeData::Mem(info) => !info.volatile,
+            NodeData::Mem(info) => info.is_simple(),
             _ => false,
         }
     }

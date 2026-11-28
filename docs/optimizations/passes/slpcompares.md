@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/slpcompares.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/slpcompares.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/slpcompares.rs sha256:fa9a2952a0322b85d4587937a56dcbe26e204671ea18591990b33d35b5dc758a -->
+<!-- src: crates/opt/llrm-transforms/src/slpcompares.rs sha256:e5676f33a096664a68a2e4b9949fb781ee7d44e72a9f189ca52254ae8e21d5be -->
 
 # slpcompares
 
@@ -42,8 +42,8 @@ DEVIATE 2: only equalities under `and`; `ne` under `or` is the same fact
 the other way. Exit: the dual.
 
 DEVIATE 3: the wide load's alignment is the narrow load's; a target is
-asked only whether it has vector registers (`vector_register_bits`, word vectors
-excluded), not
+asked only whether it has vector registers (`vector_register_bits`, word
+vectors excluded), not
 whether a misaligned access is fast.
 
 ## Runs

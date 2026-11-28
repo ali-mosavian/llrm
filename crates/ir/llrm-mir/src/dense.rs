@@ -189,7 +189,8 @@ impl<K: Dense> IdSet<K> {
     }
 
     /// Room for ids below `ids`: a set filled from empty doubles its words as
-    /// the ids rise (24,743 inserts of `IvUsers` cost 18 M on memory_expansion).
+    /// the ids rise (24,743 inserts of `IvUsers` cost 18 M on
+    /// memory_expansion).
     pub fn with_capacity(ids: usize) -> Self {
         Self { words: vec![0; ids.div_ceil(64)], len: 0, key: PhantomData }
     }
@@ -1221,7 +1222,8 @@ mod share_tests {
     }
 
     /// A set filled from empty doubles its words as the ids rise; one made with
-    /// room for them does not (IvUsers: 24,743 inserts, 18 M on memory_expansion).
+    /// room for them does not (IvUsers: 24,743 inserts, 18 M on
+    /// memory_expansion).
     #[test]
     fn a_set_made_with_room_for_its_ids_never_grows() {
         use super::{IdSet, idset_resizes};

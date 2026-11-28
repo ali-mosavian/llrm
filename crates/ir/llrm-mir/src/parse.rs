@@ -652,7 +652,20 @@ impl Parser {
         let Some(&aliasee) = self.globals.get(&target) else {
             return self.fail(format!("@{} is never defined", display(&target)));
         };
-        self.module.aliases.push(Alias { name: text, linkage, visibility, unnamed_addr, address_space, ty, aliasee, offset: 0 });
+        self.module
+            .aliases
+            .push(
+                Alias {
+                    name: text,
+                    linkage,
+                    visibility,
+                    unnamed_addr,
+                    address_space,
+                    ty,
+                    aliasee,
+                    offset: 0,
+                },
+            );
         Ok(())
     }
 

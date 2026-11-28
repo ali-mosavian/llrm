@@ -2,10 +2,7 @@
 
 use std::process::Command;
 
-fn assembly(
-    name: &str,
-    ir: &str,
-) -> String {
+fn assembly(ir: &str) -> String {
     let guard = tempfile::tempdir().unwrap();
     let dir = guard.path().to_path_buf();
     let source = dir.join("g.ll");
@@ -28,7 +25,7 @@ fn assembly(
 /// for x18).
 #[test]
 fn a_word_in_de_shifted_left_doubles_through_hl() {
-    let text = assembly("de", "define i16 @g(i16 %a, i16 %b) {\n  %r = shl i16 %b, 3\n  ret i16 %r\n}\n");
+    let text = assembly("define i16 @g(i16 %a, i16 %b) {\n  %r = shl i16 %b, 3\n  ret i16 %r\n}\n");
     assert!(!text.contains("sla e"), "{text}");
     assert_eq!(text.matches("add hl, hl").count(), 3, "{text}");
 }
@@ -38,7 +35,7 @@ fn a_word_in_de_shifted_left_doubles_through_hl() {
 /// hl` between them.
 #[test]
 fn a_multiply_by_eighteen_doubles_through_hl_without_a_cancelling_exchange() {
-    let text = assembly("x18", "define i16 @g(i16 %a, i16 %b) {\n  %r = mul i16 %b, 18\n  ret i16 %r\n}\n");
+    let text = assembly("define i16 @g(i16 %a, i16 %b) {\n  %r = mul i16 %b, 18\n  ret i16 %r\n}\n");
     assert!(text.matches("sla").count() <= 1, "{text}");
     assert!(!text.contains("ex de, hl\n\tex de, hl"), "{text}");
 }

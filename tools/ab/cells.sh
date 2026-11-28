@@ -19,6 +19,8 @@ for f in "$D"/base/llrm-*; do
 done
 [ $differs = 1 ] || { echo "cells: base and new are the same binaries" >&2; exit 2; }
 [ "$(readlink -f "$D/base")" != "$(readlink -f "$D/new")" ] || { echo "cells: base and new are one directory" >&2; exit 2; }
+# Each side is the commit LLRM_EXPECT_BASE_SHA / LLRM_EXPECT_SHA names, built clean (stamp.py require_named).
+python3 "$repo/tools/stamp.py" --require-clean base_sha "$D/base" && python3 "$repo/tools/stamp.py" --require-clean sha "$D/new" || exit 2
 . "$(dirname "$0")/../fresh_compile.sh"
 # An include dir that is not there is a broken sweep, not a program that fails (2026-11-10: four jpeg/stft programs came out EMPTY at -m32 for lack of
 # `-I toolchain/clang/os/x86-m32` and were first counted as programs that do not compile).

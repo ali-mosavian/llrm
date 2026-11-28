@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/loopvectorizenarrow.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/loopvectorizenarrow.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/loopvectorizenarrow.rs sha256:fe507152278ab9b04f6787cfa7e622e5567700b4ce3b5dac222886fd256d5b71 -->
+<!-- src: crates/opt/llrm-transforms/src/loopvectorizenarrow.rs sha256:0181faf7c57a8f7fa198a69af6f9f8a044458a07c46ed78ca5ef1fbc7cc96c4c -->
 
 # loopvectorizenarrow
 
@@ -22,7 +22,8 @@ are zero. The `trunc` of the counter is what the vectorizer already widens
 to a narrow `vec.ind`.
 
 ## Runs
-Inside `loopvectorize`, on the integer chains of a loop's induction before the plan is costed.
+Inside `loopvectorize`, on the integer chains of a loop's induction before
+the plan is costed.
 
 ## Example
 `(i & 15) + 1` with `i: i64` feeding a 16-bit multiply becomes

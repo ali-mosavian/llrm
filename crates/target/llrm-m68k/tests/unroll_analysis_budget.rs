@@ -1,4 +1,5 @@
-//! A loop of a great many trips is not simulated trip by trip to price an unroll.
+//! A loop of a great many trips is not simulated trip by trip to price an
+//! unroll.
 
 use std::time::Instant;
 

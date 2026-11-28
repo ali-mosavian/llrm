@@ -50,7 +50,8 @@ fn the_action_table_is_built_once_per_feature_set_not_per_block() {
     assembly(IR, Width::W32, options).unwrap();
     let built = lowerings_built() - before;
     assert_eq!(built, 2, "two feature sets, ten blocks, built {built} times");
-    let body = |name: &str| text[text.find(&format!("{name}:")).unwrap()..].split("end_function").next().unwrap().to_string();
+    let body =
+        |name: &str| text[text.find(&format!("{name}:")).unwrap()..].split("end_function").next().unwrap().to_string();
     assert!(body("narrow_default").contains("i32.extend8_s"), "{text}");
     assert!(!body("narrow_without").contains("i32.extend8_s"), "{text}");
 }

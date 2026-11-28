@@ -812,7 +812,8 @@ b0:
 }
 
 /// The mask of a vector `and` is kept at every lane width, and when the
-/// operand is an `add` result: the one-bit range took all of them for redundant.
+/// operand is an `add` result: the one-bit range took all of them for
+/// redundant.
 #[test]
 fn test_a_splat_mask_of_a_vector_is_kept_at_every_lane_width() {
     let text = "define <4 x i32> @f(<4 x i32> %x, <8 x i8> %y, <4 x i16> %z) {

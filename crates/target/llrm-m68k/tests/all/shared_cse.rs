@@ -1,7 +1,7 @@
 //! `bench_sieve` (the pin's -O2 IR): the `ret` phi takes 0 from the entry and
 //! from the block after the clear, and the sum from the loop. The pin's
-//! `MachineCSE` makes the two zeros one (`moveq #0,%d2` in the entry, one exit);
-//! the m68k driver had no CSE, so each early return kept its own
+//! `MachineCSE` makes the two zeros one (`moveq #0,%d2` in the entry, one
+//! exit); the m68k driver had no CSE, so each early return kept its own
 //! `moveq #0,%d0; bra exit` block (59 lines against 53).
 
 use llrm_m68k::compile::{Options, items_bytes, items_with, text_with};
@@ -9,15 +9,17 @@ use llrm_m68k::dagisel::hooks::Cpu;
 
 const SIEVE: &str = include_str!("../fixtures/sieve_pin_o2.ll");
 
-// -Os: the trial keeps the shared stage where it is smaller; -O1..-O3 keep it where clocks fall.
+// -Os: the trial keeps the shared stage where it is smaller; -O1..-O3 keep it
+// where clocks fall.
 fn text(shared_cse: bool) -> String {
     let mut module = llrm_mir::parse::module(SIEVE).expect("parses");
     llrm_mir::parse::upgrade_lifetimes(&mut module);
-    text_with(&module, "bench_sieve", Cpu::M68000, Options { shared_cse, size: true, ..Options::default() }).expect("compiles")
+    text_with(&module, "bench_sieve", Cpu::M68000, Options { shared_cse, size: true, ..Options::default() })
+        .expect("compiles")
 }
 
-/// A `moveq #0,%d0` that only returns: followed by a branch to the exit, or (since #9565 lays the exit out next) by
-/// the exit's label.
+/// A `moveq #0,%d0` that only returns: followed by a branch to the exit, or
+/// (since #9565 lays the exit out next) by the exit's label.
 fn zero_exits(asm: &str) -> usize {
     asm.matches("moveq\t#0, %d0\n\tbra").count() + asm.matches("moveq\t#0, %d0\n.LBB").count()
 }
@@ -25,7 +27,10 @@ fn zero_exits(asm: &str) -> usize {
 fn bytes(shared_cse: bool) -> usize {
     let mut module = llrm_mir::parse::module(SIEVE).expect("parses");
     llrm_mir::parse::upgrade_lifetimes(&mut module);
-    items_bytes(&items_with(&module, "bench_sieve", Cpu::M68000, Options { shared_cse, size: true, ..Options::default() }).expect("compiles"))
+    items_bytes(
+        &items_with(&module, "bench_sieve", Cpu::M68000, Options { shared_cse, size: true, ..Options::default() })
+            .expect("compiles"),
+    )
 }
 
 /// The premise: without the stage the early return of 0 is a block of its own.
@@ -39,7 +44,8 @@ fn without_cse_each_early_return_of_zero_is_a_block_of_its_own() {
 fn with_cse_the_zeros_of_the_return_phi_are_one_definition() {
     let shared = text(true);
     assert_eq!(zero_exits(&shared), 0, "a zero exit stayed:\n{shared}");
-    // Bytes, not lines: the lines are equal since #9565 (146 B plain, 144 B shared, 2026-11-14).
+    // Bytes, not lines: the lines are equal since #9565 (146 B plain, 144 B
+    // shared, 2026-11-14).
     assert!(bytes(true) < bytes(false), "no smaller: {} B against {} B", bytes(true), bytes(false));
 }
 

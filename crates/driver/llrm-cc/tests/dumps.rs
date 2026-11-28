@@ -25,10 +25,7 @@ fn compile(
     std::fs::write(dir.join("d.c"), "int f(int a, int b) { return a * b + 1; }\n").unwrap();
     let run = Command::new(env!("CARGO_BIN_EXE_llrm-cc-bin"))
         .env("LLRM_CC_TARGET", "x86_32-wat")
-        .env(
-            "LLRM_LLC",
-            std::env::var_os("LLRM_LLC").unwrap_or_else(|| target_dir::of(&root).join("release/llrm-llc").into()),
-        )
+        .env("LLRM_LLC", target_dir::llc(&root))
         .envs(env.iter().copied())
         .args(["-O2", "-w", "-c"])
         .args(flags)

@@ -378,7 +378,7 @@ fn module_bytes(
         bytes += i64::from(estimate(request.cpu, piece)?.bytes);
     }
     let routines = image_of_texts(names, &pieces);
-    if std::env::var_os("LLRM_DEBUG_TRIAL").is_some() {
+    if llrm_support::env_set("LLRM_DEBUG_TRIAL") {
         eprintln!("trial mul call: functions {bytes} B, routines {} B {routines:?}", image_bytes(&routines));
     }
     Ok(bytes + image_bytes(&routines))
@@ -412,9 +412,7 @@ pub fn call_when_it_pays(
     request: &Request,
 ) -> Result<(), String> {
     use crate::dagisel::function::with_cold_multiply_calls;
-    if !matches!(request.level, Level::O1 | Level::O2 | Level::O3)
-        || std::env::var_os("LLRM_6502_NO_MUL_CALL").is_some()
-    {
+    if !matches!(request.level, Level::O1 | Level::O2 | Level::O3) || llrm_support::env_set("LLRM_6502_NO_MUL_CALL") {
         return Ok(());
     }
     // static call weight, as `hotmultiply` counts it: ten a level of loop
@@ -457,7 +455,7 @@ pub fn call_when_it_pays(
         .collect();
     let (kept, tried) =
         (module_bytes(module, names, &current, request)?, module_bytes(module, names, &called, request)?);
-    if std::env::var_os("LLRM_DEBUG_TRIAL").is_some() {
+    if llrm_support::env_set("LLRM_DEBUG_TRIAL") {
         eprintln!("trial mul call: {} functions, {tried} B against {kept} B kept", again.len());
     }
     // -O1: bytes strict, clocks free. -O2/-O3: the judge's rate: the bytes the

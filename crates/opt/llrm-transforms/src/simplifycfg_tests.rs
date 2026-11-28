@@ -1710,8 +1710,9 @@ b0:
 }
 
 /// Compile time: every call in every block was asked `noreturn` through a set
-/// of all its attribute facts, made and dropped (1.7 M Ir of `unreachable_removed`'s
-/// 18 M on memexp -O2, 22.7 K sets). The pin tests the one attribute.
+/// of all its attribute facts, made and dropped (1.7 M Ir of
+/// `unreachable_removed`'s 18 M on memexp -O2, 22.7 K sets). The pin tests the
+/// one attribute.
 #[test]
 fn test_the_noreturn_question_makes_no_fact_set() {
     let mut module = parsed(
@@ -1747,9 +1748,9 @@ fn folded_with_phiopt_rule(
     printed(&module)
 }
 
-/// sfm16_dbg's `if (c) { if (bad == 0) first = i; bad++; }` in a loop: after the
-/// inner diamond became a select the outer arm holds two statements. The pin
-/// folds it (cost 2 of 4) and the loop-carried `bad` waits on a select each
+/// sfm16_dbg's `if (c) { if (bad == 0) first = i; bad++; }` in a loop: after
+/// the inner diamond became a select the outer arm holds two statements. The
+/// pin folds it (cost 2 of 4) and the loop-carried `bad` waits on a select each
 /// iteration, +64.8% against gcc, whose phiopt
 /// (`empty_bb_or_one_feeding_into_p`) takes only an arm of one statement and
 /// keeps the branch. Off the recurrence, or with one statement, it still folds.
@@ -1790,8 +1791,10 @@ b5:
     assert!(folded_with_phiopt_rule(looped, false).contains("select i1 %c"), "the pin folds it");
     let kept = folded_with_phiopt_rule(looped, true);
     assert!(!kept.contains("select i1 %c"), "{kept}");
-    let shallow = looped
-        .replace("  %m1 = xor i64 %m, %n\n  %m2 = add i64 %m1, 3\n  %m3 = mul i64 %m2, 5\n  %c = icmp eq i64 %m3, 0\n", "  %c = icmp eq i64 %m, 0\n");
+    let shallow = looped.replace(
+        "  %m1 = xor i64 %m, %n\n  %m2 = add i64 %m1, 3\n  %m3 = mul i64 %m2, 5\n  %c = icmp eq i64 %m3, 0\n",
+        "  %c = icmp eq i64 %m, 0\n",
+    );
     assert!(
         folded_with_phiopt_rule(&shallow, true).contains("select i1 %c"),
         "a condition no later than the values keeps the select (sfm16_float_f2i: the convert is the later)"

@@ -11,7 +11,8 @@
 //! Every site that swaps the two arms of a `br` or `select` in place.
 //!
 //! # Example
-//! When the two arms of a conditional branch change places, its weights change places too.
+//! When the two arms of a conditional branch change places, its weights change
+//! places too.
 //!
 //! ```text
 //! br i1 %c, label %a, label %b, !prof !{"branch_weights", i32 90, i32 10}

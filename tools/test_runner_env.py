@@ -18,3 +18,11 @@ def test_a_buildslot_test_passes_inside_the_landing_batch_environment():
     here = Path(__file__).resolve().parent
     done = subprocess.run([sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", "test_buildslot.py::test_a_cargo_argv_or_shell_string_is_wrapped_and_anything_else_is_not"], cwd=here, env={**os.environ, "BUILDSLOT_LANDING": "1"}, capture_output=True, text=True)
     assert done.returncode == 0, done.stdout[-400:]
+
+
+def test_the_runners_measure_ref_and_ow_tree_do_not_refuse_an_ab_test():
+    """runner.env exports LLRM_OW and LLRM_MEASURE_REF; ab_env refused them as pipeline switches, and #10971's ab_env and llrmbin tests failed in the batch (7) and passed in a shell."""
+    here = Path(__file__).resolve().parent
+    env = {**os.environ, "LLRM_OW": "/nowhere", "LLRM_MEASURE_REF": "origin/release/next"}
+    done = subprocess.run([sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", "test_ab_env.py", "test_llrmbin.py"], cwd=here, env=env, capture_output=True, text=True)
+    assert done.returncode == 0, done.stdout[-600:]

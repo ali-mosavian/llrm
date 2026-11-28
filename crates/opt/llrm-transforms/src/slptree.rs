@@ -67,8 +67,7 @@ use llrm_mir::module::{BlockId, Function, InstId, Operand, ValueDef, ValueId};
 use llrm_mir::opcode::{BinaryOp, CallInfo, CastOp, Flags, FloatPredicate, IntPredicate, Opcode, Tail};
 use llrm_mir::passes::Declared;
 use llrm_mir::tti::{
-    ArithOp, CastKind, CmpSel, CostKind, LaneOp, MemoryOp, OperandInfo, Predicate, Tti, Ty, VectorInstrContext,
-    VectorTy,
+    ArithOp, CastKind, CmpSel, CostKind, LaneOp, MemoryOp, Predicate, Tti, Ty, VectorInstrContext, VectorTy,
 };
 use llrm_mir::types::{FloatKind, Type, TypeId};
 
@@ -1259,7 +1258,6 @@ pub(crate) fn try_inserts(
     let mut entries = builder.entries;
     share_gathers(&mut entries);
     let tree = Tree { entries, block, pure_calls: facts.pure_calls.clone(), reschedule: false, reduction: None };
-    let made = builder.made;
     if tiny_and_not_fully_vectorizable(&tree) {
         llrm_support::debug!("slp", "insert tree x{}: tiny", inserts.len());
         return None;

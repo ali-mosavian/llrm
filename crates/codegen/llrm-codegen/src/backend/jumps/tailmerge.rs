@@ -955,6 +955,7 @@ fn _leaving(
 /// `TailMergeBlocks` to a fixed point on a placed body whose every fall-through
 /// is an explicit jump (`None` where nothing merged); `size` for a body that is
 /// optimised for size.
+#[cfg(test)]
 pub fn merged(
     body: &LirBody,
     size: bool,

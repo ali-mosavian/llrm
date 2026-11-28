@@ -71,12 +71,14 @@ impl Level {
     }
 }
 
-/// The `-f` switches of the command line (`-fno-inline=NAME`, `-fexcess-precision=`), applied to every mid-end run of the process: the
+/// The `-f` switches of the command line (`-fno-inline=NAME`,
+/// `-fexcess-precision=`), applied to every mid-end run of the process: the
 /// same parser as every other backend's `llc`.
 static POLICY: std::sync::Mutex<llrm_codegen::driver::policy::Policy> =
     std::sync::Mutex::new(llrm_codegen::driver::policy::Policy::new());
 
-/// Records `flag` if the driver passes it on to a backend; false when it is not one.
+/// Records `flag` if the driver passes it on to a backend; false when it is not
+/// one.
 pub fn pass_flag(flag: &str) -> bool {
     POLICY.lock().unwrap().take(flag)
 }
@@ -93,7 +95,7 @@ fn optimized(
     // through it (`LLRM_WASM_IR`) is compared with the pin's `llc` as it
     // stands. A second run is no fixed point (it inlined `gcd` in recgcd
     // -O1).
-    let mut options = if std::env::var_os("LLRM_WASM_BACKEND_ONLY").is_some() {
+    let mut options = if llrm_support::env_set("LLRM_WASM_BACKEND_ONLY") {
         MidEnd::none()
     } else {
         MidEnd { library: c_library(), ..level.mid_end() }
@@ -110,7 +112,7 @@ fn optimized(
     program.modules.iter_mut().try_for_each(llrm_transforms::memsetpattern::expanded)?;
     let module = program.modules.remove(0);
     // `LLRM_WASM_IR=1`: the module the backend gets, on standard error.
-    if std::env::var_os("LLRM_WASM_IR").is_some() {
+    if llrm_support::env_set("LLRM_WASM_IR") {
         eprintln!("{}", llrm_mir::print::module(&module));
     }
     Ok(module)
@@ -164,7 +166,8 @@ fn prepared(
     if options.level != Level::O0 {
         module = optimized(module, options.level)?;
     }
-    // `PreISelIntrinsicLowering` runs `LowerConstantIntrinsics` at every level; at -O0 the mid-end has not.
+    // `PreISelIntrinsicLowering` runs `LowerConstantIntrinsics` at every level;
+    // at -O0 the mid-end has not.
     llrm_transforms::lowerconstantintrinsics::module_lowered(&mut module)?;
     llrm_mir::atomic::lowered_single_thread(&mut module)?;
     crate::fix_function_bitcasts::fix(&mut module)?;

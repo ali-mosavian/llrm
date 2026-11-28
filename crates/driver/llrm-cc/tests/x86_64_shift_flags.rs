@@ -1,6 +1,8 @@
-//! `shr rax, 32` wrote no flag in the effects table (the count was masked with 31 at every width; a 64-bit shift masks
-//! with 63), so the two-address pass moved it between a `test` and its `jne` and the branch took the wrong arm: QuickrBasic's
-//! `FOR i# = 1 TO 2` compiled as a single loop at -O2. Needs `LLRM_LLC` and a host `cc`.
+//! `shr rax, 32` wrote no flag in the effects table (the count was masked with
+//! 31 at every width; a 64-bit shift masks with 63), so the two-address pass
+//! moved it between a `test` and its `jne` and the branch took the wrong arm:
+//! QuickrBasic's `FOR i# = 1 TO 2` compiled as a single loop at -O2. Needs
+//! `LLRM_LLC` and a host `cc`.
 
 use std::path::Path;
 use std::process::Command;

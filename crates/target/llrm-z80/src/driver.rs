@@ -195,7 +195,7 @@ pub fn program(
         );
     FINGERPRINT.with(|held| held.set(printed));
     if let (Some(variant), Some(base), Some(now)) = (request.unroll_variant, base, printed) {
-        if std::env::var_os("LLRM_DEBUG_UNROLL").is_some() {
+        if llrm_support::env_set("LLRM_DEBUG_UNROLL") {
             eprintln!("unroll {variant:?}: {} instructions against {}", now.instructions, base.instructions);
         }
         if now.hash == base.hash {
@@ -423,7 +423,7 @@ pub fn selections_with_alternatives(
     selections_reusing(text, request, None).map(|(main, alternatives, _)| (main, alternatives))
 }
 
-/// What the mid-end made of each function of a module, hashed by its text.
+// What the mid-end made of each function of a module, hashed by its text.
 thread_local! {
     /// The functions [`selections_reusing`] selected (not took from `reuse`),
     /// in order.
@@ -496,10 +496,8 @@ pub fn selections_reusing(
         crate::dagisel::function::FLAT_LOOP_TRIPS.with(|one| one.set(request.flat_loop_trips));
         crate::dagisel::pipeline::STRICT_LEVEL
             .with(|one| one.set(matches!(request.level, Level::O1 | Level::Os | Level::Oz)));
-        crate::dagisel::pipeline::O1_LEVEL.with(|one| one.set(request.level == Level::O1));
         let one = select_function_with(module, name, request.cpu, request.level != Level::O0);
         crate::dagisel::pipeline::STRICT_LEVEL.with(|one| one.set(false));
-        crate::dagisel::pipeline::O1_LEVEL.with(|one| one.set(false));
         one
     };
     // A form whose long adds became carry ops is also selected with them left

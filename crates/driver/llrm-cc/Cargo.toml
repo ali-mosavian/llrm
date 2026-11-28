@@ -9,9 +9,7 @@ description = "cc-compatible driver: the pinned clang's front end, llrm's optimi
 llrm-driver = { workspace = true }
 llrm-mir = { workspace = true }
 llrm-target = { workspace = true }
-llrm-x86-m16 = { workspace = true }
-llrm-x86-m32 = { workspace = true }
-llrm-x86-m64 = { workspace = true }
+llrm-arm64 = { workspace = true }
 serde = { workspace = true }
 toml = { workspace = true }
 

@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/cgpsinkops.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/cgpsinkops.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/cgpsinkops.rs sha256:20be4f5adae88dd82dcaa661146ed683b445b0fdf9ef920dd56f63e11d782ee8 -->
+<!-- src: crates/opt/llrm-transforms/src/cgpsinkops.rs sha256:ab5e455d6e9dbe00940260a8457ac8e00405f989cf9eab2b89d2ea23a230ff4b -->
 
 # cgpsinkops
 
@@ -25,8 +25,8 @@ b2: %m = mul <8 x i64> %e, %s            =>     %m = mul <8 x i64> %e, %s
 In `cgpaddr`'s run, before `SinkCast`.
 
 ## Example
-An operand the target folds into its user, made in another block, is made again
-beside the user.
+An operand the target folds into its user, made in another block, is made
+again beside the user.
 
 ```text
 b1: %e = sext <8 x i16> %a to <8 x i64>     b2: %e = sext <8 x i16> %a to <8 x i64>

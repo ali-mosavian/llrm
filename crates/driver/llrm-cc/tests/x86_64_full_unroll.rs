@@ -1,7 +1,9 @@
-//! x86-64 -O2/-O3: a full unroll is the pin's threshold, not a price in clocks against bytes. Bytes are not counted at
-//! O1-O3 (ruling 2026-11-14); the byte price (312 milliclocks a byte) vetoed the 3-trip outer loop of `rotate_small`
-//! because it saw "saves 18 clk, adds 241 B" and not the nest that folds once the table's elements are constants:
-//! 1925 executed instructions in `main` where clang's is 690. Needs `LLRM_LLC`.
+//! x86-64 -O2/-O3: a full unroll is the pin's threshold, not a price in clocks
+//! against bytes. Bytes are not counted at O1-O3 (ruling 2026-11-14); the byte
+//! price (312 milliclocks a byte) vetoed the 3-trip outer loop of
+//! `rotate_small` because it saw "saves 18 clk, adds 241 B" and not the nest
+//! that folds once the table's elements are constants: 1925 executed
+//! instructions in `main` where clang's is 690. Needs `LLRM_LLC`.
 
 use std::path::Path;
 use std::process::Command;
@@ -29,8 +31,9 @@ fn assembly(
     std::fs::read_to_string(&asm).unwrap()
 }
 
-/// `rotate_small.c`: the outer loop over `bytes[i]`/`words[i]` is unrolled, the inner loops fold on the constants, and
-/// `main` no longer reads the two tables (it did: 86 lines against 19).
+/// `rotate_small.c`: the outer loop over `bytes[i]`/`words[i]` is unrolled, the
+/// inner loops fold on the constants, and `main` no longer reads the two tables
+/// (it did: 86 lines against 19).
 #[test]
 fn a_nest_over_constant_tables_is_unrolled_and_no_longer_reads_them() {
     for level in ["-O2", "-O3"] {

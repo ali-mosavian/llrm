@@ -1,6 +1,7 @@
-//! `getArithmeticInstrCost` is a unit cost for every kind but throughput (`BasicTTIImpl.h`), so the unroller counts
-//! `compare_to_int64`'s 64-bit arithmetic as the pin does. Priced in clocks it kept the 3x3 loop nest rolled at -O3:
-//! 758 B, 31218 T; folded it is two `report` calls.
+//! `getArithmeticInstrCost` is a unit cost for every kind but throughput
+//! (`BasicTTIImpl.h`), so the unroller counts `compare_to_int64`'s 64-bit
+//! arithmetic as the pin does. Priced in clocks it kept the 3x3 loop nest
+//! rolled at -O3: 758 B, 31218 T; folded it is two `report` calls.
 
 use llrm_z80::compile::{prepare, text_in};
 use llrm_z80::driver::{Level, Request};

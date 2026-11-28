@@ -594,7 +594,14 @@ impl PartialEq for NameIndex {
 impl Function {
     /// The function is built for size (`optsize` or `minsize`).
     pub fn optimizes_for_size(&self) -> bool {
-        self.attrs.iter().any(|attr| matches!(attr, Attribute::Flag(name) if name == "optsize" || name == "minsize"))
+        self.attrs
+            .iter()
+            .any(
+                |attr| matches!(
+                    attr,
+                    Attribute::Flag(name) if name == "optsize" || name == "minsize"
+                ),
+            )
     }
 
     /// Whether `inst` is a `llvm.experimental.noalias.scope.decl` call, which
@@ -729,7 +736,8 @@ impl Function {
         self.layout.is_empty()
     }
 
-    /// `Function::hasOptNone`: the source asked for no optimization of the body.
+    /// `Function::hasOptNone`: the source asked for no optimization of the
+    /// body.
     pub fn has_opt_none(&self) -> bool {
         self.attrs.iter().any(|attr| matches!(attr, Attribute::Flag(flag) if flag == "optnone"))
     }
@@ -1395,8 +1403,9 @@ pub struct Alias {
     /// The value type, as written before the comma.
     pub ty: TypeId,
     pub aliasee: GlobalId,
-    /// Bytes from the start of the aliasee: `getelementptr (i8, @aliasee, offset)`.
-    /// Only `GlobalMerge` makes one that is not 0 (the name of a merged external).
+    /// Bytes from the start of the aliasee: `getelementptr (i8, @aliasee,
+    /// offset)`. Only `GlobalMerge` makes one that is not 0 (the name of a
+    /// merged external).
     pub offset: i64,
 }
 
@@ -1636,8 +1645,8 @@ impl PartialEq for SymbolIndex {
 pub struct Module {
     pub context: Context,
     /// `llc -relocation-model`: `Some(false)` static, `Some(true)` pic. clang
-    /// writes no module flag for `-fno-pic -fno-asynchronous-unwind-tables`, which
-    /// reads as a module that is not clang's; the driver says it.
+    /// writes no module flag for `-fno-pic -fno-asynchronous-unwind-tables`,
+    /// which reads as a module that is not clang's; the driver says it.
     pub relocation_pic: Option<bool>,
     pub datalayout: Option<String>,
     /// Variables and functions, in definition order.

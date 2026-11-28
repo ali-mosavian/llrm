@@ -75,7 +75,10 @@ fn crc16_tests_its_top_bit_with_tst_w_or_the_carry() {
     for name in ["68000", "68020"] {
         for level in [Level::O1, Level::O2, Level::Os] {
             let out = assembly(ir, cpu_of(name).unwrap(), level).expect("compiles");
-            assert!(out.contains("tst.w") || (out.contains("add.w\t") && out.contains("bcc")), "{name} {level:?}:\n{out}");
+            assert!(
+                out.contains("tst.w") || (out.contains("add.w\t") && out.contains("bcc")),
+                "{name} {level:?}:\n{out}"
+            );
             assert!(!out.contains("btst\t#15") && !out.contains("and.l\t#32768"), "{name} {level:?}:\n{out}");
         }
     }

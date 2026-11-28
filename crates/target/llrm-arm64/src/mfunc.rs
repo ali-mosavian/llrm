@@ -475,10 +475,15 @@ impl MFunc {
         self.blocks
             .iter()
             .filter_map(|block| {
-                block.ops.iter().find_map(|op| match op {
-                    Op::IndirectJump { targets, .. } => Some((block.label.clone(), targets.clone())),
-                    _ => None,
-                })
+                block
+                    .ops
+                    .iter()
+                    .find_map(
+                        |op| match op {
+                            Op::IndirectJump { targets, .. } => Some((block.label.clone(), targets.clone())),
+                            _ => None,
+                        },
+                    )
             })
             .collect()
     }

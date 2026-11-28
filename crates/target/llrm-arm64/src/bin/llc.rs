@@ -6,7 +6,8 @@
 //! instructions as text; `-O<n>`: the mid-end's level, -O2 by default, as
 //! clang's `-O` of the same IR; `--no-opt`: no mid-end, for IR that is already
 //! optimized; `-f[no-]PASS`: a mid-end pass as gcc names it,
-//! `-fno-unroll-loops`; `--isel=dag`: accepted, the only selector). The platform is the module's `target triple`.
+//! `-fno-unroll-loops`; `--isel=dag`: accepted, the only selector). The
+//! platform is the module's `target triple`.
 
 use llrm_arm64::driver;
 
@@ -14,10 +15,21 @@ use llrm_arm64::driver;
 static ALLOCATOR: llrm_alloc::Slab = llrm_alloc::Slab;
 
 fn main() {
+    let argv: Vec<String> = std::env::args().skip(1).collect();
+    if llrm_codegen::support::version::asked(
+        &argv,
+        "llrm-arm64-llc",
+        env!("LLRM_BUILD_SHA"),
+        env!("LLRM_BUILD_DIRTY"),
+        env!("LLRM_BUILD_INCREMENTAL"),
+    ) {
+        return;
+    }
     // The mid-end recurses along dependency chains (a 3,000-line function
     // overflowed the main thread's 8 MB): the compile runs on a thread with
     // room.
-    let worker = std::thread::Builder::new().stack_size(1 << 30).spawn(|| llrm_support::debug::run_main(run)).expect("a thread");
+    let worker =
+        std::thread::Builder::new().stack_size(1 << 30).spawn(|| llrm_support::debug::run_main(run)).expect("a thread");
     std::process::exit(worker.join().unwrap_or(101));
 }
 
@@ -37,7 +49,8 @@ fn run() -> i32 {
                 llrm_env::preset("LLRM_EXP_INLINETRACE");
             }
             "--no-opt" => level = driver::Level::O0,
-            // `llrm-cc` forwards `--isel=` to every target's llc: the DAG path is the only selector.
+            // `llrm-cc` forwards `--isel=` to every target's llc: the DAG path
+            // is the only selector.
             "--isel=dag" => {}
             other if other.starts_with("--isel=") => {
                 eprintln!("llrm-arm64-llc: {other}: the DAG path is the only selector (--isel=dag)");

@@ -4,18 +4,22 @@
 # cells.sh must refuse identical binaries and must report distinct base/new columns.
 here=$(cd "$(dirname "$0")" && pwd); cells=${CELLS_SH:-$here/cells.sh}; d=$(mktemp -d); trap 'rm -rf "$d"' EXIT
 mkdir -p "$d/base" "$d/new"
-for b in llrm-cc llrm-llc; do printf '#!/bin/sh\necho same\n' > "$d/base/$b"; cp "$d/base/$b" "$d/new/$b"; chmod +x "$d/base/$b" "$d/new/$b"; done
+for b in llrm-cc llrm-llc; do printf '#!/bin/sh\n[ "$1" = --version ] && { echo "llrm-llc aaaa1111"; exit 0; }\necho same\n' > "$d/base/$b"; cp "$d/base/$b" "$d/new/$b"; chmod +x "$d/base/$b" "$d/new/$b"; done
+# A stamped build (stamp.py require_named): cells.sh refuses a dist whose compilers name no commit.
+export LLRM_EXPECT_BASE_SHA=aaaa1111 LLRM_EXPECT_SHA=aaaa1111
+# cells.sh's output with stderr, less the env and stamp lines that head it.
+cells_out() { "$cells" "$@" 2>&1 | grep -v -e '^ab_env: ' -e '^stamp '; }
 echo "x t -O2 f.c" > "$d/list"
 "$cells" "$d" "$d/list" >/dev/null 2>&1 && { echo "FAIL: identical binaries accepted"; exit 1; }
 # Regression (2026-11-13): a change in a target's own backend (`llrm-m68k-llc`) leaves llrm-cc and llrm-llc identical, and cells.sh refused the
 # m68k A/B of a real change ("base and new llrm-cc are the same binary"). One differing llrm-* binary makes it a sweep.
-printf '#!/bin/sh\necho one\n' > "$d/base/llrm-m68k-llc"; printf '#!/bin/sh\necho two\n' > "$d/new/llrm-m68k-llc"; chmod +x "$d/base/llrm-m68k-llc" "$d/new/llrm-m68k-llc"
-out=$("$cells" "$d" "$d/list" 2>&1)
+printf '#!/bin/sh\n[ "$1" = --version ] && { echo "llrm-m68k-llc aaaa1111"; exit 0; }\necho one\n' > "$d/base/llrm-m68k-llc"; printf '#!/bin/sh\n[ "$1" = --version ] && { echo "llrm-m68k-llc aaaa1111"; exit 0; }\necho two\n' > "$d/new/llrm-m68k-llc"; chmod +x "$d/base/llrm-m68k-llc" "$d/new/llrm-m68k-llc"
+out=$(cells_out "$d" "$d/list")
 case $out in EMPTY*) ;; *) echo "FAIL: a differing target backend refused: $out"; exit 1;; esac
 rm -f "$d/base/llrm-m68k-llc" "$d/new/llrm-m68k-llc"
 # distinct binaries, compiler produces nothing: the cell is EMPTY, never a number
-printf '#!/bin/sh\necho other\n' > "$d/new/llrm-cc"; printf '#!/bin/sh\necho other\n' > "$d/new/llrm-llc"
-out=$("$cells" "$d" "$d/list" 2>&1)
+printf '#!/bin/sh\necho other\n' > "$d/new/llrm-cc"; printf '#!/bin/sh\n[ "$1" = --version ] && { echo "llrm-llc aaaa1111"; exit 0; }\necho other\n' > "$d/new/llrm-llc"
+out=$(cells_out "$d" "$d/list")
 case $out in EMPTY*) ;; *) echo "FAIL: empty cell reported as $out"; exit 1;; esac
 # Regression (2026-11-08): cells built div_constants_* without its `// flags: -fno-inline-functions`, so a z80 cell read 145 kB
 # for a 17.5 kB row and a retracted worse-cell report went to five owners. A cell compiles with its file's own flags
@@ -34,7 +38,7 @@ export ARGS="$d/args"
 # Regression (2026-11-10): size(1) failing on a z80/6502/OMF object made cells.sh print `stat -c %s` of the file as the code bytes
 # (+1052 where the assembled _CODE was +175). A text "object" no reader parses is an EMPTY cell naming why, never a number.
 echo "x t -O2 $d/p.c" > "$d/list"
-out=$(FAKE_TEXT=1 "$cells" "$d" "$d/list" 2>&1)
+out=$(FAKE_TEXT=1 cells_out "$d" "$d/list")
 case $out in "EMPTY t -O2 $d/p.c"*) ;; *) echo "FAIL: unreadable object reported as: $out"; exit 1;; esac
 case $out in *" bytes "[0-9]*) echo "FAIL: a size was printed for an unreadable object: $out"; exit 1;; esac
 out=$("$cells" "$d" "$d/list" 2>/dev/null)
@@ -81,7 +85,7 @@ WAT
 wat2wasm "$d/m.wat" -o "$d/m.wasm"
 for v in base new; do printf '#!/bin/sh\nfor a in "$@"; do [ "$p" = -o ] && out=$a; p=$a; done\ncp %s "$out"\n# %s\n' "$d/m.wasm" "$v" > "$d/$v/llrm-cc"; chmod +x "$d/$v/llrm-cc"; done
 echo "x wasm32 -O2 $d/p.c" > "$d/list"
-out=$("$cells" "$d" "$d/list" 2>&1)
+out=$(cells_out "$d" "$d/list")
 case $out in "wasm32 -O2 p.c bytes "[0-9]*" instrs 4 4"*) ;; *) echo "FAIL: a wasm cell is not counted from its object: $out"; exit 1;; esac
 echo ok
 # Regression (2026-11-13): a sweep with no CELLS_INC refused every program that includes llrm_os.h or bench_io.h at every target ('llrm_os.h' file not

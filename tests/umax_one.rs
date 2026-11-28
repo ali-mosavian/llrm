@@ -2,9 +2,9 @@
 
 mod common;
 
-/// The soft-float exponents (`x ? x : 1`) came out as `cmp e, 2; mov r, 1; cmovae
-/// r, e`: 3 instructions and a register where the pin has `mov; cmp; adc`;
-/// f64 mul at m64 was 19 bytes over the pin.
+/// The soft-float exponents (`x ? x : 1`) came out as `cmp e, 2; mov r, 1;
+/// cmovae r, e`: 3 instructions and a register where the pin has `mov; cmp;
+/// adc`; f64 mul at m64 was 19 bytes over the pin.
 #[test]
 fn a_maximum_with_one_is_a_carry_add() {
     let scratch = tempfile::tempdir().unwrap();

@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/libcall_choice.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/libcall_choice.rs); edit the header, not this file.
-<!-- src: crates/codegen/llrm-codegen/src/backend/libcall_choice.rs sha256:69c4f3d8ed9a3a7b1e50d4aca549c750b4099e3bccd16b5f5945452f821ddd15 -->
+<!-- src: crates/codegen/llrm-codegen/src/backend/libcall_choice.rs sha256:c2b8ec6c6afa9d0bb637c2ee53e08d8384f108c7d24084e1e5bbdefcc10b95d4 -->
 
 # libcall_choice
 
@@ -26,7 +26,8 @@ cannot know the uses of another (conservative). Sizes come from the target
 description. Owner m68k. Review: 2026-12-20.
 
 ## Runs
-Called by a target's libcall table (`llrm-m68k` `libcalls.rs`) at `-Os`, once per module.
+Called by a target's libcall table (`llrm-m68k` `libcalls.rs`) at `-Os`,
+once per module.
 
 ## Example
 Each candidate carries what calling it saves; `choose` calls the set whose

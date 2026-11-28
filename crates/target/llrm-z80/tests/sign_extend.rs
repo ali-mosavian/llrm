@@ -3,10 +3,7 @@
 
 use std::process::Command;
 
-fn assembly(
-    name: &str,
-    ir: &str,
-) -> String {
+fn assembly(ir: &str) -> String {
     let guard = tempfile::tempdir().unwrap();
     let dir = guard.path().to_path_buf();
     let source = dir.join("g.ll");
@@ -28,10 +25,7 @@ fn assembly(
 /// rr` pairs (rep_count's sum loop: 870 B against SDCC's 273).
 #[test]
 fn a_loaded_byte_is_sign_extended_without_shifts() {
-    let text = assembly(
-        "load",
-        "define i32 @g(ptr %p) {\n  %b = load i8, ptr %p\n  %r = sext i8 %b to i32\n  ret i32 %r\n}\n",
-    );
+    let text = assembly("define i32 @g(ptr %p) {\n  %b = load i8, ptr %p\n  %r = sext i8 %b to i32\n  ret i32 %r\n}\n");
     assert!(!text.contains("sra"), "{text}");
     assert!(text.lines().count() < 20, "{text}");
 }
@@ -39,7 +33,7 @@ fn a_loaded_byte_is_sign_extended_without_shifts() {
 /// `ashr i16 %x, 15` was fifteen `sra; rr` pairs.
 #[test]
 fn a_word_shifted_right_by_a_byte_or_more_keeps_its_sign_by_the_high_byte() {
-    let text = assembly("word", "define i16 @g(i16 %x) {\n  %r = ashr i16 %x, 15\n  ret i16 %r\n}\n");
+    let text = assembly("define i16 @g(i16 %x) {\n  %r = ashr i16 %x, 15\n  ret i16 %r\n}\n");
     assert!(!text.contains("sra"), "{text}");
     assert!(text.lines().count() < 14, "{text}");
 }
@@ -47,6 +41,6 @@ fn a_word_shifted_right_by_a_byte_or_more_keeps_its_sign_by_the_high_byte() {
 /// `ashr i8 %x, 7` was seven `sra a`: the sign alone is `add a, a; sbc a, a`.
 #[test]
 fn the_sign_of_a_byte_is_the_carry_of_its_top_bit() {
-    let text = assembly("byte", "define i8 @g(i8 %x) {\n  %r = ashr i8 %x, 7\n  ret i8 %r\n}\n");
+    let text = assembly("define i8 @g(i8 %x) {\n  %r = ashr i8 %x, 7\n  ret i8 %r\n}\n");
     assert!(text.contains("add a, a") && text.contains("sbc a, a") && !text.contains("sra"), "{text}");
 }

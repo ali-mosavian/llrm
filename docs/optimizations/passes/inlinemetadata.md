@@ -1,21 +1,22 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/inlinemetadata.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/inlinemetadata.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/inlinemetadata.rs sha256:3097b5bbe9dd419ff174c37e69383e780f570c6ed0b62a03c59ea968f96bc1d0 -->
+<!-- src: crates/opt/llrm-transforms/src/inlinemetadata.rs sha256:b9e83f047e4b3fc42098d52f61c653914e6fd42513e2c704f09cce9c9d6f23af -->
 
 # inlinemetadata
 
 `PropagateCallSiteMetadata`
 ([L998](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/InlineFunction.cpp#L998)):
 a call site's `!llvm.mem.parallel_loop_access`, `!llvm.access.group`,
-`!alias.scope` and `!noalias` go to every memory-accessing instruction of the
-inlined copy, joined with what the instruction has.
+`!alias.scope` and `!noalias` go to every memory-accessing instruction of
+the inlined copy, joined with what the instruction has.
 
 `ScopedAliasMetadataDeepCloner`
 ([L1108](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/InlineFunction.cpp#L1108)):
 a callee that carries scope lists is inlined with its own copy of them, so
 two copies of one body are not in one scope.
 
-`AddAlignmentAssumptions` (L1785) is `preserve-alignment-assumptions-during-inlining`,
-hidden and off in the pin: nothing to translate.
+`AddAlignmentAssumptions` (L1785) is
+`preserve-alignment-assumptions-during-inlining`, hidden and off in the pin:
+nothing to translate.
 
 ## Deviations
 - A node made here is not uniqued against the module's: two equal lists may

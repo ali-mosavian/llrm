@@ -2,6 +2,8 @@
 //! `registers.regs`.
 
 fn main() {
+    // `--version` of this package's llc.
+    llrm_buildstamp::emit();
     let path = "src/registers.regs";
     println!("cargo:rerun-if-changed={path}");
     let text = std::fs::read_to_string(path).expect("registers.regs");

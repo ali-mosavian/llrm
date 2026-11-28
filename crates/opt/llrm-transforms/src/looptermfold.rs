@@ -33,8 +33,8 @@
 //! `canFoldTermCondOfLoop`, `RunTermFold`, `isAlmostDeadIV`.
 //!
 //! # Example
-//! The exit compare of a loop moves from a counter to another induction variable,
-//! and the counter dies.
+//! The exit compare of a loop moves from a counter to another induction
+//! variable, and the counter dies.
 //!
 //! ```text
 //!  loop:  %i = phi [0, pre], [%i.next, loop]        loop:  %p = phi [%a, pre], [%p.next, loop]

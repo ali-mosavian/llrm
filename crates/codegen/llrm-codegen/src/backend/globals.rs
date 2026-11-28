@@ -127,7 +127,10 @@ pub fn names(
         out.extend(segment_name(module, id, &symbol, spaces));
         if let GlobalKind::Function(function) = &global.kind {
             for block in function.address_taken_blocks() {
-                out.insert((Space::Segment, crate::backend::blockaddress::key(id, block)), crate::backend::blockaddress::symbol(id, block));
+                out.insert(
+                    (Space::Segment, crate::backend::blockaddress::key(id, block)),
+                    crate::backend::blockaddress::symbol(id, block),
+                );
             }
         }
         out.insert((space(module, id), i64::from(id.0)), symbol);
@@ -487,9 +490,13 @@ impl Initializer<'_> {
             // The same through the cast from the code address space that a
             // segmented target's label value is: its offset in the segment.
             (ConstantKind::Expr(ConstantExpr::Cast { op: CastOp::AddrSpaceCast, value }), Type::Pointer(0))
-                if matches!(context.get(*value).kind, ConstantKind::Expr(ConstantExpr::BlockAddress { .. })) =>
+                if matches!(
+                    context.get(*value).kind,
+                    ConstantKind::Expr(ConstantExpr::BlockAddress { .. })
+                ) =>
             {
-                let ConstantKind::Expr(ConstantExpr::BlockAddress { function, block }) = &context.get(*value).kind else {
+                let ConstantKind::Expr(ConstantExpr::BlockAddress { function, block }) = &context.get(*value).kind
+                else {
                     unreachable!("guarded")
                 };
                 let Some(datum) = self.block_address(*function, *block) else { return Ok(()) };

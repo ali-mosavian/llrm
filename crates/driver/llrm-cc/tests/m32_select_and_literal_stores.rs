@@ -1,5 +1,6 @@
 //! m32 (i486, no cmov): a select of two constants is a branch (SELB), and equal
-//! literal stores stay `mov dword [m],0` at -O1 to -O3 (ISS1 shares only at -Os).
+//! literal stores stay `mov dword [m],0` at -O1 to -O3 (ISS1 shares only at
+//! -Os).
 
 #[path = "common/target_dir.rs"]
 mod target_dir;

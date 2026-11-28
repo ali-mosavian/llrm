@@ -1,12 +1,15 @@
-//! `loop-split@gcc` left the second loop's `if (!composite[i]) { ++count; sum += i; }` arm as control
-//! flow, which the vectorizer reads as a block that does not run every trip ("Control flow cannot be
-//! substituted for a select"): bench/sieve -O3 on arm64 ran 17098 instructions, 2126 more than -O2,
-//! where the same loop split by hand is vectorized. gcc's `pass_split_loop` returns `TODO_cleanup_cfg`.
+//! `loop-split@gcc` left the second loop's `if (!composite[i]) { ++count; sum
+//! += i; }` arm as control flow, which the vectorizer reads as a block that
+//! does not run every trip ("Control flow cannot be substituted for a select"):
+//! bench/sieve -O3 on arm64 ran 17098 instructions, 2126 more than -O2,
+//! where the same loop split by hand is vectorized. gcc's `pass_split_loop`
+//! returns `TODO_cleanup_cfg`.
 
 use std::path::Path;
 use std::process::Command;
 
-/// bench/sieve: the guard `i <= 31` splits the loop at 32; the second loop counts what the first sieved.
+/// bench/sieve: the guard `i <= 31` splits the loop at 32; the second loop
+/// counts what the first sieved.
 const SOURCE: &str = "unsigned long f(unsigned short limit)\n{\n    unsigned char composite[1024];\n    unsigned short i, multiple, count = 0;\n    unsigned long sum = 0;\n\n    for (i = 0; i < limit; ++i) composite[i] = 0;\n    for (i = 2; i < limit; ++i) {\n        if (composite[i]) continue;\n        ++count;\n        sum += i;\n        if (i <= 31)\n            for (multiple = (unsigned short)(i * i); multiple < limit; multiple = (unsigned short)(multiple + i))\n                composite[multiple] = 1;\n    }\n    return ((unsigned long)count << 16) ^ sum;\n}\n";
 
 #[test]

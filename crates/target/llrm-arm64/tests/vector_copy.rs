@@ -272,8 +272,8 @@ fn a_vector_binary_operation_is_one_instruction_on_its_lanes() {
 /// An inner loop storing `i16` and `i64` in the same iteration was widened to
 /// `<8 x i16>` and `<8 x i64>` (bandwidth maximization); the backend cannot
 /// split the second, and the compile stopped with "vector with no register
-/// class" (tests/run/c/pattern_fill.c at -O2). Non-constant values, so loop-idiom
-/// leaves the stores.
+/// class" (tests/run/c/pattern_fill.c at -O2). Non-constant values, so
+/// loop-idiom leaves the stores.
 #[test]
 fn a_loop_storing_two_element_widths_compiles() {
     let text = assembly(

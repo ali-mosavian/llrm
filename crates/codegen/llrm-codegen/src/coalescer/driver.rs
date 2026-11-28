@@ -32,7 +32,7 @@
 
 use std::cmp::Ordering;
 
-use super::pair::{CoalescerEnv, full_copy, move_copy};
+use super::pair::{CoalescerEnv, move_copy};
 use super::register_coalescer::{JoinResult, State, join_copy};
 use crate::liveness::liveintervals::LiveIntervals;
 use crate::liveness::slotindex::{InstrKey, SlotIndex};
@@ -109,12 +109,14 @@ fn loop_header(
         )
 }
 
+#[cfg(test)]
 thread_local! {
     static CARRIED_LOOKS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 /// How many instructions [`is_carried`] looked at on this thread since the
 /// last call, for a test that it reads the definitions of a register only.
+#[cfg(test)]
 pub(super) fn take_carried_looks() -> usize {
     CARRIED_LOOKS.with(|one| one.replace(0))
 }
@@ -139,6 +141,7 @@ pub(super) fn is_carried(
             .iter()
             .filter(|one| one.is_def)
             .filter_map(|one| {
+                #[cfg(test)]
                 CARRIED_LOOKS.with(|looks| looks.set(looks.get() + 1));
                 pick(lis.instr(one.instr)).filter(|(dst, _)| dst.value == reg).map(|(_, src)| src.value)
             })

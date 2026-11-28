@@ -98,7 +98,9 @@ pub fn is_trivially_re_materializable(
         // <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86InstrInfo.cpp#L830-L860>
         (
             Operation::Move,
-            Some("mov" | "movss" | "movsd" | "movsd_x" | "movaps" | "movups" | "movapd" | "movupd" | "movdqa" | "movdqu"),
+            Some(
+                "mov" | "movss" | "movsd" | "movsd_x" | "movaps" | "movups" | "movapd" | "movupd" | "movdqa" | "movdqu",
+            ),
             [Loc::Mem(cell)],
         ) => {
             invariant
@@ -110,6 +112,12 @@ pub fn is_trivially_re_materializable(
         }
         (Operation::FloatLoad, Some("fld"), [Loc::Mem(_)]) => {
             invariant && def.uses.is_empty() && def.spread.is_empty() && !def.volatile
+        }
+        // `V_SET0`, `FsFLD0SS`, `FsFLD0SD` (X86InstrSSE.td#L113, #L134):
+        // `isReMaterializable`; the emitter writes them `xorps r, r`, which
+        // reads nothing.
+        (Operation::Binary, Some("xorps"), [Loc::Held(a), Loc::Held(b)]) => {
+            def.uses.is_empty() && a.value == into.value && b.value == into.value
         }
         // `LD_Fp064` / `LD_Fp164`
         // (X86InstrFPStack.td#L526): `isReMaterializable`.
@@ -371,9 +379,11 @@ mod tests {
         assert!(is_trivially_re_materializable(&load, true));
     }
 
-    /// x86-64 names the scalar double load `movsd_x` (`movsd` is the string move at 8086): the list of loads had
-    /// `movsd` only, so a double constant read from the pool was spilled across a call and reloaded from the stack,
-    /// where the pin reads the pool again (soft_double_add_sub -O1 `main` +6 B).
+    /// x86-64 names the scalar double load `movsd_x` (`movsd` is the string
+    /// move at 8086): the list of loads had `movsd` only, so a double
+    /// constant read from the pool was spilled across a call and reloaded from
+    /// the stack, where the pin reads the pool again (soft_double_add_sub
+    /// -O1 `main` +6 B).
     #[test]
     fn test_a_scalar_double_load_is_made_again_under_its_x86_64_name() {
         let cell = Mem::new(Some(crate::model::ir::Addr::new(Space::Segment, 0)), 8);

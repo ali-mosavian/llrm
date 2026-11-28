@@ -46,7 +46,7 @@ use llrm_mir::edit::Position;
 use llrm_mir::module::{BlockId, Function, InstId, Operand};
 use llrm_mir::opcode::{Flags, Opcode};
 use llrm_mir::passes::{Analyses, Declared, FunctionPass, Outer, PreservedAnalyses, Unit};
-use llrm_mir::tti::{CostKind, MemoryOp, Tti, Ty, VectorTy};
+use llrm_mir::tti::{MemoryOp, Tti, Ty, VectorTy};
 use llrm_mir::types::{FloatKind, Type, TypeId};
 
 /// `-slp-threshold`: a tree is taken when its cost is below minus this.

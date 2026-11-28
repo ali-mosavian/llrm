@@ -75,11 +75,18 @@ pub fn object_max_trip_count(
                 continue;
             };
             let offset = se.get_minus_scev(cx, Use::of(address), Use::of(base), 0, 0);
-            llrm_support::debug!("unrollbound", "access {inst:?}: object {object} size {size} offset header {:?} ops {} flags {}", se.addrec_header(offset), se.operands(offset).len(), se.get_no_wrap_flags(offset, flags::NUW | flags::NSW));
+            llrm_support::debug!(
+                "unrollbound",
+                "access {inst:?}: object {object} size {size} offset header {:?} ops {} flags {}",
+                se.addrec_header(offset),
+                se.operands(offset).len(),
+                se.get_no_wrap_flags(offset, flags::NUW | flags::NSW)
+            );
             if se.addrec_header(offset) != Some(header) || se.operands(offset).len() != 2 {
                 continue;
             }
-            // The offset grows without wrapping, so trip t is `start + step * t`.
+            // The offset grows without wrapping, so trip t is `start + step *
+            // t`.
             if !grows_without_wrapping(se, address, header) {
                 continue;
             }
@@ -94,7 +101,8 @@ pub fn object_max_trip_count(
                 continue;
             }
             // Trips 0..=last fit; a block that is on the way round again ran
-            // `trips - 1` times, and on the last trip as well when it is before the exit.
+            // `trips - 1` times, and on the last trip as well when it is before
+            // the exit.
             let last = room / step;
             let trips = last + if on_last_trip { 1 } else { 2 };
             best = Some(best.map_or(trips, |one| one.min(trips)));
@@ -111,6 +119,7 @@ fn grows_without_wrapping(
     s: llrm_analysis::scev::expr::Scev,
     header: BlockId,
 ) -> bool {
-    let wraps_not = |one| se.addrec_header(one) == Some(header) && se.get_no_wrap_flags(one, flags::NUW | flags::NSW) != 0;
+    let wraps_not =
+        |one| se.addrec_header(one) == Some(header) && se.get_no_wrap_flags(one, flags::NUW | flags::NSW) != 0;
     wraps_not(s) || se.operands(s).iter().any(|one| wraps_not(one.scev))
 }

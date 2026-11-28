@@ -1,6 +1,7 @@
 //! `unsigned char a / b` with `b` on the stack under `--isel=dag` at m32: the
-//! listing printed `div byte ptr [esp+8]`, but `-c` failed ("ud: Semantics(op=div
-//! ...)") because `divide_mem` refused width 1. The corpus sweep lost div8.
+//! listing printed `div byte ptr [esp+8]`, but `-c` failed ("ud:
+//! Semantics(op=div ...)") because `divide_mem` refused width 1. The corpus
+//! sweep lost div8.
 
 use std::path::Path;
 use std::process::Command;

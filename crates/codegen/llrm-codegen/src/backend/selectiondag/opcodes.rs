@@ -165,8 +165,9 @@ impl OpcodeMap {
         // A move between a general and an SSE register: the pin's names for
         // the direction, the form is the one with that encoding.
         if let Some(iced) = gpr_xmm_move(name) {
-            // `MOVPDI2DImr`/`MOVPDI2DIrr` and `MOVDI2PDIrm`/`MOVDI2PDIrr` share an iced form; the name says
-            // whether the general operand is memory.
+            // `MOVPDI2DImr`/`MOVPDI2DIrr` and `MOVDI2PDIrm`/`MOVDI2PDIrr` share
+            // an iced form; the name says whether the general
+            // operand is memory.
             let memory = name.ends_with("mr") || name.ends_with("rm");
             let takes = |f: &Form| {
                 let general = if iced.starts_with("Movd_rm32") { f.dests.first() } else { f.sources.first() };
@@ -265,17 +266,103 @@ fn gpr_xmm_move(name: &str) -> Option<&'static str> {
 /// of these is `None`.
 fn sse(name: &str) -> Option<(String, Option<u32>, Option<u32>, Vec<char>)> {
     const ARITHMETIC: [&str; 96] = [
-        "ADDSS", "ADDSD", "SUBSS", "SUBSD", "MULSS", "MULSD", "DIVSS", "DIVSD", "MINSS", "MINSD", "MAXSS", "MAXSD",
-        "SQRTSS", "SQRTSD", "MOVSS", "MOVSD", "UCOMISS", "UCOMISD", "XORPS", "ANDPS", "ANDNPS", "ORPS", "CMPSS",
-        "CMPSD", "PADDB", "PADDW", "PADDD", "PADDQ", "PSUBB", "PSUBW", "PSUBD", "PSUBQ", "PAND", "PANDN", "POR",
-        "PXOR", "PMULLW", "PSLLW", "PSLLD", "PSLLQ", "PSRLW", "PSRLD", "PSRLQ", "PSRAW", "PSRAD", "PSHUFD", "PUNPCKLQDQ", "PMULUDQ", "PUNPCKLDQ",
-        "PSHUFLW", "PMULHW", "PMULHUW",
-        "PUNPCKLBW", "PUNPCKHBW", "PACKUSWB", "PACKSSWB", "PUNPCKLWD", "PUNPCKHWD", "PUNPCKHDQ", "PUNPCKHQDQ", "PACKSSDW",
-        "PCMPEQB", "PCMPEQW", "PCMPEQD", "PCMPGTB", "PCMPGTW", "PCMPGTD", "PMOVMSKB", "MOVMSKPS", "MOVMSKPD",
+        "ADDSS",
+        "ADDSD",
+        "SUBSS",
+        "SUBSD",
+        "MULSS",
+        "MULSD",
+        "DIVSS",
+        "DIVSD",
+        "MINSS",
+        "MINSD",
+        "MAXSS",
+        "MAXSD",
+        "SQRTSS",
+        "SQRTSD",
+        "MOVSS",
+        "MOVSD",
+        "UCOMISS",
+        "UCOMISD",
+        "XORPS",
+        "ANDPS",
+        "ANDNPS",
+        "ORPS",
+        "CMPSS",
+        "CMPSD",
+        "PADDB",
+        "PADDW",
+        "PADDD",
+        "PADDQ",
+        "PSUBB",
+        "PSUBW",
+        "PSUBD",
+        "PSUBQ",
+        "PAND",
+        "PANDN",
+        "POR",
+        "PXOR",
+        "PMULLW",
+        "PSLLW",
+        "PSLLD",
+        "PSLLQ",
+        "PSRLW",
+        "PSRLD",
+        "PSRLQ",
+        "PSRAW",
+        "PSRAD",
+        "PSHUFD",
+        "PUNPCKLQDQ",
+        "PMULUDQ",
+        "PUNPCKLDQ",
+        "PSHUFLW",
+        "PMULHW",
+        "PMULHUW",
+        "PUNPCKLBW",
+        "PUNPCKHBW",
+        "PACKUSWB",
+        "PACKSSWB",
+        "PUNPCKLWD",
+        "PUNPCKHWD",
+        "PUNPCKHDQ",
+        "PUNPCKHQDQ",
+        "PACKSSDW",
+        "PCMPEQB",
+        "PCMPEQW",
+        "PCMPEQD",
+        "PCMPGTB",
+        "PCMPGTW",
+        "PCMPGTD",
+        "PMOVMSKB",
+        "MOVMSKPS",
+        "MOVMSKPD",
         // The packed float forms of the float vectors.
-        "ADDPS", "ADDPD", "SUBPS", "SUBPD", "MULPS", "MULPD", "DIVPS", "DIVPD", "MINPS", "MINPD", "MAXPS", "MAXPD",
-        "SQRTPS", "SQRTPD", "ANDPD", "ANDNPD", "ORPD", "XORPD", "UNPCKLPD", "UNPCKHPD", "UNPCKLPS", "UNPCKHPS", "SHUFPS",
-        "SHUFPD", "CMPPS", "CMPPD",
+        "ADDPS",
+        "ADDPD",
+        "SUBPS",
+        "SUBPD",
+        "MULPS",
+        "MULPD",
+        "DIVPS",
+        "DIVPD",
+        "MINPS",
+        "MINPD",
+        "MAXPS",
+        "MAXPD",
+        "SQRTPS",
+        "SQRTPD",
+        "ANDPD",
+        "ANDNPD",
+        "ORPD",
+        "XORPD",
+        "UNPCKLPD",
+        "UNPCKHPD",
+        "UNPCKLPS",
+        "UNPCKHPS",
+        "SHUFPS",
+        "SHUFPD",
+        "CMPPS",
+        "CMPPD",
     ];
     const MOVES: [&str; 4] = ["MOVAPS", "MOVUPS", "MOVAPD", "MOVUPD"];
     const CONVERTS: [(&str, &str, Option<u32>); 14] = [
@@ -308,7 +395,11 @@ fn sse(name: &str) -> Option<(String, Option<u32>, Option<u32>, Vec<char>)> {
     let mut found = None;
     for prefix in ARITHMETIC.iter().chain(&MOVES) {
         if let Some(letters) = name.strip_prefix(prefix).and_then(letters_of) {
-            let mnemonic = if matches!(*prefix, "MOVSD" | "CMPSD") { format!("{}_x", prefix.to_ascii_lowercase()) } else { prefix.to_ascii_lowercase() };
+            let mnemonic = if matches!(*prefix, "MOVSD" | "CMPSD") {
+                format!("{}_x", prefix.to_ascii_lowercase())
+            } else {
+                prefix.to_ascii_lowercase()
+            };
             // The longest prefix wins (`ANDNPS` is not `ANDPS`).
             if found
                 .as_ref()
@@ -330,7 +421,8 @@ fn sse(name: &str) -> Option<(String, Option<u32>, Option<u32>, Vec<char>)> {
     }
     found.map(|(mnemonic, width, result, letters)| {
         let letters = if mnemonic.starts_with("sqrt") && letters.len() == 1 { vec!['r', 'r'] } else { letters };
-        // `PSHUFDri` names its source and the immediate; the destination is not tied to the source.
+        // `PSHUFDri` names its source and the immediate; the destination is not
+        // tied to the source.
         let untied = matches!(mnemonic.as_str(), "pshufd" | "pshuflw");
         let letters = if untied { std::iter::once('r').chain(letters).collect() } else { letters };
         (mnemonic, width, result, letters)
@@ -354,19 +446,17 @@ pub fn memory_bytes(name: &str) -> Option<u32> {
     if sse(name.strip_suffix("_alt").unwrap_or(name)).is_some() {
         // A conversion reads its source's size: the float named first, or the
         // integer.
-        for (prefix, bytes) in
-            [
-                ("CVTTSD2SI", 8),
-                ("CVTTSS2SI", 4),
-                ("CVTSD2SS", 8),
-                ("CVTSS2SD", 4),
-                ("CVTSI642", 8),
-                ("CVTSI2", 4),
-                // The two lanes of a packed conversion read 8 bytes.
-                ("CVTDQ2PD", 8),
-                ("CVTPS2PD", 8),
-            ]
-        {
+        for (prefix, bytes) in [
+            ("CVTTSD2SI", 8),
+            ("CVTTSS2SI", 4),
+            ("CVTSD2SS", 8),
+            ("CVTSS2SD", 4),
+            ("CVTSI642", 8),
+            ("CVTSI2", 4),
+            // The two lanes of a packed conversion read 8 bytes.
+            ("CVTDQ2PD", 8),
+            ("CVTPS2PD", 8),
+        ] {
             if name.starts_with(prefix) {
                 return Some(bytes);
             }

@@ -1,6 +1,7 @@
-//! A counted fill loop ended `addq.w #1,%d0; bne`: 14 clocks a trip on the 68000 where `dbf` is 10
-//! (mem_length_boundaries_m32 -Os: 4,242,970 clk against gcc's 4,003,742). Counted loops of up to 65536
-//! trips now end in `dbf`; one of more (70000) must not, as `dbf` counts the low word only.
+//! A counted fill loop ended `addq.w #1,%d0; bne`: 14 clocks a trip on the
+//! 68000 where `dbf` is 10 (mem_length_boundaries_m32 -Os: 4,242,970 clk
+//! against gcc's 4,003,742). Counted loops of up to 65536 trips now end in
+//! `dbf`; one of more (70000) must not, as `dbf` counts the low word only.
 
 use llrm_m68k::driver::{Level, assembly, cpu_of};
 
@@ -43,8 +44,9 @@ fn a_loop_of_70000_trips_does_not_end_in_dbf() {
     }
 }
 
-/// The counter shares `%d0` with the result of the call after the loop: the call's `%d0` is a new value, not a read
-/// of the counter, so the loop still ends in `dbf` (the unit stayed a `bne` loop once allocation chose `%d0`).
+/// The counter shares `%d0` with the result of the call after the loop: the
+/// call's `%d0` is a new value, not a read of the counter, so the loop still
+/// ends in `dbf` (the unit stayed a `bne` loop once allocation chose `%d0`).
 #[test]
 fn a_counter_in_the_result_register_ends_in_dbf_when_a_call_follows() {
     let source = include_str!("../data/dbf_fill_then_call.ll");

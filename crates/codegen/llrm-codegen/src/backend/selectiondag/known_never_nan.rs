@@ -76,7 +76,15 @@ impl SelectionDAG {
         match self.opcode(op) {
             // "TODO: Need isKnownNeverInfinity": a quiet NaN may come out of
             // two infinities, never a signalling one.
-            ISD::FAdd | ISD::FSub | ISD::FMul | ISD::FDiv | ISD::FRem | ISD::FSin | ISD::FCos | ISD::FAtan | ISD::FMA => snan,
+            ISD::FAdd
+            | ISD::FSub
+            | ISD::FMul
+            | ISD::FDiv
+            | ISD::FRem
+            | ISD::FSin
+            | ISD::FCos
+            | ISD::FAtan
+            | ISD::FMA => snan,
             ISD::FExp | ISD::FExp2 | ISD::FRint | ISD::FpExtend | ISD::FpRound => snan || first(self),
             ISD::FAbs | ISD::FNeg | ISD::FCopySign => first(self),
             ISD::Select => {
@@ -107,13 +115,13 @@ impl SelectionDAG {
                 self.never_nan(source, wanted, snan, depth + 1)
             }
             ISD::BuildVector => (0..self.node(op).ops.len()).all(|lane| {
-                demanded & (1u128 << lane.min(127)) == 0
-                    || self.never_nan(self.operand(op, lane), 1, snan, depth + 1)
+                demanded & (1u128 << lane.min(127)) == 0 || self.never_nan(self.operand(op, lane), 1, snan, depth + 1)
             }),
             // The fallthrough: `computeKnownFPClass` of a constant is exact.
-            ISD::ConstantFP | ISD::TargetConstantFP => {
-                self.fp_constant(op).and_then(|bits| fp_value::classify(self.value_type(op), bits)).is_some_and(|class| !class.nan)
-            }
+            ISD::ConstantFP | ISD::TargetConstantFP => self
+                .fp_constant(op)
+                .and_then(|bits| fp_value::classify(self.value_type(op), bits))
+                .is_some_and(|class| !class.nan),
             _ => false,
         }
     }

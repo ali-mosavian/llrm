@@ -14,8 +14,23 @@ import json
 import re
 import sys
 
-# BPL is reserved in 32-bit mode with or without a frame pointer (`getReservedRegs`: the REX-only 8-bit registers).
-FRAME = {"BP", "EBP", "RBP"}
+def frame_views(lines, registers):
+    """What a frame pointer reserves (`X86RegisterInfo::getReservedRegs`): the register the description classes `frame`,
+    with its super- and sub-registers from the pin's register file, all but those with no sub-register (BPL is reserved
+    in 32-bit mode with or without a frame pointer: the REX-only 8-bit registers)."""
+    rows = [line.split() for line in lines if line.strip() and not line.startswith(("#", "@"))]
+    subs = {
+        name: [one["def"] for one in body["SubRegs"]]
+        for name, body in registers.items()
+        if isinstance(body, dict) and "Register" in body.get("!superclasses", ())
+    }
+
+    def below(name):
+        return {name}.union(*(below(one) for one in subs.get(name, [])))
+
+    frame = {row[0].upper() for row in rows if "frame" in row[4].split(",")}
+    views = set().union(*(below(name) for name in frame)) | {name for name in subs if frame & below(name)}
+    return {name for name in views if subs.get(name)}
 
 
 def table(text, name):
@@ -51,6 +66,7 @@ def members_of(classes, dag):
 def main(inc_path, json_path, regs_path, overlay=None):
     inc = open(inc_path).read()
     classes = json.load(open(json_path))
+    frame_registers = frame_views(open(regs_path).readlines(), classes)
     visible = {
         line.split()[0].upper()
         for line in open(regs_path)
@@ -89,7 +105,7 @@ def main(inc_path, json_path, regs_path, overlay=None):
                 break
             ids.append(n)
         # What a frame pointer reserves beyond 32-bit mode's own (`X86RegisterInfo::getReservedRegs`).
-        frame = len(FRAME & set(members))
+        frame = len(frame_registers & set(members))
         out.append(
             f"class {name} {weight} {len(members)} {','.join(map(str, ids)) or '-'} {','.join(shown)}"
             + (f" frame={frame}" if frame else "")

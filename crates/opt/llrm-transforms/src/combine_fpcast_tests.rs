@@ -130,8 +130,9 @@ b0:
     assert!(inexact.contains("fpext"), "{inexact}");
 }
 
-/// `bitcast (bitcast x to i32) to float` stayed a round trip (QB `exec_loop` m64 -O2: 35 `bitcast` pairs against the
-/// pin's 11, `sitofp` then `i32` then `float` before each `fadd`): `visitBitCast` did not reach
+/// `bitcast (bitcast x to i32) to float` stayed a round trip (QB `exec_loop`
+/// m64 -O2: 35 `bitcast` pairs against the pin's 11, `sitofp` then `i32` then
+/// `float` before each `fadd`): `visitBitCast` did not reach
 /// `commonCastTransforms`.
 #[test]
 fn test_a_bitcast_of_a_bitcast_back_to_the_type_is_the_value() {

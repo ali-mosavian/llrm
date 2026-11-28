@@ -58,9 +58,9 @@ fn local_paths(dir: &Path) -> Vec<String> {
     found
 }
 
-/// `file:line` of each tracked `.ll` whose `ModuleID` or `source_filename` names a path of
-/// one machine: clang writes the path it was given, and a fixture kept it (73 did, 193 lines
-/// with a home directory).
+/// `file:line` of each tracked `.ll` whose `ModuleID` or `source_filename`
+/// names a path of one machine: clang writes the path it was given, and a
+/// fixture kept it (73 did, 193 lines with a home directory).
 fn local_module_names(dir: &Path) -> Vec<String> {
     let mut found = Vec::new();
     for file in git(dir, &["ls-files", "-z", "*.ll"]).split('\0').filter(|name| !name.is_empty()) {
@@ -77,8 +77,9 @@ fn local_module_names(dir: &Path) -> Vec<String> {
 /// Home directories of stand-ins and CI: not a developer's own.
 const SYNTHETIC_HOMES: [&str; 3] = ["runner", "someone", "scratch"];
 
-/// `file:line` of each tracked text file, other than a markdown or `.ll` file (read above), whose
-/// line names a developer's home directory (`/home/<name>`, `/Users/<name>`).
+/// `file:line` of each tracked text file, other than a markdown or `.ll` file
+/// (read above), whose line names a developer's home directory (`/home/<name>`,
+/// `/Users/<name>`).
 fn home_directories(dir: &Path) -> Vec<String> {
     let mut found = Vec::new();
     for file in git(dir, &["ls-files", "-z"]).split('\0').filter(|name| !name.is_empty()) {
@@ -88,10 +89,17 @@ fn home_directories(dir: &Path) -> Vec<String> {
         let Ok(text) = fs::read_to_string(dir.join(file)) else { continue };
         for (at, line) in text.lines().enumerate() {
             for root in ["/home/", "/Users/"] {
-                let named = line.match_indices(root).any(|(start, _)| {
-                    let name: String = line[start + root.len()..].chars().take_while(|c| c.is_alphanumeric() || "_-.".contains(*c)).collect();
-                    !name.is_empty() && !SYNTHETIC_HOMES.contains(&name.as_str())
-                });
+                let named = line
+                    .match_indices(root)
+                    .any(
+                        |(start, _)| {
+                            let name: String = line[start + root.len()..]
+                                .chars()
+                                .take_while(|c| c.is_alphanumeric() || "_-.".contains(*c))
+                                .collect();
+                            !name.is_empty() && !SYNTHETIC_HOMES.contains(&name.as_str())
+                        },
+                    );
                 if named {
                     found.push(format!("{file}:{}", at + 1));
                 }

@@ -132,10 +132,13 @@ fn tuning(costs: &llrm_mir::target::OperationCosts) -> llrm_mir::target::Tuning 
         // is 4.
         fills_pattern_at_speed: true,
         libc_memcpy: true,
-        // DEVIATE PO1 (owner llrm-target-x86-m16-b, exit 2026-11-20): -Os pops
+        // DEVIATE PO1 (owner x86-m32, exit 2026-12-31): -Os pops
         // a call's one or two argument words, as gcc does: `add esp,4` is
         // 3 bytes, `pop ecx` 1 (QB m32 Os control.c, 108 sites). Not in a loop:
         // a pop is 4 clocks, the add 1 (select_of_constants +10% clocks).
+        // Measured 2026-11-26 (d08d2613c7, x86_32-linux -Os, .text bytes): the
+        // pin's rule is +780 B on tests/run/c and bench (113 of 233 modules
+        // change, none smaller), +361 B on 84 QuickrBasic modules.
         pops_arguments_at_size: true,
         pops_arguments_cold_only_at_size: true,
         pushes_pad_at_size: true,
@@ -712,6 +715,18 @@ impl llrm_target::Target for M32 {
 
     fn x87_stack_top(&self) -> Option<RegId> {
         Some(llrm_x86::registers::X87_TOP)
+    }
+
+    fn asm_register(
+        &self,
+        name: &str,
+    ) -> llrm_target::inline_asm::AsmRegister {
+        llrm_x86::constraints::asm_register(name)
+    }
+
+    fn inline_asm(&self) -> Option<llrm_target::inline_asm::InlineAsm> {
+        let mode = u8::try_from(self.layout().mode).expect("an x86 mode is 16, 32 or 64");
+        Some(llrm_x86::constraints::inline_asm(mode, self.registers_text()))
     }
 
     /// What cdecl32 keeps, but the frame register.

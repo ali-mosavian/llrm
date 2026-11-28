@@ -1,8 +1,8 @@
-//! `llrm-z80-llc [-S] [-g] [-O<n>] [-f[no-]PASS...] [-o OUT] FILE.ll`: LLVM IR from clang's
-//! front end alone through the mid-end and the Z80 backend to sdasz80 text.
-//! `-S` is the only output; `-g` adds SDCC's `C$` line symbols (no `.adb`). A
-//! function the backend refuses is named on stderr and the exit status is 1;
-//! the others are still written.
+//! `llrm-z80-llc [-S] [-g] [-O<n>] [-f[no-]PASS...] [-o OUT] FILE.ll`: LLVM IR
+//! from clang's front end alone through the mid-end and the Z80 backend to
+//! sdasz80 text. `-S` is the only output; `-g` adds SDCC's `C$` line symbols
+//! (no `.adb`). A function the backend refuses is named on stderr and the exit
+//! status is 1; the others are still written.
 
 use llrm_z80::compile::{prepare, text_in};
 use llrm_z80::driver::{Level, Request};
@@ -12,6 +12,16 @@ use llrm_z80::inline_rt::inline_sole_uses;
 static ALLOCATOR: llrm_alloc::Slab = llrm_alloc::Slab;
 
 fn main() {
+    let argv: Vec<String> = std::env::args().skip(1).collect();
+    if llrm_codegen::support::version::asked(
+        &argv,
+        "llrm-z80-llc",
+        env!("LLRM_BUILD_SHA"),
+        env!("LLRM_BUILD_DIRTY"),
+        env!("LLRM_BUILD_INCREMENTAL"),
+    ) {
+        return;
+    }
     // The mid-end recurses along dependency chains: run on a thread with room.
     let worker = std::thread::Builder::new().stack_size(1 << 30).spawn(run).expect("a thread");
     std::process::exit(worker.join().unwrap_or(101));

@@ -686,7 +686,7 @@ fn two_calls(
 ) -> (usize, usize) {
     let mut dag = dag();
     let entry = dag.entry_node();
-    let mut one = |dag: &mut SelectionDAG, order: u32, callee: u32| {
+    let one = |dag: &mut SelectionDAG, order: u32, callee: u32| {
         dag.cur_order = order;
         let target = dag.get_register(EVT::I32, callee);
         let call = machine(dag, EQUAL_CALL, &[EVT::OTHER, EVT::GLUE], &[entry, target]);

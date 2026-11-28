@@ -39,7 +39,8 @@ fn a_mask_keeps_its_immediate_form_and_its_value() {
             format!("define i32 @f(i32 %a) {{\n  %m = and i32 %a, {mask}\n  %r = add i32 %m, %a\n  ret i32 %r\n}}");
         let asm = text_with(&module(&ir), "f", Cpu::M68000, Options::default()).unwrap();
         // A mask of ones above bit 15 is the word `and` (`narrow.rs`).
-        // and a mask a `moveq` makes is built in the destination (`constreg.rs`)
+        // and a mask a `moveq` makes is built in the destination
+        // (`constreg.rs`)
         let form = if mask < 0 {
             format!("and.w\t#{},", mask & 0xFFFF)
         } else if mask < 128 {

@@ -59,7 +59,7 @@ impl Combiner<'_> {
             if !matches!(found, Visit::None) {
                 return found;
             }
-            if let Some(recurrence) = self.fold_freeze_into_recurrence(freeze, phi) {
+            if let Some(recurrence) = self.fold_freeze_into_recurrence(phi) {
                 return Visit::Replace(recurrence);
             }
         }
@@ -83,7 +83,6 @@ impl Combiner<'_> {
     /// start frozen if it may be poison.
     fn fold_freeze_into_recurrence(
         &mut self,
-        freeze: InstId,
         phi: InstId,
     ) -> Option<Operand> {
         let phi_block = self.function.parent(phi)?;
@@ -188,7 +187,6 @@ impl Combiner<'_> {
                 ref opcode if opcode.is_terminator() => return false,
                 _ => Position::After(def),
             },
-            _ => return false,
         };
         let mut changed = false;
         let already = match position {

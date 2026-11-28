@@ -26,6 +26,16 @@ fn known_switch(switch: &str) -> Result<(), String> {
 static ALLOCATOR: llrm_alloc::Slab = llrm_alloc::Slab;
 
 fn main() {
+    let argv: Vec<String> = std::env::args().skip(1).collect();
+    if llrm_codegen::support::version::asked(
+        &argv,
+        "llrm-6502-llc",
+        env!("LLRM_BUILD_SHA"),
+        env!("LLRM_BUILD_DIRTY"),
+        env!("LLRM_BUILD_INCREMENTAL"),
+    ) {
+        return;
+    }
     // The mid-end recurses along dependency chains: run on a thread with room.
     let worker = std::thread::Builder::new().stack_size(1 << 30).spawn(run).expect("a thread");
     std::process::exit(worker.join().unwrap_or(101));
@@ -77,7 +87,7 @@ fn run() -> i32 {
         request.platform.zero_page = bytes;
     }
     // the test profile: check every spill-slot sharing, panic on a wrong one
-    if std::env::var_os("LLRM_6502_VERIFY_SLOTS").is_some() {
+    if llrm_support::env_set("LLRM_6502_VERIFY_SLOTS") {
         llrm_spike_mf::spill::VERIFY_SLOTS.store(true, std::sync::atomic::Ordering::Relaxed);
     }
     let Some(input) = input else {

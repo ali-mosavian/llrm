@@ -75,6 +75,18 @@ def perf_counts() -> bool:
     return probe.returncode == 0
 
 
+def instructions_of(text: str) -> int | None:
+    """The `instructions:u` a `perf stat -x,` file counted, summed; None where it counted none. A total line is `count,,instructions:u,...`; an interval line
+    (`-I`) puts its timestamp first: `time,count,,instructions:u,...`."""
+    total, seen = 0, False
+    for line in text.splitlines():
+        fields = [one.strip() for one in line.split(",")]
+        at = next((i for i, one in enumerate(fields) if one.startswith("instructions")), None)
+        if at is not None and at >= 2 and fields[at - 2].isdigit():
+            total, seen = total + int(fields[at - 2]), True
+    return total if seen else None
+
+
 class Meter:
     """User-space instructions of every command the steps start while open: each is run under `perf stat -e instructions:u -- COMMAND` (load-independent, where CPU
     seconds stretch with contention) and the counts are summed. `perf stat -p PID` was tried first: it read 74 G, 799 G and 893 G for the same set, more than the
@@ -108,39 +120,66 @@ class Meter:
         if self._popen is None:
             return
         subprocess.Popen = self._popen
-        total, seen = 0, 0
+        self.value = self.so_far()
         for counts in self._files:
-            for line in counts.read_text().splitlines():
-                fields = line.split(",")
-                if len(fields) > 2 and fields[2].startswith("instructions") and fields[0].isdigit():
-                    total, seen = total + int(fields[0]), seen + 1
             counts.unlink(missing_ok=True)
-        self.value = total if seen else None
+
+    def so_far(self) -> int | None:
+        """The instructions of the commands started so far; a finished command's file is complete."""
+        counts = [instructions_of(one.read_text()) for one in self._files if one.exists()]
+        return sum(one for one in counts if one is not None) if any(one is not None for one in counts) else None
 
 
 CUT_GRACE = 3.0  # seconds a cut group has to exit on SIGINT before SIGKILL
 
 
-def run_cut(command: list[str], seconds: float, cwd: Path, env: dict[str, str] | None = None) -> tuple[int | None, str]:
+def run_cut(
+    command: list[str], seconds: float, cwd: Path, env: dict[str, str] | None = None, instructions: int | None = None, counted=None
+) -> tuple[int | None, str]:
     """(exit code, output) of `command`; (None, '') if it ran past `seconds` and its whole process group was stopped. A cargo killed alone leaves its test binary
     running unseen: the unit step read '0.0 s' for 1,143 tests that went on in the background. The group gets SIGINT first, so the `perf stat` wrapped around the command
-    (see Meter) still writes the instructions it counted; SIGKILL took them to the grave and a cut step counted 0 G beside a finished one's 120 G."""
+    (see Meter) still writes the instructions it counted; SIGKILL took them to the grave and a cut step counted 0 G beside a finished one's 120 G.
+    With `instructions`, it is also cut once it has run that many (`counted()`, else its own `perf stat -I` file): the budget is judged in instructions."""
+    interval = None
+    if instructions is not None and counted is None and perf_counts():
+        interval = Path(tempfile.mkstemp(prefix="cut-")[1])
+        command = ["perf", "stat", "-I", "100", "-x,", "-e", "instructions:u", "-o", str(interval), "--", *command]
+        counted = lambda: instructions_of(interval.read_text()) or 0  # noqa: E731
     child = subprocess.Popen(command, cwd=cwd, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, start_new_session=True)
+    deadline, last = time.monotonic() + seconds, 0
     try:
-        out, _ = child.communicate(timeout=seconds)
+        while True:
+            try:
+                out, _ = child.communicate(timeout=min(0.1, max(deadline - time.monotonic(), 0.0)) if counted else seconds)
+                break
+            except subprocess.TimeoutExpired:
+                if time.monotonic() >= deadline:
+                    raise
+                if counted and instructions is not None:
+                    # the count lags a perf interval and a poll: cut while what two more samples add still fits
+                    now = counted()
+                    if now + 2 * (now - last) >= instructions:
+                        raise
+                    last = now
     except subprocess.TimeoutExpired:
+        out = ""
         for sig in (signal.SIGINT, signal.SIGKILL):
             try:
                 os.killpg(child.pid, sig)
             except ProcessLookupError:  # it ended between the timeout and the signal
                 break
             try:
-                child.communicate(timeout=CUT_GRACE if sig == signal.SIGINT else None)
+                out, _ = child.communicate(timeout=CUT_GRACE if sig == signal.SIGINT else None)
                 break
             except subprocess.TimeoutExpired:
                 continue
         _charged[0] += seconds
-        return None, ""
+        if interval:
+            interval.unlink(missing_ok=True)
+        # what it printed before the cut: how far it got
+        return None, out or ""
+    if interval:
+        interval.unlink(missing_ok=True)
     return child.returncode, out
 
 
@@ -361,14 +400,18 @@ def share(allowance: float, crates: int) -> float:
     return allowance / max(crates, 1)
 
 
-def unit_tests(package: str, allowance: float, ranking: dict) -> list[str]:
-    """The names to run for `package`: its cheapest ranked tests whose cumulative cost fits `allowance`; [] where it has no ranking (all of them, cut at the allowance)."""
+def unit_tests(package: str, allowance: float, ranking: dict, instructions: int | None = None) -> list[str]:
+    """The names to run for `package`: its cheapest ranked tests whose cumulative cost fits the share, in instructions where the share and the ranking have
+    them, else in seconds; [] where it has no ranking (all of them, cut at the share)."""
+    entries = ranking.get(package, [])
+    counted = instructions is not None and entries and all(len(entry) > 2 for entry in entries)
     out, total = [], 0.0
-    for name, seconds in ranking.get(package, []):
-        if total + seconds > allowance:
+    for entry in sorted(entries, key=lambda entry: entry[2]) if counted else entries:
+        cost, limit = (entry[2], instructions) if counted else (entry[1], allowance)
+        if total + cost > limit:
             break
-        out.append(name)
-        total += seconds
+        out.append(entry[0])
+        total += cost
     return out
 
 
@@ -396,12 +439,19 @@ def compile_ok(command: list[str], env: dict[str, str]) -> str | None:
     return f"exit {done.returncode}: {lines[-1][:140] if lines else 'no message'}  [{' '.join(command[:3])}]"
 
 
-def programs(bins: Path) -> tuple[str, str]:
+def program_jobs(bins: Path) -> list[list[str]]:
+    """bintree as BASIC, Nib and C at 16 and 32 bits; llrm-cc takes its target as a row (`llrmbin.c_args`), not as -m16/-m32, and stops at the object with `-c`."""
     jobs = []
     for tool, ext in (("llrm-qb", "bas"), ("llrm-nib", "nib"), (llrmbin.compiler(bins).name, "c")):
-        for machine in ("-m16", "-m32"):
-            extra = ["-mabi=sysv", "-march=i486"] if tool == llrmbin.compiler(bins).name and machine == "-m32" else []
-            jobs.append([str(bins / tool), str(PROGRAM / f"bintree.{ext}"), "-O2", machine, *extra, "-o", os.devnull])
+        for bits in (16, 32):
+            # llrm-cc links unless told `-c`
+            target = [*llrmbin.c_args(bits), "-c"] if tool == llrmbin.compiler(bins).name else [f"-m{bits}"]
+            jobs.append([str(bins / tool), str(PROGRAM / f"bintree.{ext}"), "-O2", *target, "-o", os.devnull])
+    return jobs
+
+
+def programs(bins: Path) -> tuple[str, str]:
+    jobs = program_jobs(bins)
     for command in jobs:
         if why := compile_ok(command, oracle_env()):
             return "fail", why
@@ -621,6 +671,7 @@ SCANNERS = {
     "no_kill_by_pattern": "scans scripts",
     "no_partial_ecx_counts": "scans the 32-bit runtime assembly",
     "selectiondag_registry": "reads the SD registry in the plan and every source's SD numbers",
+    "tmp_paths_per_process": "reads the tests' sources for fixed scratch names",
     "no_local_paths": "scans docs",
     "target_facts": "reads the target descriptions' facts",
     "no_todo": "scans sources",
@@ -796,16 +847,32 @@ def run_cases(bins: Path) -> tuple[str, str]:
     return "ok", f"{len(names)} programs"
 
 
+def cut_progress(output: str) -> tuple[int, int | None, bool]:
+    """(tests that ran, tests it was to run, whether one failed) of a `cargo test -q` cut before it ended: `running N tests` and a character per finished test."""
+    total, ran, failed = None, 0, False
+    for line in output.splitlines():
+        if match := re.match(r"running (\d+) tests?$", line.strip()):
+            total = (total or 0) + int(match.group(1))
+        elif line and set(line.strip()) <= set(".Fi") and line.strip():
+            ran += len(line.strip())
+            failed |= "F" in line
+    return ran, total, failed
+
+
 def unit_step(package: str, allowance: float):
-    def step(bins: Path) -> tuple[str, str]:
+    def step(bins: Path, instructions: int | None = None) -> tuple[str, str]:
         ranking = selection().get("units", {})
-        names = unit_tests(package, allowance, {k: [(n, s) for n, s in v.get("tests", [])] for k, v in ranking.items()})
+        names = unit_tests(package, allowance, {k: [tuple(one) for one in v.get("tests", [])] for k, v in ranking.items()}, instructions)
         command = ["cargo", "test", "-q", "--lib", "-p", package] + (["--", "--exact", *names] if names else [])
         # an unranked crate runs its whole lib, cut by wall time: one test thread keeps that wall time the CPU it is charged (32 threads ran 32x the budget in it)
         env = None if names else {**os.environ, "RUST_TEST_THREADS": "1"}
-        code, output = run_cut(slotted(command), allowance + CARGO_OVERHEAD, ROOT, env=env)
+        code, output = run_cut(slotted(command), allowance + CARGO_OVERHEAD, ROOT, env=env, instructions=instructions)
         if code is None:
-            return "ok", f"{package}: no ranking yet, cut at {allowance:.1f} s without a failure"
+            limit = f"{instructions / 1e9:.1f} G" if instructions is not None else f"{allowance:.1f} s"
+            ran, total, failed_before = cut_progress(output)
+            if failed_before:
+                return "fail", f"{package}: a test failed before the cut at {limit}"
+            return "cut", f"{package}: cut at {limit} ({ran}/{total if total is not None else '?'} tests ran), none failed{'' if names else ' (no ranking yet)'}"
         listed = xfail.load_for(ROOT)
         failed = {f"unit {package}::{test}" for test in failed_tests(output)}
         ran = {f"unit {package}::{name}" for name in names} if names else {one for one in listed if one.startswith(f"unit {package}::")}
@@ -817,6 +884,7 @@ def unit_step(package: str, allowance: float):
             return "fail", f"{package}: {' / '.join(lines[:3])[:300] or 'cargo test failed'}", sorted(unexpected)
         note = f", {len(expected)} expected failures (xfail.toml)" if expected else ""
         return "ok", f"{package}: {len(names) or 'all'} tests{note}"
+    step.takes_instructions = True
     return step
 
 
@@ -845,10 +913,17 @@ def run_steps(steps, bins: Path, clock=cpu, budget: float = BUDGET, known_red: f
     limit = INSTRUCTIONS if limit is None else limit
     started, wall, parts, failed, skipped = clock(), time.monotonic(), [], [], []
     with (meter or Meter)() as counted:
-        for name, step, _ in steps:
+        for at, (name, step, _) in enumerate(steps):
             began = clock()
             stage(f"step {name}")
-            verdict, detail, *tests = ("skipped", "known red, not run") if name in known_red else step(bins)
+            share = None
+            if getattr(step, "takes_instructions", False) and limit and (used := getattr(counted, "so_far", lambda: None)()) is not None:
+                # what the steps so far left, in equal parts to this unit step and those after it
+                left = sum(getattr(one, "takes_instructions", False) for _, one, _ in steps[at:])
+                share = max(limit - used, 0) // left
+            verdict, detail, *tests = (
+                ("skipped", "known red, not run") if name in known_red else step(bins, share) if share is not None else step(bins)
+            )
             parts.append(f"{name} {verdict} {clock() - began:.1f} s")
             if verdict == "fail":
                 # a step that names the tests it failed is listed by them: the subset rule compares test names, not crates
@@ -875,29 +950,62 @@ def run_twice_over_budget(run) -> tuple[bool, str]:
     steps stretch (cache and hyper-thread contention), and a tools-only PR failed 'over the budget' with no unit test in the set."""
     ok, line = run()
     if not ok and failing_names(line) == ["over the budget"]:
+        first = line.split(" | ", 1)[-1]
         ok, line = run()
-        line = line.replace("PARITY SMOKE", "PARITY SMOKE (second run, the first was over the budget)", 1)
+        line = line.replace("PARITY SMOKE", "PARITY SMOKE (second run, the first was over the budget)", 1) + f" | first run: {first}"
     return ok, line
 
 
+RANK_CANDIDATES = 200  # the cheapest by time whose instructions are counted one by one
+
+
+def test_binary(package: str) -> Path | None:
+    """The `--lib` test binary cargo builds for `package`."""
+    done = subprocess.run(["cargo", "test", "--lib", "-p", package, "--no-run", "--message-format=json"], cwd=ROOT, capture_output=True, text=True)
+    for line in done.stdout.splitlines():
+        message = json.loads(line) if line.startswith("{") else {}
+        if message.get("reason") == "compiler-artifact" and message.get("profile", {}).get("test") and message.get("executable"):
+            if message.get("target", {}).get("kind") == ["lib"] or "lib" in message.get("target", {}).get("kind", []):
+                return Path(message["executable"])
+    return None
+
+
+def instructions_of_test(binary: Path, name: str) -> int | None:
+    """The user-space instructions of one test of `binary`, run alone."""
+    counts = Path(tempfile.mkstemp(prefix="rank-")[1])
+    try:
+        subprocess.run(["perf", "stat", "-x,", "-e", "instructions:u", "-o", str(counts), "--", str(binary), "--exact", name, "-q"], cwd=ROOT, capture_output=True)
+        return instructions_of(counts.read_text())
+    finally:
+        counts.unlink(missing_ok=True)
+
+
 def rank(package: str) -> None:
-    """Measure `package`'s unit tests once and write the cheapest into parity_smoke.toml (not per merge)."""
+    """Measure `package`'s unit tests once and write the cheapest into parity_smoke.toml (not per merge): the cheapest by time are counted in instructions one by
+    one, the budget's measure (a test of 0.0 s ran 5.9 G), and the 40 cheapest of those are kept."""
     env = {**os.environ, "RUSTC_BOOTSTRAP": "1"}
     done = subprocess.run(slotted(["cargo", "test", "--lib", "-p", package, "--", "-Z", "unstable-options", "--report-time", "--test-threads", "1"]), cwd=ROOT, capture_output=True, text=True, env=env)
-    tests = [(n, s) for n, s in ranked(done.stdout) if s <= 0.5][:40]
-    data = selection()
-    data.setdefault("units", {})[package] = {"tests": [[n, s] for n, s in tests]}
-    SELECTION.write_text(dump(data))
+    candidates = [(n, s) for n, s in ranked(done.stdout) if s <= 0.5][:RANK_CANDIDATES]
+    binary = test_binary(package)
+    counted = [(n, s, instructions_of_test(binary, n)) for n, s in candidates] if binary and perf_counts() else []
+    tests = sorted(((n, s, i) for n, s, i in counted if i is not None), key=lambda one: one[2])[:40] or [(n, s) for n, s in candidates[:40]]
+    write_ranking(package, tests)
     print(f"{package}: {len(tests)} tests ranked, cheapest {tests[0] if tests else None}")
 
 
-def dump(data: dict) -> str:
-    out = []
-    if "run" in data:
-        out.append("[run]\ncases = [" + ", ".join(f'"{c}"' for c in data["run"].get("cases", [])) + "]\n")
-    for package, one in sorted(data.get("units", {}).items()):
-        out.append(f'[units."{package}"]\ntests = [\n' + "".join(f'  ["{n}", {s}],\n' for n, s in one.get("tests", [])) + "]\n")
-    return "\n".join(out)
+def write_ranking(package: str, tests: list[tuple]) -> None:
+    """`[units."package"]` of parity_smoke.toml set to `tests`, the rest of the file as it was (comments and layout)."""
+    text = SELECTION.read_text() if SELECTION.exists() else ""
+    section = f'[units."{package}"]\ntests = [\n' + "".join(f"  {json.dumps(list(one))},\n" for one in tests) + "]\n"
+    head = f'[units."{package}"]'
+    if head in text:
+        start = text.index(head)
+        end = text.find("\n[", start + len(head))
+        text = text[:start] + section + (text[end + 1 :] if end >= 0 else "")
+        text = text.replace(section + "[", section + "\n[", 1)
+    else:
+        text = text.rstrip("\n") + "\n\n" + section
+    SELECTION.write_text(text)
 
 
 def main() -> int:

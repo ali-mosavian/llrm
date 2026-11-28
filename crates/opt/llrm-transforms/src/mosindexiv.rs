@@ -93,14 +93,14 @@ impl FunctionPass for MosIndexIv {
         analyses: &mut Analyses,
     ) -> PreservedAnalyses {
         let outer = std::rc::Rc::clone(analyses.outer());
-        if std::env::var_os("LLRM_EXP_SKIP_RUN").is_some() {
+        if llrm_support::env_set("LLRM_EXP_SKIP_RUN") {
             return PreservedAnalyses::all();
         }
         // A session of its own: the expressions made to test a GEP that is not
         // rewritten must not enter the cache the loop passes share, whose
         // numbering orders LSR's ties.
         let mut session = ScevSession::of(unit.context, unit.function, &outer);
-        let changed = std::env::var_os("LLRM_EXP_SKIP_REWRITE").is_none()
+        let changed = !llrm_support::env_set("LLRM_EXP_SKIP_REWRITE")
             && rewritten_in(&mut session, unit.context, unit.layout, unit.function, unit.declared, &outer);
         if changed {
             // Blocks and edges are as they were.
@@ -165,7 +165,10 @@ fn rewrite_loop(
         l.get_blocks()
             .iter()
             .flat_map(|&block| function.iter_block(block))
-            .filter(|&inst| matches!(function.instruction(inst).opcode, Opcode::GetElementPtr { .. }))
+            .filter(|&inst| matches!(
+                function.instruction(inst).opcode,
+                Opcode::GetElementPtr { .. }
+            ))
             .collect()
     };
     let mut changed = false;
@@ -180,13 +183,8 @@ fn rewrite_loop(
         let index = rewriter.expand_code_for(env, context, declared, function, se, plan.index, None);
         // An "uglygep": no real GEP calculation has to be found that leads to
         // the SCEV, and some aliasing information stays.
-        let extended = function.create_instruction(
-            Opcode::Cast(CastOp::ZExt),
-            index_ty,
-            vec![index],
-            Flags::default(),
-            None,
-        );
+        let extended =
+            function.create_instruction(Opcode::Cast(CastOp::ZExt), index_ty, vec![index], Flags::default(), None);
         function.insert(extended, Position::Before(gep)).expect("a placed extension");
         let extended = Operand::Value(function.instruction(extended).result.expect("a value"));
         let i8 = byte_type(context);

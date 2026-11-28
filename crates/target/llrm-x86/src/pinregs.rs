@@ -1,5 +1,5 @@
-//! The pin's register numbers and x86's registers, each from the other: what the
-//! matcher interpreter and the DAG builder name a physical register by.
+//! The pin's register numbers and x86's registers, each from the other: what
+//! the matcher interpreter and the DAG builder name a physical register by.
 
 use llrm_lir::registers::RegId;
 
@@ -80,8 +80,9 @@ pub fn phys_reg(register: u16) -> Option<RegId> {
 /// The pin's register number of the register the builder names `id`
 /// (`phys_reg` inverted); `None` where it has none.
 pub fn pin_register(id: RegId) -> Option<u16> {
-    // The inverse of `phys_reg`, made once: a scan of 200 numbers per query cost 81 K Ir
-    // a call lowering (memory_expansion, 953 calls) and the same in selection.
+    // The inverse of `phys_reg`, made once: a scan of 200 numbers per query
+    // cost 81 K Ir a call lowering (memory_expansion, 953 calls) and the
+    // same in selection.
     static INVERSE: std::sync::OnceLock<Vec<Option<u16>>> = std::sync::OnceLock::new();
     let table = INVERSE.get_or_init(|| {
         let mut table = vec![None; RegId::values().len()];
@@ -94,7 +95,6 @@ pub fn pin_register(id: RegId) -> Option<u16> {
     });
     table.get(id.index()).copied().flatten()
 }
-
 
 #[cfg(test)]
 mod tests {
