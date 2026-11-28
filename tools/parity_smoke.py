@@ -849,7 +849,8 @@ def unit_step(package: str, allowance: float):
         env = None if names else {**os.environ, "RUST_TEST_THREADS": "1"}
         code, output = run_cut(slotted(command), allowance + CARGO_OVERHEAD, ROOT, env=env, instructions=instructions)
         if code is None:
-            return "ok", f"{package}: no ranking yet, cut at {allowance:.1f} s without a failure"
+            limit = f"{instructions / 1e9:.1f} G, its share" if instructions is not None else f"{allowance:.1f} s"
+            return "ok", f"{package}: {len(names) or 'all'} tests{'' if names else ' (no ranking yet)'}, cut at {limit}, without a failure before it"
         listed = xfail.load_for(ROOT)
         failed = {f"unit {package}::{test}" for test in failed_tests(output)}
         ran = {f"unit {package}::{name}" for name in names} if names else {one for one in listed if one.startswith(f"unit {package}::")}

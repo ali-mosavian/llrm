@@ -816,3 +816,11 @@ def test_interval_and_total_perf_files_are_counted_alike():
     interval = "     0.100206101,100,,instructions:u,100.00,,\n     0.200519841,23,,instructions:u,100.00,,\n"
     assert ps.instructions_of(total) == ps.instructions_of(interval) == 123
     assert ps.instructions_of("<not counted>,,instructions:u,0,0.00,,\n") is None
+
+
+def test_a_cut_unit_step_says_what_cut_it(monkeypatch):
+    """Both unit steps of the 6a73 smoke read "no ranking yet, cut at 3.0 s": they were cut at their instruction share (llrm-m68k's whole lib is 6.4 G)."""
+    monkeypatch.setattr(ps, "run_cut", lambda *a, **k: (None, ""))
+    monkeypatch.setattr(ps, "unit_tests", lambda *a: ["a::b"])
+    verdict, detail = ps.unit_step("llrm-m68k", 3.0)(Path("."), 3_000_000_000)[:2]
+    assert verdict == "ok" and "3.0 G" in detail and "no ranking" not in detail, detail
