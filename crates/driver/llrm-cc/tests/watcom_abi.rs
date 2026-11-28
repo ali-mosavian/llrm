@@ -22,10 +22,7 @@ fn listing(
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
     let run = Command::new(env!("CARGO_BIN_EXE_llrm-cc-bin"))
         .env("LLRM_CC_TARGET", target)
-        .env(
-            "LLRM_LLC",
-            std::env::var_os("LLRM_LLC").unwrap_or_else(|| target_dir::of(&root).join("release/llrm-llc").into()),
-        )
+        .env("LLRM_LLC", target_dir::llc(&root))
         .args(["-O2", "-S", "-o"])
         .arg(&s)
         .arg(&c)
