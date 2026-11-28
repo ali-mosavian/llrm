@@ -5,6 +5,9 @@ d=$(mktemp -d); trap 'rm -rf "$d"' EXIT
 echo 'X=1' > $d/runner.env; unset X; runner_env_load $d/runner.env; [ "$X" = 1 ] || { echo "FAIL: runner.env not loaded"; exit 1; }
 echo 'X=2' > $d/runner.env; runner_env_load $d/runner.env; [ "$X" = 2 ] || { echo "FAIL: a changed runner.env was not picked up"; exit 1; }
 runner_env_load $d/none || { echo "FAIL: a missing runner.env failed the runner"; exit 1; }
+# Regression: a line dropped from runner.env stayed exported until a restart: LLRM_OW and LLRM_MEASURE_REF, removed 11-28, still leaked into the tools tests (#10970, #10971).
+printf 'X=2\nY=1\n' > $d/runner.env; runner_env_load $d/runner.env; echo 'X=2' > $d/runner.env; runner_env_load $d/runner.env
+[ -z "${Y+set}" ] || { echo "FAIL: a line dropped from runner.env stayed set"; exit 1; }
 mkdir $d/s; echo a > $d/s/queue-runner.sh; echo a > $d/s/head-age.sh; echo a > $d/s/test-head-age.sh
 before=$(runner_scripts_sha $d/s); echo b > $d/s/test-head-age.sh; [ "$(runner_scripts_sha $d/s)" = "$before" ] || { echo "FAIL: a test file reloaded the runner"; exit 1; }
 echo b > $d/s/head-age.sh; [ "$(runner_scripts_sha $d/s)" != "$before" ] || { echo "FAIL: a changed helper did not change the runner's sha"; exit 1; }
