@@ -24,7 +24,7 @@ use crate::reg;
 /// itself (`x + x`) is copied after the low word's add, and the matcher
 /// takes only operands made before it.
 fn read_through_copies(function: &mut MFunction) -> bool {
-    let mut defs = std::collections::HashMap::<u32, usize>::new();
+    let mut defs = llrm_support::hash::HashMap::<u32, usize>::default();
     for block in &function.blocks {
         for inst in &block.insts {
             for operand in &inst.operands {
@@ -39,7 +39,7 @@ fn read_through_copies(function: &mut MFunction) -> bool {
             }
         }
     }
-    let mut alias = std::collections::HashMap::<u32, u32>::new();
+    let mut alias = llrm_support::hash::HashMap::<u32, u32>::default();
     for block in &function.blocks {
         for inst in &block.insts {
             if let (Kind::Copy, [Operand::Def(Reg::Virt(to)), Operand::Use(Reg::Virt(from))]) = (inst.kind, &inst.operands[..])
@@ -99,7 +99,7 @@ pub fn use_the_carry(function: &mut MFunction) -> bool {
     // every read of a virtual register in the function: the byte and the sums
     // go with the instructions only if nothing outside them reads them (a
     // condition byte is carried across blocks by a copy)
-    let mut reads = std::collections::HashMap::<u32, usize>::new();
+    let mut reads = llrm_support::hash::HashMap::<u32, usize>::default();
     for block in &function.blocks {
         for inst in &block.insts {
             for operand in &inst.operands {
@@ -172,7 +172,7 @@ fn uses(
 
 fn recognised(
     insts: &[Inst],
-    reads: &std::collections::HashMap<u32, usize>,
+    reads: &llrm_support::hash::HashMap<u32, usize>,
 ) -> Option<Found> {
     let hl = Reg::Phys(reg::HL);
     let flags = Reg::Phys(reg::FLAGS);

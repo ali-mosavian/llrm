@@ -4,11 +4,10 @@
 //! edge), so the shared SSA phases, which read one definition per value, could
 //! not run on arm64 (184 such registers in the -O1 corpus).
 
-use std::collections::HashMap;
-
 use llrm_arm64::dag::emit::emit;
 use llrm_arm64::dag::function::select_function;
 use llrm_arm64::mfunc::MFunc;
+use llrm_support::hash::HashMap;
 
 const DATALAYOUT: &str = "e-m:o-i64:64-i128:128-n32:64-S128";
 
@@ -23,7 +22,7 @@ fn module() -> llrm_mir::module::Module {
 
 /// The virtual registers defined more than once.
 fn defined_twice(function: &MFunc) -> Vec<String> {
-    let mut count: HashMap<String, usize> = HashMap::new();
+    let mut count: HashMap<String, usize> = HashMap::default();
     for op in function.blocks.iter().flat_map(|block| block.ops.iter()) {
         for register in op.defs_and_uses().0.into_iter().filter(|register| register.is_virtual()) {
             *count.entry(format!("{register:?}")).or_default() += 1;

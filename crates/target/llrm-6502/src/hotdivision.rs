@@ -64,7 +64,7 @@ pub fn runs(module: &Module) -> f64 {
 /// the clocks of 200 (div_constants_long -Os: 2.9% of its clocks, 54% run).
 pub fn runs_priced(
     module: &Module,
-    weights: &std::collections::HashMap<usize, Vec<u64>>,
+    weights: &llrm_support::hash::HashMap<usize, Vec<u64>>,
 ) -> f64 {
     runs_of_width(module, 32, Some(weights))
 }
@@ -114,7 +114,7 @@ pub fn runs16(module: &Module) -> f64 {
 /// [`runs16`] in the block weights of the module's priced clocks.
 pub fn runs16_priced(
     module: &Module,
-    weights: &std::collections::HashMap<usize, Vec<u64>>,
+    weights: &llrm_support::hash::HashMap<usize, Vec<u64>>,
 ) -> f64 {
     runs_of_width(module, 16, Some(weights))
 }
@@ -122,7 +122,7 @@ pub fn runs16_priced(
 fn runs_of_width(
     module: &Module,
     width: u32,
-    priced: Option<&std::collections::HashMap<usize, Vec<u64>>>,
+    priced: Option<&llrm_support::hash::HashMap<usize, Vec<u64>>>,
 ) -> f64 {
     let calls = call_weights(module);
     let mut runs = 0.0;

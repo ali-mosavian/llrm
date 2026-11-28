@@ -1093,7 +1093,7 @@ fn kept_by_calls(name: &str) -> bool {
 /// A store through a pointer or an index may write any cell.
 pub fn fold_known_cells(asm: &mut Asm) {
     let mut registers: [Option<String>; 3] = [None, None, None];
-    let mut cells: std::collections::HashMap<String, String> = Default::default();
+    let mut cells: llrm_support::hash::HashMap<String, String> = Default::default();
     let register_of = |op: Op| match op {
         Op::Lda | Op::Sta | Op::Cmp => 0,
         Op::Ldx | Op::Stx | Op::Cpx => 1,

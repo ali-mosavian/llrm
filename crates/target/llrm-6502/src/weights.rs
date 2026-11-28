@@ -16,7 +16,7 @@ use llrm_mir::loopinfo::LoopInfo;
 use llrm_mir::module::{Function, Module, Operand};
 use llrm_mir::opcode::Opcode;
 use llrm_mir::valuetracking::AssumptionCache;
-use std::collections::HashMap;
+use llrm_support::hash::HashMap;
 
 /// The trips a loop weighs when ScalarEvolution does not count it.
 const GUESSED_TRIPS: u64 = 10;

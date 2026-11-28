@@ -393,7 +393,7 @@ mod palette_tests {
         let coalescer = Coalescer::new(None, &segments, &classes);
         let (env, _) = coalescer.llvm_env(&body).expect("no phis");
         let palettes = env.palettes.borrow();
-        let held: std::collections::HashSet<*const std::collections::BTreeSet<_>> =
+        let held: llrm_support::hash::HashSet<*const std::collections::BTreeSet<_>> =
             palettes.values().map(|set| std::borrow::Borrow::borrow(set) as *const _).collect();
         assert!(palettes.len() > 8 * held.len(), "{} palettes held {} sets", palettes.len(), held.len());
     }

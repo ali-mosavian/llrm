@@ -24,10 +24,10 @@
 //! the goal. One step after the `moveq` is the cap: two cost 6 bytes, as
 //! `move.l` does. Exit: none. Off for `Options::PINNED`.
 
-use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
 
 use llrm_spike_mf::{Kind, Operand, Reg};
+use llrm_support::hash::HashMap;
 
 use crate::cmpelim::flags_read_after;
 use crate::dagisel::hooks::Cpu;
@@ -129,7 +129,7 @@ fn build(
         let cost = price(step.row, operands, cpu);
         costs.push(cost);
     }
-    let mut made: HashMap<u32, ((u32, u32), (i64, usize))> = HashMap::new();
+    let mut made: HashMap<u32, ((u32, u32), (i64, usize))> = HashMap::default();
     for m in -128..=127i64 {
         for (at, step) in steps.iter().enumerate() {
             let Some(cost) = costs[at] else { continue };

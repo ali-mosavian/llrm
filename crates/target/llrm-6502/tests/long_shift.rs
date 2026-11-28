@@ -44,7 +44,7 @@ fn chain_problems(
     by: u32,
 ) -> Vec<String> {
     let mut problems = Vec::new();
-    let mut routines = std::collections::HashMap::<&str, u32>::new();
+    let mut routines = llrm_support::hash::HashMap::<&str, u32>::default();
     let (mut kernel, mut current) = (0u32, None::<&str>);
     let shifts = |line: &str| matches!(
         line.split_whitespace().next(),

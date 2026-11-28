@@ -37,7 +37,7 @@
 //! # See also
 //! `X86CallFrameOptimization::runOnMachineFunction` (`isProfitable`).
 
-use std::collections::{HashMap, HashSet};
+use llrm_support::hash::{HashMap, HashSet};
 
 use crate::dagisel::hooks::Cpu;
 use crate::mfunc::{Inst, Kind, Operand, Reg};
@@ -807,7 +807,7 @@ fn sequences(
         }
         // stores that push `pea (k,An)`: the value never exists in a register,
         // so the order of the pushes depends on the address register alone
-        let mut addressed: HashMap<usize, (Vec<usize>, Address, (usize, u32), (usize, u32))> = HashMap::new();
+        let mut addressed: HashMap<usize, (Vec<usize>, Address, (usize, u32), (usize, u32))> = HashMap::default();
         if convertible {
             for &(store, _, source, _, pushed) in &parts {
                 let Source::Register(src) = source else { continue };
@@ -865,9 +865,9 @@ fn sequences(
         // arguments are the load) are pushed from its memory together,
         // each push reading it again, when that is cheaper than the load
         // and the stores: the load goes only if every reader goes.
-        let mut group_folds: HashMap<usize, usize> = HashMap::new();
-        let mut group_first: HashSet<usize> = HashSet::new();
-        let mut group_reads: HashMap<usize, ((usize, u32), (usize, u32))> = HashMap::new();
+        let mut group_folds: HashMap<usize, usize> = HashMap::default();
+        let mut group_first: HashSet<usize> = HashSet::default();
+        let mut group_reads: HashMap<usize, ((usize, u32), (usize, u32))> = HashMap::default();
         if convertible {
             let mut readers: std::collections::BTreeMap<usize, Vec<usize>> = std::collections::BTreeMap::new();
             for &(store, _, source, _, _) in &parts {

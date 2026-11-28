@@ -821,7 +821,7 @@ fn expand_selects(
 /// The constants (`LDI8`, `LDI16`) written once that a select reads.
 struct SoleUse {
     /// The item positions of the constant definitions that move into an arm.
-    defs: std::collections::HashSet<usize>,
+    defs: llrm_support::hash::HashSet<usize>,
     /// (select position, cell) -> the constant's value.
     uses: HashMap<(usize, String), i64>,
 }
@@ -1426,7 +1426,7 @@ fn division16_terms(
     // the priced clocks leave out the routine's own run
     let layout =
         llrm_mir::datalayout::DataLayout::parse(module.datalayout.as_deref().ok_or("a module with no datalayout")?)?;
-    let weights: std::collections::HashMap<usize, Vec<u64>> = module
+    let weights: llrm_support::hash::HashMap<usize, Vec<u64>> = module
         .globals
         .iter()
         .enumerate()
@@ -1464,7 +1464,7 @@ fn fast_division_pays_at_size(
     let (clocks, bytes) = priced(module, parts, compact)?;
     let layout =
         llrm_mir::datalayout::DataLayout::parse(module.datalayout.as_deref().ok_or("a module with no datalayout")?)?;
-    let weights: std::collections::HashMap<usize, Vec<u64>> = module
+    let weights: llrm_support::hash::HashMap<usize, Vec<u64>> = module
         .globals
         .iter()
         .enumerate()

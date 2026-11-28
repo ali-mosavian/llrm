@@ -517,7 +517,7 @@ fn rebuild_with(
     // Variables with a note the converter cannot place (a value from another
     // block, a float, nothing): the earlier notes would stay standing, saying
     // more than the code does, so such a variable says nothing at all.
-    let mut lost: std::collections::HashSet<llrm_mir::MetadataId> = std::collections::HashSet::new();
+    let mut lost: llrm_support::hash::HashSet<llrm_mir::MetadataId> = llrm_support::hash::HashSet::default();
     let mut number = 0u32;
     for (block_at, block) in function.blocks.iter().enumerate() {
         let is_entry = block_at == 0;
@@ -585,7 +585,7 @@ fn rebuild_with(
     };
     // A note whose operation allocation removed (a copy of an argument register
     // the value was coalesced with) stands at the entry, naming that register.
-    let present: std::collections::HashSet<u32> =
+    let present: llrm_support::hash::HashSet<u32> =
         lir.blocks.iter().flat_map(|block| block.insts.iter().map(|inst| inst.origin)).collect();
     for (anchor, list) in &notes {
         if !present.contains(anchor) {

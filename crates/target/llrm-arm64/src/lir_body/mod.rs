@@ -24,7 +24,6 @@ pub mod stages;
 #[cfg(test)]
 mod tests;
 
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use llrm_analysis::placealias::Object;
@@ -35,6 +34,7 @@ use llrm_codegen::support::hash::IndexMap;
 use llrm_lir::registers::{RegId, Regs};
 use llrm_lir::{Addr as LirAddr, AddressRef, Held, Imm, Loc, Mem, Operation, Reg as LirRegLoc, Semantics, Space};
 use llrm_spike_mf::mfunc::Reg as MfReg;
+use llrm_support::hash::HashMap;
 
 use crate::lir_view::{from_lir as machine_register, to_lir as lir_register};
 use crate::mc::inst::{Gpr, Inst, MemObject, MemOperand, Memory, Shift, Target, Vreg, Width};
@@ -462,18 +462,18 @@ fn writeback_ties(function: &MFunc) -> HashMap<u32, u32> {
         MfReg::Virt(value) => Some(value),
         MfReg::Phys(_) => None,
     };
-    let mut definitions: HashMap<u32, usize> = HashMap::new();
+    let mut definitions: HashMap<u32, usize> = HashMap::default();
     for op in function.blocks.iter().flat_map(|block| block.ops.iter()) {
         for register in op.defs_and_uses().0.into_iter().filter_map(number) {
             *definitions.entry(register).or_default() += 1;
         }
     }
     let mut next = function.next_register - Gpr::FIRST_VIRTUAL;
-    let mut ties = HashMap::new();
+    let mut ties = HashMap::default();
     for block in &function.blocks {
         // The registers a copy set earlier in this block that nothing has read
         // or written since.
-        let mut fresh: std::collections::HashSet<u32> = Default::default();
+        let mut fresh: llrm_support::hash::HashSet<u32> = Default::default();
         for op in block.ops.iter() {
             let base = match op {
                 Op::I(
@@ -579,7 +579,7 @@ fn effects(
 
 /// The function's operations as a body: block `n` is `at` = `n`.
 pub fn to_lir(function: &MFunc) -> Result<Lowered, Unmapped> {
-    let mut debug_values = HashMap::new();
+    let mut debug_values = HashMap::default();
     let mut symbols = Vec::new();
     let labels: rustc_hash::FxHashMap<&str, usize> =
         function.blocks.iter().enumerate().map(|(at, block)| (block.label.as_str(), at)).collect();
@@ -588,11 +588,11 @@ pub fn to_lir(function: &MFunc) -> Result<Lowered, Unmapped> {
     let ties = writeback_ties(function);
     // The copy that makes the base and the access that updates it keep the
     // register's number (the value before); all else gets the new value.
-    let mut keeps: std::collections::HashSet<(usize, usize)> = Default::default();
-    let mut updates: std::collections::HashSet<(usize, usize)> = Default::default();
+    let mut keeps: llrm_support::hash::HashSet<(usize, usize)> = Default::default();
+    let mut updates: llrm_support::hash::HashSet<(usize, usize)> = Default::default();
     if !ties.is_empty() {
         for (index, block) in function.blocks.iter().enumerate() {
-            let mut copied: HashMap<u32, usize> = HashMap::new();
+            let mut copied: HashMap<u32, usize> = HashMap::default();
             for (place, op) in block.ops.iter().enumerate() {
                 let (defs, uses) = op.defs_and_uses();
                 let numbers = |list: &[Reg]| -> Vec<u32> {

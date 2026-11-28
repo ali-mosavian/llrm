@@ -261,7 +261,7 @@ pub fn select_function(
     // `SelectAllBasicBlocks`: reverse post-order, so a block is built after
     // the blocks that dominate it and reads what their phis know. A block no
     // path reaches follows, in layout order.
-    let at: std::collections::HashMap<_, _> =
+    let at: llrm_support::hash::HashMap<_, _> =
         function.layout().iter().enumerate().map(|(at, &block)| (block, at)).collect();
     let mut order = llrm_mir::blockorder::reverse_post_order_traversal(function);
     let reached: llrm_support::hash::HashSet<_> = order.iter().copied().collect();
@@ -290,7 +290,7 @@ pub fn select_function(
         let extras = std::mem::take(&mut built.extra);
         // A phi of two registers (an `i128`, an `f128`) is updated part by
         // part: the k-th source goes to the k-th register of the phi
-        let mut seen: std::collections::HashMap<_, usize> = std::collections::HashMap::new();
+        let mut seen: llrm_support::hash::HashMap<_, usize> = llrm_support::hash::HashMap::default();
         let mut phis = Vec::new();
         for &(phi, src) in &built.phi_updates {
             let llrm_mir::module::ValueDef::Instruction(def) = function.value(phi).def else {

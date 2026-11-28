@@ -22,10 +22,10 @@
 //! `vector_arithmetic_cost` and `vector_memory_op_cost`, where the target takes
 //! vector values (x86-64).
 
-use std::collections::HashMap;
 use std::sync::OnceLock;
 
 use llrm_mir::tti::{ArithOp, CastKind, Cost, CostKind, LaneOp, MemoryOp, Ty, VectorTy};
+use llrm_support::hash::HashMap;
 
 const ORACLE: &str = include_str!("tti_vector_oracle.txt");
 

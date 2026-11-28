@@ -41,7 +41,7 @@
 //! then propagates copies forward and backward (`MachineCopyPropagation` follows
 //! `TailDuplicate` in `addMachineLateOptimization`).
 
-use std::collections::{HashMap, HashSet};
+use llrm_support::hash::{HashMap, HashSet};
 
 use crate::frame::Lowered;
 use crate::layout::label_of;
@@ -348,7 +348,7 @@ pub fn drop_unreferenced(
     kept: &[String],
 ) {
     loop {
-        let mut referenced: std::collections::HashSet<&str> = kept.iter().map(String::as_str).collect();
+        let mut referenced: llrm_support::hash::HashSet<&str> = kept.iter().map(String::as_str).collect();
         for (at, block) in blocks.iter().enumerate() {
             referenced.extend(block.insts.iter().filter_map(label_of));
             referenced.extend(tables.iter().flat_map(|table| table.entries.iter().map(String::as_str)));

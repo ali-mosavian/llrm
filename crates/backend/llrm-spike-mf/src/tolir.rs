@@ -3269,7 +3269,7 @@ mod palette_tests {
             orders.insert(value, if value % 100 == 0 { second.clone() } else { first.clone() });
         }
         let palettes = shared_palettes(&orders);
-        let distinct: std::collections::HashSet<*const BTreeSet<RegId>> = palettes.values().map(Rc::as_ptr).collect();
+        let distinct: llrm_support::hash::HashSet<*const BTreeSet<RegId>> = palettes.values().map(Rc::as_ptr).collect();
         assert_eq!(distinct.len(), 2, "one set per distinct order");
         assert_eq!(palettes[&1].iter().copied().collect::<Vec<_>>(), first);
         assert_eq!(palettes[&100].iter().copied().collect::<Vec<_>>(), second);
@@ -3349,14 +3349,14 @@ fn renumbered(
     defines: &[u32],
     reads: &[u32],
 ) -> Option<Semantics> {
-    let numbered = |numbers: Vec<u32>, values: &[u32]| -> std::collections::HashMap<u32, u32> {
+    let numbered = |numbers: Vec<u32>, values: &[u32]| -> llrm_support::hash::HashMap<u32, u32> {
         numbers.into_iter().zip(values.iter().copied()).filter(|(number, _)| *number != u32::MAX).collect()
     };
     let (def_map, use_map) = (numbered(defs, defines), numbered(uses, reads));
-    let held = |held: &Held, map: &std::collections::HashMap<u32, u32>| -> Option<Held> {
+    let held = |held: &Held, map: &llrm_support::hash::HashMap<u32, u32>| -> Option<Held> {
         Some(Held { value: *map.get(&held.value)?, ..*held })
     };
-    let remap = |loc: &Loc, map: &std::collections::HashMap<u32, u32>| -> Option<Loc> {
+    let remap = |loc: &Loc, map: &llrm_support::hash::HashMap<u32, u32>| -> Option<Loc> {
         Some(match loc {
             Loc::Held(each) => Loc::Held(held(each, map)?),
             Loc::Mem(cell) => {

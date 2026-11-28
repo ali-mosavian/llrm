@@ -110,8 +110,8 @@ thread_local! {
     /// (selection, function, number) -> lines. The choice allocates every
     /// function at both levels; the one kept is not allocated a third time for
     /// its text.
-    static KEPT_LINES: std::cell::RefCell<std::collections::HashMap<(usize, String, usize), Vec<Line>>> =
-        std::cell::RefCell::new(std::collections::HashMap::new());
+    static KEPT_LINES: std::cell::RefCell<llrm_support::hash::HashMap<(usize, String, usize), Vec<Line>>> =
+        std::cell::RefCell::new(llrm_support::hash::HashMap::default());
     /// The request `effective` chose for the module most recently asked about.
     static CHOSEN: std::cell::RefCell<Option<(String, SelectionKey, Request)>> = const { std::cell::RefCell::new(None) };
     /// The request `effective` chose between the module's compile and its
@@ -426,7 +426,7 @@ pub fn module_priced(
 ) -> Result<(u32, u64), String> {
     let (selected, alternatives) = cached_both(ir, request)?;
     let speed = !matches!(request.level, Level::Os | Level::Oz);
-    let (mut bytes, mut reached) = (0, std::collections::HashSet::new());
+    let (mut bytes, mut reached) = (0, llrm_support::hash::HashSet::default());
     let at = std::rc::Rc::as_ptr(&selected) as usize;
     let mut forms = Vec::with_capacity(selected.len());
     for (number, (name, ..)) in selected.iter().enumerate() {
@@ -507,7 +507,7 @@ fn module_bytes(
     request: &Request,
 ) -> Result<u32, String> {
     let (selected, alternatives) = cached_both(ir, request)?;
-    let (mut bytes, mut reached) = (0, std::collections::HashSet::new());
+    let (mut bytes, mut reached) = (0, llrm_support::hash::HashSet::default());
     let at = std::rc::Rc::as_ptr(&selected) as usize;
     for (number, (name, ..)) in selected.iter().enumerate() {
         let lines = lines_in(&selected, &alternatives, name, number, request)?;
@@ -1017,7 +1017,7 @@ fn price_now(
 const PRICES_KEPT: usize = 4096;
 
 thread_local! {
-    static PRICES: std::cell::RefCell<std::collections::HashMap<(u64, u64), Option<(u32, u64)>>> =
+    static PRICES: std::cell::RefCell<llrm_support::hash::HashMap<(u64, u64), Option<(u32, u64)>>> =
         std::cell::RefCell::new(Default::default());
     /// Pricings asked for, and run, since the last [`take_pricings`].
     static PRICINGS: std::cell::Cell<(usize, usize)> = const { std::cell::Cell::new((0, 0)) };
@@ -1133,7 +1133,7 @@ mod tests {
         let base: Vec<u8> = (0..70u8).map(|at| at.wrapping_mul(37)).collect();
         let (first, second) = (wyhash(&base, 1), wyhash(&base, 2));
         assert_ne!(first, second, "the seeds");
-        let mut seen = std::collections::HashSet::from([first]);
+        let mut seen = llrm_support::hash::HashSet::from_iter([first]);
         for at in 0..base.len() {
             for bit in 0..8 {
                 let mut flipped = base.clone();
@@ -1273,7 +1273,7 @@ mod tests {
     /// module price cannot see the call's clocks and the bytes either way.
     #[test]
     fn at_o1_a_call_is_priced_against_its_own_function_not_the_module() {
-        let routines = std::collections::HashSet::from(["__ashlsi3".to_owned()]);
+        let routines = llrm_support::hash::HashSet::from_iter(["__ashlsi3".to_owned()]);
         let priced = |name: &str, bytes, clocks, reached| Priced {
             name: name.to_owned(),
             bytes,
@@ -1285,7 +1285,7 @@ mod tests {
         let step =
             ("step".to_owned(), priced("step", 30, 700, routines), Some(priced("step", 44, 120, Default::default())));
         let variants: Variants = (vec![hot_loop], vec![step]);
-        let (calls, inline) = (std::collections::HashSet::new(), std::collections::HashSet::from([0]));
+        let (calls, inline) = (llrm_support::hash::HashSet::default(), llrm_support::hash::HashSet::from_iter([0]));
         let module = |form| module_price(&variants, form);
         assert!(prefers(Level::O1, module(&calls), module(&inline)));
         assert!(prefers(Level::O1, own_price(&variants, &calls, 0), own_price(&variants, &inline, 0)));
@@ -1748,8 +1748,8 @@ thread_local! {
     /// kept return blocks, the joined and unjoined copies) mostly feed the
     /// allocator the same function again: loop_fusion
     /// -O2 ran it 84 times on 64 distinct inputs, idioms -O2 992 times on 312.
-    static ALLOCATED: std::cell::RefCell<std::collections::HashMap<(u64, u64), AllocatedBefore>> =
-        std::cell::RefCell::new(std::collections::HashMap::new());
+    static ALLOCATED: std::cell::RefCell<llrm_support::hash::HashMap<(u64, u64), AllocatedBefore>> =
+        std::cell::RefCell::new(llrm_support::hash::HashMap::default());
 }
 
 /// Everything [`allocate_once_computed`] reads: the function as it is, the
@@ -1911,7 +1911,7 @@ thread_local! {
     /// The hash of the `Debug` text of each selector form seen, by the address
     /// of its `Arc`; the `Arc` is held, so the address names the form for as
     /// long as the entry stays.
-    static FORM_HASHES: std::cell::RefCell<std::collections::HashMap<usize, (std::sync::Arc<llrm_lir::Semantics>, u64)>> =
+    static FORM_HASHES: std::cell::RefCell<llrm_support::hash::HashMap<usize, (std::sync::Arc<llrm_lir::Semantics>, u64)>> =
         std::cell::RefCell::new(Default::default());
 }
 
@@ -4087,7 +4087,7 @@ fn lines_in(
 thread_local! {
     /// The functions of the module whose alternatives are `__mulsi3`'s
     /// (by the address of that list) that keep the shifts and adds.
-    static DECOMPOSED: std::cell::RefCell<Option<(usize, std::rc::Rc<std::collections::HashSet<String>>)>> =
+    static DECOMPOSED: std::cell::RefCell<Option<(usize, std::rc::Rc<llrm_support::hash::HashSet<String>>)>> =
         const { std::cell::RefCell::new(None) };
 }
 
@@ -4129,7 +4129,7 @@ struct Priced {
     bytes: u32,
     /// For one entry of the function.
     clocks: u64,
-    reached: std::collections::HashSet<String>,
+    reached: llrm_support::hash::HashSet<String>,
     calls: Vec<(String, f64)>,
 }
 type Variants = (Vec<Priced>, Vec<(String, Priced, Option<Priced>)>);
@@ -4171,9 +4171,9 @@ fn variants(
 /// clocks, each function as often as it is called ([`run_clocks`]).
 fn module_price(
     (fixed, either): &Variants,
-    decomposes: &std::collections::HashSet<usize>,
+    decomposes: &llrm_support::hash::HashSet<usize>,
 ) -> (u32, u64) {
-    use std::collections::HashSet;
+    use llrm_support::hash::HashSet;
     let chosen = either
         .iter()
         .enumerate()
@@ -4200,7 +4200,7 @@ pub fn module_prices(
     let (selected, alternatives) = cached_both(ir, request)?;
     let variants = variants(&selected, &alternatives, request);
     let every = (0..variants.1.len()).filter(|at| variants.1[*at].2.is_some()).collect();
-    Ok((module_price(&variants, &std::collections::HashSet::new()).0, module_price(&variants, &every).0))
+    Ok((module_price(&variants, &llrm_support::hash::HashSet::default()).0, module_price(&variants, &every).0))
 }
 
 /// The price of function `at` alone in the form `decomposes` gives it: its
@@ -4211,10 +4211,10 @@ pub fn module_prices(
 /// function the loop calls would not register.
 fn own_price(
     (fixed, either): &Variants,
-    decomposes: &std::collections::HashSet<usize>,
+    decomposes: &llrm_support::hash::HashSet<usize>,
     at: usize,
 ) -> (u32, u64) {
-    use std::collections::HashSet;
+    use llrm_support::hash::HashSet;
     let others: HashSet<String> = fixed
         .iter()
         .flat_map(|one| one.reached.iter())
@@ -4243,8 +4243,8 @@ fn decomposed_functions(
     selected: &Selections,
     alternatives: &Selections,
     request: &Request,
-) -> std::collections::HashSet<String> {
-    use std::collections::HashSet;
+) -> llrm_support::hash::HashSet<String> {
+    use llrm_support::hash::HashSet;
     let variants = variants(selected, alternatives, request);
     let either = &variants.1;
     let level = request.level;
@@ -4338,9 +4338,9 @@ fn decomposed_functions(
     // inline form, at the others the all-calls form
     let module_level = if all_sized { Level::Os } else { level };
     let (first, second) = if all_sized || regretful {
-        (descend(every), descend(HashSet::new()))
+        (descend(every), descend(HashSet::default()))
     } else {
-        (descend(HashSet::new()), descend(every))
+        (descend(HashSet::default()), descend(every))
     };
     let every_lone = with_alternative().all(|at| lone[at]);
     let second_wins = if regretful {
@@ -4456,8 +4456,8 @@ thread_local! {
     /// The finished lines of functions, by what the mid-end made of them and
     /// the request (`lines_of`), with the block frequencies their prices weigh
     /// by.
-    static LINES_MEMO: std::cell::RefCell<std::collections::HashMap<(u64, u64), (Result<Vec<Line>, String>, llrm_support::hash::HashMap<u32, f64>)>> =
-        std::cell::RefCell::new(std::collections::HashMap::new());
+    static LINES_MEMO: std::cell::RefCell<llrm_support::hash::HashMap<(u64, u64), (Result<Vec<Line>, String>, llrm_support::hash::HashMap<u32, f64>)>> =
+        std::cell::RefCell::new(llrm_support::hash::HashMap::default());
     /// The functions whose lines were made, not found.
     static LINES_MADE: std::cell::RefCell<Vec<String>> = const { std::cell::RefCell::new(Vec::new()) };
 }
@@ -4982,7 +4982,7 @@ pub fn tail_duplicate_returns(function: &mut MFunction) {
             // (`duplicateInstruction`'s `LocalVRMap`): one register
             // defined in every predecessor is a single live range,
             // placed in one register for all paths.
-            let mut fresh: std::collections::HashMap<u32, Reg> = std::collections::HashMap::new();
+            let mut fresh: llrm_support::hash::HashMap<u32, Reg> = llrm_support::hash::HashMap::default();
             let mut moves = Vec::new();
             for phi in &mut function.blocks[j].phis {
                 if let Some(at) = phi.incoming.iter().position(|(pred, _)| *pred == p) {
@@ -5062,7 +5062,7 @@ pub fn tail_duplicate_returns(function: &mut MFunction) {
 /// of the tail; a physical register is its own.
 fn renamed_def(
     classes: &mut Vec<crate::mfunc::Class>,
-    fresh: &mut std::collections::HashMap<u32, Reg>,
+    fresh: &mut llrm_support::hash::HashMap<u32, Reg>,
     reg: Reg,
 ) -> Reg {
     let Reg::Virt(old) = reg else { return reg };

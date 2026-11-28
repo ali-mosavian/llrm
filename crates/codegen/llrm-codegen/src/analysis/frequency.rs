@@ -401,7 +401,7 @@ impl Frequency {
         // One entered only on edges that are never taken is no bridge: the pin
         // (`addToDist`) gives such an edge a weight of 1, a mass the join
         // after it is given and a collapsed bridge would not carry.
-        let entered: std::collections::HashSet<i64> =
+        let entered: llrm_support::hash::HashSet<i64> =
             taken.iter().filter(|(_, chance)| **chance > 0.0).map(|((_, to), _)| *to).collect();
         let bridge = |at: i64| -> Option<i64> {
             let one = by_at.get(&at)?;

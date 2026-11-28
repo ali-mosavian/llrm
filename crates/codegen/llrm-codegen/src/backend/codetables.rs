@@ -29,10 +29,11 @@
 //! mov al, byte ptr T[di]          mov al, byte ptr cs:T[di]
 //! (T in _DATA, 12 B)       =>     (T after the procedure's last byte)
 //! ```
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use llrm_lir::registers::RegId;
+use llrm_support::hash::HashMap;
 
 use crate::backend::masm::{self, Datum, InlinePart, Procedure};
 use crate::model::ir::{Addr, Loc, Semantics, Space};

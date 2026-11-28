@@ -23,10 +23,9 @@
 //! `GCSE`/`cse_main` in gcc's `cse.cc`, which costs `jsr name` against `jsr
 //! (an)`.
 
-use std::collections::HashMap;
-
 use llrm_lir::registers::RegId;
 use llrm_spike_mf::{Kind, Operand, Reg};
+use llrm_support::hash::HashMap;
 
 use crate::dagisel::generated::instrinfo;
 use crate::dagisel::hooks::Cpu;
@@ -48,7 +47,7 @@ pub fn repeated(function: &MFunction) -> Vec<String> {
 
 /// [`repeated`], each with its number of calls.
 fn repeated_counts(function: &MFunction) -> Vec<(String, usize)> {
-    let mut count: HashMap<&str, usize> = HashMap::new();
+    let mut count: HashMap<&str, usize> = HashMap::default();
     let mut order: Vec<&str> = Vec::new();
     for inst in function.blocks.iter().flat_map(|block| &block.insts) {
         if let (Kind::Op("CALLb" | "CALLq"), Some(Operand::Symbol(name, 0))) = (inst.kind, inst.operands.first()) {
@@ -264,7 +263,7 @@ pub fn choose(
         return Ok((chosen, None));
     }
     // a price the tables cannot give keeps the calls as they are
-    let mut seen = Prices::new();
+    let mut seen = Prices::default();
     let Ok(base) = lines(function) else { return Ok((chosen, None)) };
     let Ok(mut best) = price_of(&base, cpu, &mut seen) else { return Ok((chosen, None)) };
     let mut expansion = Some(base);
@@ -339,7 +338,7 @@ mod tests {
         let first = [line("NOP", 0), line("RTS", 0)];
         let second = [line("NOP", 0), line("RTS", 0), line("NOP", 0)];
         let before = PRICED.with(std::cell::Cell::get);
-        let mut seen = Prices::new();
+        let mut seen = Prices::default();
         let one = price_of(&first, Cpu::M68000, &mut seen).expect("priced");
         let two = price_of(&second, Cpu::M68000, &mut seen).expect("priced");
         assert_eq!(PRICED.with(std::cell::Cell::get) - before, 2, "NOP and RTS, once each");

@@ -171,9 +171,10 @@ fn pin_form(code: Code) -> Code {
 /// Every `op r, r/m` code whose `op r/m, r` twin of the same width exists,
 /// found by name: what `pin_form` must say, kept as its oracle.
 #[cfg(test)]
-fn twins_by_name() -> std::collections::HashMap<Code, Code> {
-    let named: std::collections::HashMap<String, Code> = Code::values().map(|one| (format!("{one:?}"), one)).collect();
-    let mut twins = std::collections::HashMap::new();
+fn twins_by_name() -> llrm_support::hash::HashMap<Code, Code> {
+    let named: llrm_support::hash::HashMap<String, Code> =
+        Code::values().map(|one| (format!("{one:?}"), one)).collect();
+    let mut twins = llrm_support::hash::HashMap::default();
     for one in Code::values() {
         let name = format!("{one:?}");
         let Some((mnemonic, forms)) = name.split_once('_') else { continue };

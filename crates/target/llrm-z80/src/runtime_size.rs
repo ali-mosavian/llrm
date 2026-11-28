@@ -4,8 +4,9 @@
 //! assembler listing of `z80_rt.s` (a size is the distance to the next global
 //! symbol, as the link map gives it).
 
-use std::collections::{HashMap, HashSet};
 use std::sync::LazyLock;
+
+use llrm_support::hash::{HashMap, HashSet};
 
 use crate::expand::Line;
 
@@ -378,7 +379,7 @@ pub fn referenced(lines: &[Line]) -> HashSet<String> {
 
 /// The bytes of `names` and every routine they reach, each once.
 pub fn reached(names: &HashSet<String>) -> u32 {
-    let mut seen: HashSet<&str> = HashSet::new();
+    let mut seen: HashSet<&str> = HashSet::default();
     let mut work: Vec<&str> = names.iter().map(String::as_str).collect();
     let mut bytes = 0;
     while let Some(name) = work.pop() {

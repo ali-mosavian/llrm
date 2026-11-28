@@ -54,8 +54,6 @@
 //! fadd <4 x float>; store <4 x float>
 //! ```
 
-use std::collections::HashMap;
-
 use llrm_analysis::memory::{MemRef, Unit as MemUnit};
 use llrm_analysis::scev::{Cx, ScalarEvolution};
 use llrm_mir::context::{Constant, ConstantKind, Context};
@@ -71,6 +69,7 @@ use llrm_mir::tti::{
     VectorTy,
 };
 use llrm_mir::types::{FloatKind, Type, TypeId};
+use llrm_support::hash::HashMap;
 
 use crate::slpgather::{self, constant_of};
 
@@ -478,7 +477,7 @@ impl Builder<'_, '_, '_> {
         if data.iter().all(|pair| unique.contains(&pair[1])) && unique.len() != 2 {
             return data;
         }
-        let mut scores: HashMap<(usize, usize), i32> = HashMap::new();
+        let mut scores: HashMap<(usize, usize), i32> = HashMap::default();
         for _pass in 0..2 {
             let mut failed = false;
             used.iter_mut().for_each(|flags| *flags = [false; 2]);

@@ -36,7 +36,6 @@
 //! ```
 
 use std::cmp::Ordering;
-use std::collections::HashSet;
 
 use llrm_analysis::memory::Unit as MemUnit;
 use llrm_mir::context::{ConstantKind, Context};
@@ -47,6 +46,7 @@ use llrm_mir::opcode::{BinaryOp, CastOp, Opcode};
 use llrm_mir::passes::{Declared, Outer};
 use llrm_mir::tti::Tti;
 use llrm_mir::types::{FloatKind, Type, TypeId};
+use llrm_support::hash::HashSet;
 
 /// `MaxPHINumOperands`.
 const MAX_PHI_OPERANDS: usize = 128;
@@ -375,7 +375,7 @@ impl<'a> Session<'a> {
             tti,
             block,
             roots,
-            analyzed: HashSet::new(),
+            analyzed: HashSet::default(),
             positions: None,
             scev: None,
         }

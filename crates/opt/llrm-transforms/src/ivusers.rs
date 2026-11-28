@@ -284,7 +284,7 @@ impl IvUsers {
         let mut users: Vec<InstId> = cx.function.users(result).iter().map(|one| one.user).collect();
         if env.use_list_order {
             // One instruction using the result twice is visited once.
-            let mut seen = std::collections::HashSet::new();
+            let mut seen = llrm_support::hash::HashSet::default();
             users.retain(|user| seen.insert(*user));
             // DEVIATE IU1: a phi first, as in program order (stable, so the rest
             // keep the list's): the pin's "do not recurse into a phi twice" keeps the

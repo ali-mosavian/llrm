@@ -15,7 +15,7 @@
 //! The model has the instructions the divide routines use; any other stops the
 //! run with an error naming it.
 
-use std::collections::HashMap;
+use llrm_support::hash::HashMap;
 
 use crate::dagisel::hooks::Cpu;
 
@@ -39,7 +39,7 @@ impl Program {
     fn parse() -> Program {
         let expanded = crate::timing::expand_macros(RUNTIME);
         let mut lines = Vec::new();
-        let mut labels = HashMap::new();
+        let mut labels = HashMap::default();
         let mut scope = String::new();
         let mut in_macro = false;
         for raw in expanded.lines() {

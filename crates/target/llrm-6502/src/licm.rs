@@ -30,10 +30,11 @@
 //! `llrm_codegen::backend::licm_core` (the walk); `llrm-arm64`'s `licm` (the
 //! other policy over an `MFunction`).
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::BTreeSet;
 
 use llrm_codegen::backend::licm_core::{self, Block, Facts, Inst as CoreInst, Policy};
 use llrm_spike_mf::mfunc::{Inst, Kind, MFunction, Operand, Reg};
+use llrm_support::hash::HashMap;
 
 use crate::alloc::Class;
 

@@ -76,7 +76,7 @@ pub fn register(name: &str) -> RegId {
 /// The pair register that holds a zero-page byte (`rc4` is half of `rs2`): the
 /// 16-bit view a word argument is copied through.
 pub fn pair_of(byte: &str) -> RegId {
-    static ROOTS: std::sync::OnceLock<std::collections::HashMap<String, String>> = std::sync::OnceLock::new();
+    static ROOTS: std::sync::OnceLock<llrm_support::hash::HashMap<String, String>> = std::sync::OnceLock::new();
     let roots = ROOTS.get_or_init(|| {
         let file = llrm_target::registers::parse(crate::REGISTERS).expect("registers.regs");
         file.iter().map(|one| (one.name.clone(), one.root.clone())).collect()

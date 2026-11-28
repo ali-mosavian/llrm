@@ -15,9 +15,8 @@
 //! Complexity: O(32 * reached constants) per constant, memoized per call and
 //! capped at [`BUDGET`] constants.
 
-use std::collections::HashMap;
-
 use llrm_codegen::backend::selectiondag::dag_combiner::MulPlan;
+use llrm_support::hash::HashMap;
 
 use super::hooks::Cpu;
 use super::mulprice::{multiply, one, shift};
@@ -162,7 +161,7 @@ fn chain_of(cpu: Cpu, price: Price, c: u32) -> Option<(MulPlan, Cost)> {
     if magnitude < 2 {
         return None;
     }
-    let mut search = Search { cpu, price, memo: HashMap::new() };
+    let mut search = Search { cpu, price, memo: HashMap::default() };
     let (plan, cost) = search.best(magnitude)?;
     Some(if negative { (MulPlan::Neg(Box::new(plan)), plus(cost, one(cpu, "neg.l %d0", 2))) } else { (plan, cost) })
 }

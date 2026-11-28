@@ -30,7 +30,7 @@ pub fn phi_elimination(f: &mut Function) -> bool {
     // `SrcUndef`: a PHI operand that only an `IMPLICIT_DEF` defines gets no
     // copy; the incoming register is itself an `IMPLICIT_DEF`, which the
     // coalescer erases where a join overlaps it.
-    let undef_sources: std::collections::HashSet<u32> = f
+    let undef_sources: llrm_support::hash::HashSet<u32> = f
         .blocks
         .iter()
         .flatten()
@@ -86,7 +86,7 @@ pub fn phi_elimination(f: &mut Function) -> bool {
     }
     if undef_used {
         // The `IMPLICIT_DEF`s nothing reads any more.
-        let read: std::collections::HashSet<u32> = f
+        let read: llrm_support::hash::HashSet<u32> = f
             .blocks
             .iter()
             .flatten()

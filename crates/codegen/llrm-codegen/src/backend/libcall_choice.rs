@@ -33,8 +33,9 @@
 //! div: saves 30 bytes, calls __divsi3 (50 bytes)  -> 30 - 50 < 0  inline
 //! ```
 
-use std::collections::{HashMap, HashSet};
 use std::hash::Hash;
+
+use llrm_support::hash::{HashMap, HashSet};
 
 /// An operation with an inline expansion and a runtime routine.
 #[derive(Clone, Debug)]
@@ -67,7 +68,7 @@ impl<K: Copy + Eq + Hash> Costs<K> {
         &self,
         routines: impl Iterator<Item = &'a str>,
     ) -> u32 {
-        let mut seen: HashSet<&str> = HashSet::new();
+        let mut seen: HashSet<&str> = HashSet::default();
         let mut pending: Vec<&str> = routines.collect();
         while let Some(name) = pending.pop() {
             if let Some(member) = self.members.get(name)
@@ -117,7 +118,7 @@ mod tests {
             Candidate { key: "pop64", routine: "popcountdi2".into() },
             Candidate { key: "pop32", routine: "popcountsi2".into() },
         ];
-        let members = HashMap::from([
+        let members = HashMap::from_iter([
             ("ctzdi2".to_owned(), Member { bytes: 46, needs: vec![] }),
             ("popcountdi2".to_owned(), Member { bytes: 32, needs: vec!["popcountsi2".into()] }),
             ("popcountsi2".to_owned(), Member { bytes: 70, needs: vec![] }),

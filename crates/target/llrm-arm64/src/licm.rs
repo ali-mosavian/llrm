@@ -29,10 +29,11 @@
 //! `llrm_codegen::backend::licm_core` (the walk), `lir_view` (runs it before
 //! allocation).
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::BTreeSet;
 
 use llrm_codegen::backend::licm_core::{self, Block, Facts, Inst as CoreInst, Policy};
 use llrm_spike_mf::mfunc::{Inst, Kind, MFunction, Operand, Reg};
+use llrm_support::hash::HashMap;
 
 use crate::lir_view::{Class, FMOV_TO_FPR};
 

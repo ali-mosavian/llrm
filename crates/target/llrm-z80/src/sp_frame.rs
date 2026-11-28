@@ -124,7 +124,7 @@ fn rewritten(lines: &[Line]) -> Option<Vec<Line>> {
     let mut pushed: i64 = 0;
     // the displacement the live IY stands for, if any
     let mut base: Option<i64> = None;
-    let mut label_depth: std::collections::HashMap<&str, i64> = std::collections::HashMap::new();
+    let mut label_depth: llrm_support::hash::HashMap<&str, i64> = llrm_support::hash::HashMap::default();
     // the depth at each `jp (rr)` and the labels of the `.dw` entries it may reach
     let mut dispatches: Vec<i64> = Vec::new();
     let mut entries: Vec<&str> = Vec::new();

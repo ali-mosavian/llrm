@@ -573,7 +573,7 @@ fn escapes_the_extensions(
     load: InstId,
 ) -> bool {
     let (Some(home), Some(result)) = (function.parent(load), function.instruction(load).result) else { return true };
-    let readers: std::collections::HashSet<_> = function
+    let readers: llrm_support::hash::HashSet<_> = function
         .users(result)
         .iter()
         .filter(|one| matches!(
@@ -582,7 +582,7 @@ fn escapes_the_extensions(
         ))
         .filter_map(|one| function.parent(one.user))
         .collect();
-    let mut seen = std::collections::HashSet::from([home]);
+    let mut seen = llrm_support::hash::HashSet::from_iter([home]);
     let mut work = vec![home];
     while let Some(block) = work.pop() {
         let next = function.successors(block);

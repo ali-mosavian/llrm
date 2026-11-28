@@ -1,7 +1,7 @@
 //! What a call of a runtime routine does to the `rcN` cells: the ones it reads
 //! (its arguments) and the ones it always writes (its results).
 
-use std::collections::HashMap;
+use llrm_support::hash::HashMap;
 
 use crate::routines::{cells_of, runtime};
 
@@ -70,7 +70,7 @@ fn analyse(
     // the instructions and the labels
     let mut lines: Vec<(&str, String, &str)> = Vec::new();
     // the line with its comment: an index names its cells there
-    let mut labels: HashMap<&str, usize> = HashMap::new();
+    let mut labels: HashMap<&str, usize> = HashMap::default();
     for line in text.lines() {
         let code = line.split(';').next().unwrap_or("").trim();
         if code.is_empty() || code.starts_with(".export") || code.starts_with(".import") {
