@@ -150,7 +150,12 @@ pub fn hidden_callee(
         let name = name_of(info, n);
         match module.named(&name) {
             None => break module.add_function(&name, signature, Linkage::External)?,
-            Some(id) if matches!(&module.globals[id.0 as usize].kind, GlobalKind::Function(f) if f.ty == signature) => {
+            Some(id)
+                if matches!(
+                    &module.globals[id.0 as usize].kind,
+                    GlobalKind::Function(f) if f.ty == signature
+                ) =>
+            {
                 break id;
             }
             Some(_) => n += 1,
@@ -240,7 +245,8 @@ pub fn lowered(
             kept[callee] = true;
             continue;
         }
-        // `cas`: a target with a compare-and-swap instruction and no other read-modify-write (a 68020's `cas`)
+        // `cas`: a target with a compare-and-swap instruction and no other
+        // read-modify-write (a 68020's `cas`)
         if cas && matches!(info.kind, AtomicKind::CmpXchg { .. }) {
             kept[callee] = true;
             continue;

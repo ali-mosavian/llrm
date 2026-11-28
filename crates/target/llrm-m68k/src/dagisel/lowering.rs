@@ -202,8 +202,10 @@ pub fn target_lowering_with(
     // is asked.
     set(&[StackSave], &[MVT::I32], Action::Expand);
     set(&[DynamicStackAlloc], &[MVT::I32], Action::Custom);
-    // `setMaxAtomicSizeInBitsSupported(32)`; the compare-and-swap is the `cas` of a 68020 and a `__sync_val_compare_and_swap`
-    // call below it. The success flag is the legalizer's own compare of the old value (`TargetLoweringBase` default).
+    // `setMaxAtomicSizeInBitsSupported(32)`; the compare-and-swap is the `cas`
+    // of a 68020 and a `__sync_val_compare_and_swap` call below it. The
+    // success flag is the legalizer's own compare of the old value
+    // (`TargetLoweringBase` default).
     set(&[AtomicCmpSwapWithSuccess], &int, Action::Expand);
     set(&[AtomicCmpSwap], &int, if m68020 { Action::Legal } else { Action::LibCall });
     // `RTLIB::MUL_I32` and the others: libgcc's names, the pin's defaults

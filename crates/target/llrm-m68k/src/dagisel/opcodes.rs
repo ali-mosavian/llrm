@@ -22,7 +22,8 @@ struct Tables {
     names: HashMap<u16, &'static str>,
 }
 
-/// The 68000's rows, then the 68020's: a row only a 68020 selects (`cas`) has a name and a code too.
+/// The 68000's rows, then the 68020's: a row only a 68020 selects (`cas`) has a
+/// name and a code too.
 fn rows() -> impl DoubleEndedIterator<Item = &'static (u16, &'static str)> {
     m68k_m68000::MACHINE_OPCODES.iter().chain(m68k_m68020::MACHINE_OPCODES.iter())
 }
