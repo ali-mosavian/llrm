@@ -21,13 +21,15 @@ class SideIdentity(unittest.TestCase):
 
     def tool(self, side, name, body):
         path = os.path.join(self.d, side, name)
-        open(path, "w").write("#!/bin/bash\n" + body)
+        # A stamped build (stamp.py): the drivers refuse a dist whose compilers name no commit.
+        stamped = '[ "$1" = --version ] && { echo "llrm-llc aaaa1111"; exit 0; }\n' if name == "llrm-llc" else ""
+        open(path, "w").write("#!/bin/bash\n" + stamped + body)
         os.chmod(path, 0o755)
 
     def run_driver(self, *extra, env=None):
         return subprocess.run(
             [os.path.join(TOOLS, "identity_targets.sh"), *extra, os.path.join(self.d, "base", "llrm-cc"), os.path.join(self.d, "new", "llrm-cc"), "z80-sdcc", "O2", self.src],
-            capture_output=True, text=True, env={**os.environ, **(env or {})}, cwd=self.d,
+            capture_output=True, text=True, env={**os.environ, "LLRM_EXPECT_BASE_SHA": "aaaa1111", "LLRM_EXPECT_SHA": "aaaa1111", **(env or {})}, cwd=self.d,
         )
 
     def test_one_llc_under_two_ccs_is_refused_before_any_compile(self):

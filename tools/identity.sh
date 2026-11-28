@@ -13,6 +13,8 @@ ulimit -v "${LLRM_MEMORY_LIMIT_KB:-8000000}"  # a runaway compile dies at 8 GB i
 #              Borland headers it builds with (neither is in this repository)
 # IDENTITY_SAME_SOURCE=1 allows BASE_BIN and NEW_BIN to be one binary (a build against itself).
 # c, qcport: the llrm-llc beside each llrm-cc must differ too (IDENTITY_SAME_LLC=1 for a frontend-only change).
+# LLRM_EXPECT_BASE_SHA, LLRM_EXPECT_SHA: the commits the two dists were built from, clean (stamp.py require_named); required
+# unless IDENTITY_SAME_SOURCE=1.
 # The -m flag is passed to the compiler (default: its own, m16).
 #
 # Prints a count of each outcome and the programs that are not SAME; exit 1 if any DIFF or STATUS.
@@ -23,6 +25,9 @@ export AB_ALLOW_ENV="${AB_ALLOW_ENV:-} LLRM_VERIFY"  # set above, for both sides
 kind=${1:?kind: nib, c or qcport}; base=${2:?base compiler}; new=${3:?new compiler}; shift 3
 python3 -c "import sys; sys.path.insert(0, '$(dirname "$0")'); import llrmbin; print(llrmbin.assert_distinct(sys.argv[1], sys.argv[2], bool(sys.argv[3])))" "$base" "$new" "${IDENTITY_SAME_SOURCE:-}" || exit 2
 case $kind in c|qcport) python3 -c "import sys; sys.path.insert(0, '$(dirname "$0")'); import llrmbin; llrmbin.assert_distinct_llc(sys.argv[1], sys.argv[2], bool(sys.argv[3]))" "$base" "$new" "${IDENTITY_SAME_LLC:-}" || exit 2 ;; esac
+if [ -z "${IDENTITY_SAME_SOURCE:-}" ]; then
+  python3 "$(dirname "$0")/stamp.py" --require-clean base_sha "$(dirname "$base")" && python3 "$(dirname "$0")/stamp.py" --require-clean sha "$(dirname "$new")" || exit 2
+fi
 . "$(dirname "$0")/fresh_compile.sh"
 target=()
 case "${1:-}" in -*) target=("$1") ;; esac

@@ -71,6 +71,17 @@ def check(binary, expect_sha: str | None = None, allow_dirty: bool = False, labe
     return sha
 
 
+def require_clean(dist, sha: str) -> str:
+    """`sha` when every stamped compiler in `dist` (llrm-llc, llrm-nib, llrm-qb, each llrm-*-llc) was built from it, clean;
+    SystemExit naming the first that was not. A dist built from e83149f+dirty stood for b6541d3901 in a whole A/B."""
+    found = sorted(path for path in Path(dist).glob("llrm-*") if path.name in ("llrm-llc", "llrm-nib", "llrm-qb") or (path.name.endswith("-llc")))
+    if not found:
+        raise SystemExit(f"{dist}: no stamped compiler: refused")
+    for path in found:
+        check(path, sha, False, f"{dist}/{path.name}")
+    return read(found[0])[0]
+
+
 def options(argv: list[str]) -> tuple[list[str], dict[str, str | None], bool]:
     """(argv without the options, {"sha", "base_sha"}, allow_dirty): `--expect-sha` names the build measured (the new side
     of a pair), `--expect-base-sha` the base side; the environment (LLRM_EXPECT_SHA, LLRM_EXPECT_BASE_SHA,
@@ -91,7 +102,21 @@ def options(argv: list[str]) -> tuple[list[str], dict[str, str | None], bool]:
     return rest, named, allow
 
 
+def require_named(dist, side: str = "sha") -> str:
+    """`require_clean` against the commit the environment names for `side`: LLRM_EXPECT_SHA (the new side, or the only one)
+    or LLRM_EXPECT_BASE_SHA; SystemExit when it names none. A measurement that names no commit measures no commit."""
+    variable = {"sha": "LLRM_EXPECT_SHA", "base_sha": "LLRM_EXPECT_BASE_SHA"}[side]
+    sha = os.environ.get(variable)
+    if not sha:
+        raise SystemExit(f"{variable} names no commit for {dist}: refused")
+    return require_clean(dist, sha)
+
+
 if __name__ == "__main__":
+    if sys.argv[1:2] == ["--require-clean"]:
+        # stamp.py --require-clean sha|base_sha DIST: the shell tools' form of require_named.
+        require_named(sys.argv[3], sys.argv[2])
+        sys.exit(0)
     rest, named, allow = options(sys.argv[1:])
     for one in rest:
         check(one, named["sha"], allow)

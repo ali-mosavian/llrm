@@ -18,6 +18,19 @@ def test_text_counts_function_bytes():
 def test_zero_is_kept_by_the_filter():
     assert 'is not None' in src and 'if text(o) else' not in src and 'or None' not in src
 
+import pytest
+
+
+@pytest.fixture(autouse=True)
+def stamped_dist(tmp_path, monkeypatch):
+    """qbbars.py refuses a dist that is not the commit LLRM_EXPECT_SHA names (stamp.py): each test's dist is a stamped one."""
+    for folder in (tmp_path, tmp_path / 'dist'):
+        folder.mkdir(exist_ok=True)
+        (folder / 'llrm-llc').write_text('#!/bin/sh\necho "llrm-llc aaaa1111"\n')
+        (folder / 'llrm-llc').chmod(0o755)
+    monkeypatch.setenv('LLRM_EXPECT_SHA', 'aaaa1111')
+
+
 GCC = 'for a; do shift; case "$a" in -std=c23) a=-std=c2x;; esac; set -- "$@" "$a"; done\nexec gcc "$@"\n'
 
 
@@ -31,7 +44,7 @@ def stub_make(tmp_path, mods):
 def test_a_refused_module_is_listed_as_failed_not_compared(tmp_path):
     """A module llrm-cc refuses must read as failed, never as a (gcc-built or missing) bar compared against gcc: the QB wrapper once fell back to gcc and a refused module read 'unchanged'."""
     tree, dist, pin = tmp_path / 'tree', tmp_path / 'dist', tmp_path / 'pin'
-    (tree / 'src/core').mkdir(parents=True); dist.mkdir(); pin.mkdir()
+    (tree / 'src/core').mkdir(parents=True); dist.mkdir(exist_ok=True); pin.mkdir()
     for n in ('a', 'b'): (tree / f'src/core/{n}.c').write_text(f'int {n}(int x){{return x*3+1;}}')
     (dist / 'llrm-cc').write_text('#!/bin/sh\n' + 'case "$*" in *a.c*) exit 1;; esac\n' + GCC)
     (pin / 'clang').write_text('#!/bin/sh\n' + GCC)
@@ -67,7 +80,7 @@ def test_a_table_in_data_ranks_equal_to_one_in_rodata():
 def test_the_module_set_and_defines_come_from_the_product_build(tmp_path):
     """w11's and my censuses disagreed on the same 77 modules in all three columns: hand-written module lists and defines (mine had -DEXEC_COUNT, the perf build has none). The set and each file's own -D/-I come from `make -n -B`."""
     tree, dist, pin, log = tmp_path / 'tree', tmp_path / 'dist', tmp_path / 'pin', tmp_path / 'log'
-    (tree / 'src/core').mkdir(parents=True); (tree / 'src/plat').mkdir(); dist.mkdir(); pin.mkdir()
+    (tree / 'src/core').mkdir(parents=True); (tree / 'src/plat').mkdir(); dist.mkdir(exist_ok=True); pin.mkdir()
     for p in ('src/core/a.c', 'src/plat/b.c', 'src/core/c.c'): (tree / p).write_text('int f(int x){return x*3+1;}')
     real = shutil.which('gcc')
     spy = f'#!/bin/sh\ncase " $* " in *" -c "*) echo "$0 $*" >> {log};; esac\n' + GCC.replace('exec gcc', f'exec {real}')
@@ -92,7 +105,7 @@ def test_every_bar_carries_the_shared_external_flags(tmp_path):
     """Bars were built with the distro's defaults (frame pointer, endbr64, canary, PIE, i686): the bar is the compiler's own code, so gcc and clang get
     tools/external_flags.py's set, `-fPIE` at m64, `-fno-pic -fno-pie` and `-march=i486` at m32."""
     tree, dist, pin, log = tmp_path / 'tree', tmp_path / 'dist', tmp_path / 'pin', tmp_path / 'log'
-    (tree / 'src/core').mkdir(parents=True); dist.mkdir(); pin.mkdir()
+    (tree / 'src/core').mkdir(parents=True); dist.mkdir(exist_ok=True); pin.mkdir()
     (tree / 'src/core/a.c').write_text('int a(int x){return x*3+1;}')
     real = shutil.which('gcc')
     spy = f'#!/bin/sh\ncase " $* " in *" -c "*) echo "$0 $*" >> {log};; esac\n' + GCC.replace('exec gcc', f'exec {real}')
