@@ -36,5 +36,7 @@ case $C in
   if [ $C = hand ]; then $LLC -O$L -o $X.o $X.ll; elif [ $C = lin ]; then LLRM_ARM64_LINEAR=1 $LLC -O$L -o $X.o $X.ll; elif [ $C = oldhand ]; then LLRM_ARM64_LINEAR=1 $LLC --isel=hand -O$L -o $X.o $X.ll; elif [ $C = handg ]; then LLRM_ARM64_GREEDY=1 $LLC -O$L -o $X.o $X.ll; else LLRM_ARM64_GREEDY=1 $LLC --isel=dag $([ -n "$NOOPT" ] && echo --no-opt || echo -O$L) -o $X.o $X.ll; fi ;;
 esac || exit 1
 [ -n "$F" ] && echo "$F" > $X.flags
-if [ ! -f $O/rt.o ]; then $V/clang $T -O2 -ffreestanding -c $H/rt.c -o $O/rt.o.$$ && mv -n $O/rt.o.$$ $O/rt.o; rm -f $O/rt.o.$$; fi
-$V/ld.lld -static -e main $X.o $O/rt.o -o $X.elf
+CI=$(python3 -c 'import os, sys, tomllib; p = sys.argv[1]; print(tomllib.load(open(p, "rb")).get("ci_bytes", 0) if os.path.exists(p) else 0)' $B/bench/$P/bench.toml)  # the cut of its corpus: rt.c
+R=$O/rt-$CI.o
+if [ ! -f $R ]; then $V/clang $T -O2 -ffreestanding -DCI_BYTES=${CI}L -c $H/rt.c -o $R.$$ && mv -n $R.$$ $R; rm -f $R.$$; fi
+$V/ld.lld -static -e main $X.o $R -o $X.elf

@@ -1254,7 +1254,8 @@ def test_a_file_program_is_counted_with_its_declared_files_in_a_folder_of_its_ow
     input file, stft_fixed printed -1 for 30825279; the emulator now gets the files the source's `data:` header names."""
     for name in ("jpeg_fixed", "jpeg_single", "stft_fixed", "stft_single"):
         for variant in bench.variants(bench.BENCH / name):
-            assert variant.emulated and variant.ci_bytes == 0, (name, variant.language)
+            # a cut corpus (stft_fixed: ci_bytes since #10685) is checked against the .ci.out made from it
+            assert variant.emulated and (not variant.ci_bytes or (bench.BENCH / name / f"{name}.ci.out").exists()), (name, variant.language)
     exe = tmp_path / "V0.exe"
     exe.write_bytes(b"")
     data = tmp_path / "PHOTO.JPG"
