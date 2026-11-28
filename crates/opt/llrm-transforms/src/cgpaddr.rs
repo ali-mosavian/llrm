@@ -713,7 +713,6 @@ fn shifted(
     unit: &passes::Unit,
     cold: &Cold,
     tti: &dyn Tti,
-    retry: bool,
     space: u32,
     block: BlockId,
     bytes: u64,
@@ -912,7 +911,6 @@ fn matched_over(
                     unit,
                     cold,
                     tti,
-                    retry,
                     space,
                     block,
                     bytes,
@@ -932,7 +930,7 @@ fn matched_over(
             let operand = instruction.operands[1 + at];
             // `matchScaledValue(index, scale)` of a `shl x, C`: the shift is
             // the scale of the mode (`matchOperationAddr`, `Instruction::Shl`).
-            match shifted(unit, cold, tti, retry, space, block, bytes, operand, scale, offset + inner.offset) {
+            match shifted(unit, cold, tti, space, block, bytes, operand, scale, offset + inner.offset) {
                 Some((shl, folded, scale)) => {
                     insts.push(shl);
                     in_bounds = false;

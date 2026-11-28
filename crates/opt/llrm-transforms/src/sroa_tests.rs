@@ -697,10 +697,6 @@ declare void @llvm.lifetime.start.p0(i64 immarg, ptr nocapture)
 declare void @llvm.lifetime.end.p0(i64 immarg, ptr nocapture)
 ";
 
-fn sroa_modifying_cfg(body: &str) -> String {
-    managed(&mut module(body), SroaModifyCfg)
-}
-
 /// `sroa<modify-cfg>` of the early slots, against `preserve-cfg` of the late
 /// one, on `body`: the printed forms and `inputs` run before and after.
 fn both_modes(

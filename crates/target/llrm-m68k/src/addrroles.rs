@@ -86,7 +86,6 @@ pub fn address_roles(function: &mut MFunction) {
                         }
                     }
                 }
-                _ => {}
             }
         }
     }

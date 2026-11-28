@@ -218,10 +218,6 @@ pub struct IfConv {
 }
 
 impl IfConv {
-    fn is_triangle(&self) -> bool {
-        self.tbb == self.tail || self.fbb == self.tail
-    }
-
     /// The join's predecessor on the true side.
     fn t_pred(&self) -> usize {
         if self.tbb == self.tail { self.head } else { self.tbb }

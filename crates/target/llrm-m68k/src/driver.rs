@@ -259,7 +259,6 @@ fn lowered(
         let items = lower_functions(module, &defined, cpu, Options { libcalls: Some(libcalls), ..backend }, true)?;
         Ok(Kept { libcalls, items })
     };
-    let flat = |kept: &Kept| -> Vec<Item> { kept.items.iter().flat_map(|(_, items)| items.iter().cloned()).collect() };
     // DEVIATE OS-INLINE-TRIAL-CLOCKS (`Tti::opt_size_inline_finished_trial`):
     // the calls the -Os size bound alone refused, inlined in a second
     // compile, kept where the finished code is faster within the bytes ceiling

@@ -1259,7 +1259,6 @@ pub(crate) fn try_inserts(
     let mut entries = builder.entries;
     share_gathers(&mut entries);
     let tree = Tree { entries, block, pure_calls: facts.pure_calls.clone(), reschedule: false, reduction: None };
-    let made = builder.made;
     if tiny_and_not_fully_vectorizable(&tree) {
         llrm_support::debug!("slp", "insert tree x{}: tiny", inserts.len());
         return None;

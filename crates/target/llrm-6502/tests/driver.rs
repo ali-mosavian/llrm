@@ -1649,7 +1649,7 @@ define i8 @probe() {
 /// 1` = 0x100: low byte 0, carry 1; `1 + 1` does not, and `0xFE + 1` is 0xFF.
 #[test]
 fn a_word_sum_of_bytes_and_a_carry_is_an_adc() {
-    let probe = |name: &str, a0: u8, b0: u8, ret: &str| {
+    let probe = |name: &str, ret: &str| {
         format!(
             r#"define i8 @{name}() {{
   %a0 = load volatile i8, ptr @a0
@@ -1677,7 +1677,7 @@ fn a_word_sum_of_bytes_and_a_carry_is_an_adc() {
     };
     for (a0, b0, lo, carry) in [(255u8, 1u8, 0, 1), (1, 1, 255, 0)] {
         for (name, ret, want) in [("lo", "lo", lo), ("carry", "c", carry)] {
-            let ir = module(&format!("{}{}", globals(a0, b0), probe(name, a0, b0, ret)));
+            let ir = module(&format!("{}{}", globals(a0, b0), probe(name, ret)));
             let text = assembly(&ir, &Request::new(Level::Os)).unwrap_or_else(|e| panic!("{e}"));
             assert_eq!(exit_code_of(&text, name), want, "{a0}+{b0}:\n{text}");
             let body = text.split(&format!("{name}:")).nth(1).unwrap_or_default();

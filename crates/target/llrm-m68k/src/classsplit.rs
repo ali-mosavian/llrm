@@ -144,7 +144,7 @@ pub fn hold_in_data_registers(function: &mut MFunction) -> usize {
             }
         }
         for inst in &block.insts {
-            for (position, operand) in inst.operands.iter().enumerate() {
+            for operand in &inst.operands {
                 if let Operand::Def(Reg::Virt(v)) = operand {
                     defs[*v as usize] += 1;
                 }

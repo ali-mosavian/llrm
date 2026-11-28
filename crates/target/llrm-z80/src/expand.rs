@@ -3545,7 +3545,7 @@ fn block_weights(
     }
     let mut out = Vec::with_capacity(lines.len());
     let mut block = 0;
-    for (at, line) in lines.iter().enumerate() {
+    for at in 0..lines.len() {
         while block + 1 < count && starts[block + 1] <= at {
             block += 1;
         }
