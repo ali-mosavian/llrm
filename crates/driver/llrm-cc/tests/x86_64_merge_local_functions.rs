@@ -1,5 +1,6 @@
-//! x86-64: a local function that is the same code as another is dropped at -O1 to -O3, as gcc's
-//! `-fipa-icf` does. signbit_idioms -O2 kept `ge_*` beside `bit_*` (8 of 24 functions were copies): 75,560 instructions against gcc's
+//! x86-64: a local function that is the same code as another is dropped at -O1
+//! to -O3, as gcc's `-fipa-icf` does. signbit_idioms -O2 kept `ge_*` beside
+//! `bit_*` (8 of 24 functions were copies): 75,560 instructions against gcc's
 //! 74,628, 74,888 with one body each. Needs `LLRM_LLC`.
 
 use std::process::Command;

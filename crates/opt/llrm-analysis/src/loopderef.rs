@@ -3,9 +3,9 @@
 //!
 //! # How it works
 //! A translation of LLVM `d1106deb71cc` `Loads.cpp`
-//! (`isDereferenceableAndAlignedInLoop`, `isReadOnlyLoop`). A pointer that is an
-//! affine add recurrence of the loop with a constant step no smaller than the
-//! access walks `[start, end)` over the loop's symbolic-maximum trips; the
+//! (`isDereferenceableAndAlignedInLoop`, `isReadOnlyLoop`). A pointer that is
+//! an affine add recurrence of the loop with a constant step no smaller than
+//! the access walks `[start, end)` over the loop's symbolic-maximum trips; the
 //! access is safe when that span, from a base of known dereferenceable size
 //! and enough alignment, fits in it. A loop-invariant pointer is safe when its
 //! own bytes are.
@@ -16,9 +16,10 @@
 //! before the early exit decides.
 //!
 //! # DEVIATE LD1 (no operand bundles, no predicates)
-//! The pin's retained-knowledge path (`isDereferenceableAndAlignedPointerViaAssumption`)
-//! and the SCEV predicates are not translated: a base is dereferenceable by its
-//! own attributes or object size only. Exit: `llvm.assume` bundles in MIR.
+//! The pin's retained-knowledge path
+//! (`isDereferenceableAndAlignedPointerViaAssumption`) and the SCEV predicates
+//! are not translated: a base is dereferenceable by its own attributes or
+//! object size only. Exit: `llvm.assume` bundles in MIR.
 
 use llrm_mir::module::{BlockId, Operand};
 use llrm_mir::types::TypeId;
@@ -27,8 +28,8 @@ use llrm_mir::valuetracking::known::{pointer_alignment, pointer_dereferenceable_
 
 use crate::runtimecheck::get_start_and_end_for_access_sized;
 use crate::scev::backedge::ExitCountKind;
-use crate::scev::guards::LoopGuards;
 use crate::scev::expr::{Kind, Scev, Ty, Use};
+use crate::scev::guards::LoopGuards;
 use crate::scev::{Cx, ScalarEvolution};
 
 fn query<'a>(cx: &Cx<'a>) -> Query<'a> {
@@ -74,7 +75,8 @@ pub fn is_dereferenceable_and_aligned_in_loop(
     }
     let step = se.get_step_recurrence(cx, ptr_scev);
     let Some(step) = se.match_apint(step) else { return false };
-    // The access size is a multiple of the alignment, and no wider than the step.
+    // The access size is a multiple of the alignment, and no wider than the
+    // step.
     if elt_size % align.max(1) != 0 || u128::from(elt_size) > step.sext_value().unsigned_abs() {
         return false;
     }
@@ -85,7 +87,8 @@ pub fn is_dereferenceable_and_aligned_in_loop(
     }
     let size = se.get_constant_of_type(cx, ptr_ty_index(se, cx, ptr_scev), i128::from(elt_size));
     let mut guards = None;
-    let (start, end) = get_start_and_end_for_access_sized(se, cx, header, ptr_scev, size, btc, max_btc, None, &mut guards);
+    let (start, end) =
+        get_start_and_end_for_access_sized(se, cx, header, ptr_scev, size, btc, max_btc, None, &mut guards);
     if se.is_could_not_compute(start) || se.is_could_not_compute(end) {
         return false;
     }

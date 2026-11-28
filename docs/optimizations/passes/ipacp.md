@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/ipacp.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/ipacp.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/ipacp.rs sha256:dd1ffbd9bfd5975c287bfa3c9ce136242ca807409a6885a79ef61ccd0404f221 -->
+<!-- src: crates/opt/llrm-transforms/src/ipacp.rs sha256:7f2a7cfff2c279211d00c75cef4ce0335ef059bcce26f461f593b57b61783ca5 -->
 
 # ipacp
 
@@ -38,11 +38,12 @@ need not look at the new name ([`crate::settled`](settled.md)).
 The copy is an internal function `<origin>.constprop.N` with each known
 parameter replaced by its constant. A later call with the same constants
 (`Cloning::contexts`) goes to the copy already made. A function gets at
-most four clones (`ipa-cp-max-recursive-depth` 8 in gcc, DEVIATE IPACP-DEPTH below), which also bounds the
-recursion: a clone that calls itself with a new constant (`place(q, row + 1,
-n)` in the clone for `row`) is a candidate for the next clone, so GCC's -O3
-unrolls `queens` into eight, one a row (four here). The copy is an ordinary function:
-the inliner takes a clone with one caller into it.
+most four clones (`ipa-cp-max-recursive-depth` 8 in gcc, DEVIATE IPACP-DEPTH
+below), which also bounds the recursion: a clone that calls itself with a
+new constant (`place(q, row + 1, n)` in the clone for `row`) is a candidate
+for the next clone, so GCC's -O3 unrolls `queens` into eight, one a row
+(four here). The copy is an ordinary function: the inliner takes a clone
+with one caller into it.
 
 GCC propagates lattices over the whole call graph and prices a value with
 each function's time and size summaries under the context

@@ -1,8 +1,10 @@
-//! The variant that takes no inline growth refuses the SZ2 trial's too (`NoInlineGrowthAll`), and the one that
-//! keeps the trial's (`NoInlineGrowth`) stays: the module price picks between them.
+//! The variant that takes no inline growth refuses the SZ2 trial's too
+//! (`NoInlineGrowthAll`), and the one that keeps the trial's (`NoInlineGrowth`)
+//! stays: the module price picks between them.
 //!
-//! shift_int64_masked_amount -O2 inlined `mix` at three hot sites, its long multiplies became `__mulsi3` calls:
-//! 893 B / 4276255 T against 812 B / 3559721 T at -O1. shrink_wrapped_frame -O3 is 374 B / 6014 T only through
+//! shift_int64_masked_amount -O2 inlined `mix` at three hot sites, its long
+//! multiplies became `__mulsi3` calls: 893 B / 4276255 T against 812 B /
+//! 3559721 T at -O1. shrink_wrapped_frame -O3 is 374 B / 6014 T only through
 //! the SZ2 inlines the policy refused (456 B / 49225 T without them).
 
 use llrm_z80::compile::{effective, module_priced};

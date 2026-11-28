@@ -185,8 +185,11 @@ pub fn small_struct_results_as_scalars(
             let address = Operand::Value(function.instruction(slot).result.expect("an address"));
             function.replace_all_uses_with(old, address);
             // The value the struct holds at each return.
-            let returns: Vec<InstId> =
-                function.walk().map(|(_, inst)| inst).filter(|&inst| function.instruction(inst).opcode == Opcode::Ret).collect();
+            let returns: Vec<InstId> = function
+                .walk()
+                .map(|(_, inst)| inst)
+                .filter(|&inst| function.instruction(inst).opcode == Opcode::Ret)
+                .collect();
             for ret in returns {
                 let load = function.create_instruction(
                     Opcode::Load { align: None, volatile: false },
@@ -213,10 +216,23 @@ pub fn small_struct_results_as_scalars(
             .filter_map(|(_, inst)| {
                 let Opcode::Call(info) = &caller_fn.instruction(inst).opcode else { return None };
                 let aggregate = calling.by_number(info.calling_convention)?.aggregate.as_ref()?;
-                let (index, (ty, _)) =
-                    info.argument_attrs.iter().enumerate().find_map(|(index, attrs)| typed_of(attrs, "sret").map(|found| (index, found)))?;
+                let (index, (ty, _)) = info
+                    .argument_attrs
+                    .iter()
+                    .enumerate()
+                    .find_map(|(index, attrs)| typed_of(attrs, "sret").map(|found| (index, found)))?;
                 let bytes = layout.alloc_size(&context.types, ty);
-                aggregate.in_register_bytes.contains(&(bytes as i64)).then_some((inst, index, info.function_type, bytes))
+                aggregate
+                    .in_register_bytes
+                    .contains(&(bytes as i64))
+                    .then_some(
+                        (
+                            inst,
+                            index,
+                            info.function_type,
+                            bytes,
+                        ),
+                    )
             })
             .collect();
         for (call, index, old_type, bytes) in calls {
@@ -261,9 +277,10 @@ pub fn far_result_pointers(
     let far = module.context.types.ptr(spaces.far);
     // Whether `calling` returns a struct of `bytes` through a far pointer.
     let wants_far = |number: u32, bytes: u64| {
-        calling.by_number(number).and_then(|one| one.aggregate.as_ref()).is_some_and(|aggregate| {
-            aggregate.pointer_far && !aggregate.in_register_bytes.contains(&(bytes as i64))
-        })
+        calling
+            .by_number(number)
+            .and_then(|one| one.aggregate.as_ref())
+            .is_some_and(|aggregate| aggregate.pointer_far && !aggregate.in_register_bytes.contains(&(bytes as i64)))
     };
     let cast = |function: &mut llrm_mir::module::Function, from: Operand, to: TypeId| {
         function.create_instruction(Opcode::Cast(CastOp::AddrSpaceCast), to, vec![from], Flags::default(), None)
@@ -281,7 +298,10 @@ pub fn far_result_pointers(
         else {
             continue;
         };
-        let is_near = matches!(module.context.types.get(function.value(function.parameters()[index]).ty), Type::Pointer(space) if *space == spaces.near);
+        let is_near = matches!(
+            module.context.types.get(function.value(function.parameters()[index]).ty),
+            Type::Pointer(space) if *space == spaces.near
+        );
         if is_near && wants_far(function.calling_convention, layout.alloc_size(&module.context.types, ty)) {
             planned.push((GlobalId(at as u32), index));
         }
@@ -311,17 +331,22 @@ pub fn far_result_pointers(
             .walk()
             .filter_map(|(_, inst)| {
                 let Opcode::Call(info) = &caller_fn.instruction(inst).opcode else { return None };
-                let (index, (ty, _)) =
-                    info.argument_attrs.iter().enumerate().find_map(|(index, attrs)| typed_of(attrs, "sret").map(|found| (index, found)))?;
+                let (index, (ty, _)) = info
+                    .argument_attrs
+                    .iter()
+                    .enumerate()
+                    .find_map(|(index, attrs)| typed_of(attrs, "sret").map(|found| (index, found)))?;
                 let Type::Function { parameters, .. } = context.types.get(info.function_type) else { return None };
-                let is_near = matches!(context.types.get(*parameters.get(index)?), Type::Pointer(space) if *space == spaces.near);
+                let is_near = matches!(
+                    context.types.get(*parameters.get(index)?),
+                    Type::Pointer(space) if *space == spaces.near
+                );
                 (is_near && wants_far(info.calling_convention, layout.alloc_size(&context.types, ty)))
                     .then(|| (inst, index, info.function_type, info.argument_attrs[index].clone()))
             })
             .collect();
         for (call, index, old_type, attrs) in calls {
-            let Type::Function { returns, mut parameters, variadic } = context.types.get(old_type).clone()
-            else {
+            let Type::Function { returns, mut parameters, variadic } = context.types.get(old_type).clone() else {
                 return Err("a call whose type is not a function type".into());
             };
             parameters[index] = far;

@@ -42,7 +42,7 @@ use std::collections::BTreeSet;
 
 use llrm_lir::registers::RegId;
 use llrm_target::Target;
-use llrm_x86::parse::{self, Side};
+use llrm_x86::parse::Side;
 
 use crate::backend::target::{_on_the_stack, Occurrence};
 use crate::model::ir::{Loc, Operation, Semantics};

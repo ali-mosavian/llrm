@@ -25,10 +25,10 @@
 //! - SB4: `computeCyclicCriticalPath`: `IsAcyclicLatencyLimited` stays off. It
 //!   is only asked of a model with a micro-op buffer (Cyclone), not the
 //!   in-order A510.
-//! - SB5b: the fast-cluster path of `BaseMemOpClusterMutation` (threshold 1000).
-//! - SB5: macro fusion, and
-//!   `tryBiasPhysRegs`/`reschedulePhysReg` (no region holds a physical
-//!   register, MS4).
+//! - SB5b: the fast-cluster path of `BaseMemOpClusterMutation` (threshold
+//!   1000).
+//! - SB5: macro fusion, and `tryBiasPhysRegs`/`reschedulePhysReg` (no region
+//!   holds a physical register, MS4).
 //!
 //! - SB9: a pre/post-indexed access reports no memory operand to the cluster
 //!   mutation (`getMemOperandsWithOffsetWidth`); it exists only after
@@ -37,9 +37,9 @@
 //! Owner arm64-phi; exit with the model branch that first needs each.
 //!
 //! # Example
-//! A region where `A` and `B` have no predecessor, `C` reads both and `D` reads `C`.
-//! Picking `A` (top), `D` (bottom), `B` (top), `C` (bottom) gives the order below
-//! (node names are illustrative).
+//! A region where `A` and `B` have no predecessor, `C` reads both and `D` reads
+//! `C`. Picking `A` (top), `D` (bottom), `B` (top), `C` (bottom) gives the
+//! order below (node names are illustrative).
 //!
 //! ```text
 //! top picks:     A  B
@@ -291,8 +291,11 @@ impl<'a> Scheduler<'a> {
         if !unscheduled {
             return 0;
         }
-        let at_boundary =
-            if at_top { self.succs_left[node] == 0 && self.graph.exit_latency[node] == 0 } else { self.preds_left[node] == 0 };
+        let at_boundary = if at_top {
+            self.succs_left[node] == 0 && self.graph.exit_latency[node] == 0
+        } else {
+            self.preds_left[node] == 0
+        };
         if at_boundary { -1 } else { 1 }
     }
 
@@ -491,14 +494,8 @@ impl<'a> Scheduler<'a> {
         }
         // `registerRoots`: `ExitSU`'s depth is the deepest of what reaches it.
         let exit_depth = (0..n).map(|node| self.units[node].depth + self.graph.exit_latency[node]).max().unwrap_or(0);
-        self.rem.critical_path = self
-            .bot
-            .available
-            .iter()
-            .map(|&node| self.units[node].depth)
-            .max()
-            .unwrap_or(0)
-            .max(exit_depth);
+        self.rem.critical_path =
+            self.bot.available.iter().map(|&node| self.units[node].depth).max().unwrap_or(0).max(exit_depth);
         let (mut top, mut bottom, mut reasons) = (Vec::new(), Vec::new(), Vec::new());
         while top.len() + bottom.len() < n {
             let (node, at_top, reason) = self.pick_node();

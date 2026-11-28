@@ -11,10 +11,9 @@ use crate::scev::{Cx, ScalarEvolution};
 
 /// Whether the one load of `loop` in `@f` is dereferenceable in it.
 fn safe(text: &str) -> bool {
-    let module = llrm_mir::parse::module(&format!(
-        "target datalayout = \"e-m:e-p:64:64-i64:64-n8:16:32:64\"\n\n{text}"
-    ))
-    .expect("a module");
+    let module =
+        llrm_mir::parse::module(&format!("target datalayout = \"e-m:e-p:64:64-i64:64-n8:16:32:64\"\n\n{text}"))
+            .expect("a module");
     let (_, _, function) = module.functions().find(|(_, _, function)| function.entry().is_some()).expect("@f");
     let layout = DataLayout::parse(module.datalayout.as_deref().expect("a layout")).expect("a layout");
     let tree = DomTree::of(function);
@@ -42,7 +41,10 @@ fn safe(text: &str) -> bool {
     is_dereferenceable_and_aligned_in_loop(&mut se, &cx, header, ptr, ty, 1)
 }
 
-fn counted(size: usize, trips: usize) -> String {
+fn counted(
+    size: usize,
+    trips: usize,
+) -> String {
     format!(
         "@a = global [{size} x i8] zeroinitializer
 

@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/cgpselect.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/cgpselect.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/cgpselect.rs sha256:9c75b915afd9f9208178891166eca37eba04cc84628943d7feea24e75728f43a -->
+<!-- src: crates/opt/llrm-transforms/src/cgpselect.rs sha256:5a9fc6df365d534aefabe163f361742ba7e85ca8883a3b700171521d844d60a9 -->
 
 # cgpselect
 
@@ -43,8 +43,8 @@ made a poison select, and now a branch on poison, which the pin's
 `optimizeSelectInst` guards with `freeze`.
 
 ## Example
-A `fptosi` of a select with a constant arm becomes a branch, the conversion made
-on the other arm only.
+A `fptosi` of a select with a constant arm becomes a branch, the conversion
+made on the other arm only.
 
 ```text
  %s = select c, -3.0, %x            br c, %join, %other

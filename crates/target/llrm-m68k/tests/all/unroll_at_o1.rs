@@ -1,14 +1,14 @@
 //! clang marks every loop `unroll.disable` at -O1, so a two-trip loop of float
 //! updates that the first trips fold away stayed rolled: float_in_place_update
-//! was 170 B at the 68000 (a `__muldf3`, `__divdf3` and `__ledf2` (the compare) call per trip)
-//! where gcc's complete unroll leaves one `report` call (16 B). The m68k rows
-//! take `-funroll-loops` at -O1; with the pin's threshold alone that unrolled
-//! every small loop (net +3376 B over the corpus: 70 cells larger), so -O1
-//! unrolls only where the copies cost no more than the rolled loop
-//! (`unroll_never_grows_at_o1`, gcc's size-neutral complete unroll).
+//! was 170 B at the 68000 (a `__muldf3`, `__divdf3` and `__ledf2` (the compare)
+//! call per trip) where gcc's complete unroll leaves one `report` call (16 B).
+//! The m68k rows take `-funroll-loops` at -O1; with the pin's threshold alone
+//! that unrolled every small loop (net +3376 B over the corpus: 70 cells
+//! larger), so -O1 unrolls only where the copies cost no more than the rolled
+//! loop (`unroll_never_grows_at_o1`, gcc's size-neutral complete unroll).
 
-use llrm_m68k::dagisel::hooks::Cpu;
 use llrm_m68k::compile::CodeModel;
+use llrm_m68k::dagisel::hooks::Cpu;
 use llrm_m68k::driver::{Level, Policy, assembly_flagged};
 
 const IR: &str = "target datalayout = \"E-m:e-p:32:16:32-i8:8:8-i16:16:16-i32:16:32-n8:16:32-a:0:16-S16\"
@@ -44,8 +44,8 @@ exit:
 #[test]
 fn a_two_trip_float_loop_that_folds_is_unrolled_at_o1() {
     for cpu in [Cpu::M68000, Cpu::M68020] {
-        // `-funroll-loops` is what the m68k rows of `llrm-cc` pass at -O1 (the loop carries no
-        // `unroll.disable` then)
+        // `-funroll-loops` is what the m68k rows of `llrm-cc` pass at -O1 (the
+        // loop carries no `unroll.disable` then)
         let mut policy = Policy::default();
         assert!(policy.take("-funroll-loops"));
         let text = assembly_flagged(IR, cpu, Level::O1, false, None, CodeModel::Small, &policy).expect("compiles");
@@ -71,8 +71,9 @@ exit:
 }
 ";
 
-/// Four copies of a call are larger than the loop around one and save its counter and branch:
-/// -O1 is judged by clocks, so the pin's threshold unrolls it.
+/// Four copies of a call are larger than the loop around one and save its
+/// counter and branch: -O1 is judged by clocks, so the pin's threshold unrolls
+/// it.
 #[test]
 fn a_loop_whose_copies_cost_more_bytes_is_unrolled_at_o1_for_its_clocks() {
     for cpu in [Cpu::M68000, Cpu::M68020] {

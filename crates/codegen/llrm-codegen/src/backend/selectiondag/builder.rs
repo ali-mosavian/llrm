@@ -4560,7 +4560,7 @@ impl Builder<'_> {
         let result = self.type_of(instruction.ty)?;
         let input = self.dag.value_type(first);
         let (mut sources, lanes) = (input.lanes() as usize, mask.len());
-        let mut remapped: Vec<i32> = Vec::new();
+        let remapped: Vec<i32>;
         let mut mask = mask;
         let node = 'shuffled: {
             if sources == lanes {

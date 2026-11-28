@@ -1,7 +1,9 @@
-//! x86-64: a one-slot frame is `push rax` / `pop reg` also where the function leaves by a sibling call
-//! (`X86RegisterInfo::findDeadCallerSavedReg` handles `TCRETURN*`: the first register the jump does not read).
-//! It was `sub rsp, 8` / `add rsp, 8` whenever any exit was a `jmp` (+6 B per frame: shl_long_by_one `four`
-//! -O1 +6 B, loop_fusion, sfm16_dbg, 8 sfm16_float programs). Needs `LLRM_LLC`.
+//! x86-64: a one-slot frame is `push rax` / `pop reg` also where the function
+//! leaves by a sibling call (`X86RegisterInfo::findDeadCallerSavedReg` handles
+//! `TCRETURN*`: the first register the jump does not read). It was `sub rsp, 8`
+//! / `add rsp, 8` whenever any exit was a `jmp` (+6 B per frame:
+//! shl_long_by_one `four` -O1 +6 B, loop_fusion, sfm16_dbg, 8 sfm16_float
+//! programs). Needs `LLRM_LLC`.
 
 use std::path::Path;
 use std::process::Command;
@@ -24,7 +26,10 @@ fn assembly(level: &str) -> String {
     std::fs::read_to_string(&asm).unwrap()
 }
 
-fn body<'a>(text: &'a str, name: &str) -> &'a str {
+fn body<'a>(
+    text: &'a str,
+    name: &str,
+) -> &'a str {
     let start = format!("{name} proc near");
     let end = format!("{name} endp");
     text.split(start.as_str()).nth(1).and_then(|rest| rest.split(end.as_str()).next()).expect("a body")
@@ -48,9 +53,14 @@ fn the_pop_before_a_sibling_call_is_a_register_the_jump_does_not_read() {
         let function = body(&text, name);
         let lines: Vec<&str> = function.lines().map(str::trim).collect();
         for (at, line) in lines.iter().enumerate() {
-            if line.starts_with("jmp g4") && let Some(pop) = lines[..at].iter().rev().find(|line| line.starts_with("pop ")) {
+            if line.starts_with("jmp g4")
+                && let Some(pop) = lines[..at].iter().rev().find(|line| line.starts_with("pop "))
+            {
                 let register = pop.trim_start_matches("pop ");
-                assert!(!["rdi", "rsi", "rdx", "rcx"].contains(&register), "{name}: `{pop}` before the jump:\n{function}");
+                assert!(
+                    !["rdi", "rsi", "rdx", "rcx"].contains(&register),
+                    "{name}: `{pop}` before the jump:\n{function}"
+                );
             }
         }
     }

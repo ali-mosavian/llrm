@@ -331,7 +331,6 @@ impl llrm_spike_mf::Jump for Windowed {
 /// stay ahead of the compare it precedes.
 #[test]
 fn a_twin_compare_does_not_cross_a_copy_that_sets_flags() {
-    use llrm_spike_mf::regalloc::Target as _;
     let copy = Inst::new(Kind::Copy, vec![Operand::Def(v(3)), Operand::Use(v(1))]);
     let mut reads = op("reads", vec![Operand::Def(v(4))]);
     reads.reads_flags = true;

@@ -37,10 +37,10 @@
 use llrm_mir::context::{ConstantKind, Context};
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::dense::IdSet;
-use llrm_mir::module::{BlockId, Function, InstId, Operand, ValueDef};
+use llrm_mir::module::{Function, InstId, Operand, ValueDef};
 use llrm_mir::opcode::Opcode;
 use llrm_mir::passes::{Declared, Outer};
-use llrm_mir::tti::{CostKind, LaneOp, ShuffleKind, Tti, VectorInstrContext, VectorTy};
+use llrm_mir::tti::{LaneOp, ShuffleKind, Tti, VectorInstrContext, VectorTy};
 use llrm_mir::types::Type;
 
 use crate::slpphi::{Roots, Session};

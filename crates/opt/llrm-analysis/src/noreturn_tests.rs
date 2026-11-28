@@ -446,7 +446,8 @@ after:
     assert!(!all_stranded(f, header, &starts(&[body])), "body reaches the header");
     assert!(!all_stranded(f, header, &starts(&[die, after])));
     assert_eq!(returning_builds() - before, 1, "the returning blocks were found again for each call");
-    // An edit that makes `after` stop the program: the old answer is not reused.
+    // An edit that makes `after` stop the program: the old answer is not
+    // reused.
     assert!(cut(&mut module, "f", "exit"));
     let f = function(&module, "f");
     assert!(all_stranded(f, header, &starts(&[after])), "a held set of returning blocks outlived the edit");

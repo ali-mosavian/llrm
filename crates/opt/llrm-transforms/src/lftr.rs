@@ -12,9 +12,9 @@
 //!   (`isHighCostExpansion`, budget 4) and is safe to expand.
 //! - `FindLoopCounter` picks a header phi that is a counter (a unit stride, or
 //!   a constant one that cannot wrap where the target sets
-//!   `Tuning::lftr_any_stride`: DEVIATE LFTR1) at least as wide as the
-//!   count, with a concrete start, preferring one that counts from zero or is
-//!   wider, and not one that only this test keeps alive.
+//!   `Tuning::lftr_any_stride`: DEVIATE LFTR1) at least as wide as the count,
+//!   with a concrete start, preferring one that counts from zero or is wider,
+//!   and not one that only this test keeps alive.
 //! - `genLoopLimit` writes the counter's value after the count (a post-inc
 //!   value where the test is in the latch) before the branch, and the branch
 //!   tests `counter != limit` (`==` where the loop is left on true). A counter
@@ -83,7 +83,8 @@ struct Lftr<'a> {
     budget: u32,
     /// `Tuning::lftr_any_stride`: DEVIATE LFTR1.
     any_stride: bool,
-    /// llvm-mos's `allowIllegalIntegerIV`: a counter of an illegal width is one.
+    /// llvm-mos's `allowIllegalIntegerIV`: a counter of an illegal width is
+    /// one.
     illegal_iv: bool,
 }
 
@@ -131,8 +132,20 @@ pub fn replaced_in(
     // `Rewriter.disableCanonicalMode()`.
     let mut rewriter = Expander::new("indvars");
     rewriter.set_canonical_mode(false);
-    let mut run =
-        Lftr { context, layout, function, declared, outer, se, env, rewriter: &mut rewriter, tti: &tti, budget, any_stride, illegal_iv };
+    let mut run = Lftr {
+        context,
+        layout,
+        function,
+        declared,
+        outer,
+        se,
+        env,
+        rewriter: &mut rewriter,
+        tti: &tti,
+        budget,
+        any_stride,
+        illegal_iv,
+    };
     let mut changed = false;
     for header in headers {
         // `IndVarSimplify::run`: stay out of trouble without LoopSimplify

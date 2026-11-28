@@ -202,43 +202,49 @@ impl Tti for Wasm {
         "WebAssembly"
     }
 
-    /// SZ1 retired (2026-11-13): the pin's `OptSizeThreshold` 50 decides, as the pin does
-    /// (`tests/os_inline_growth.rs`). The bound had kept `sf_cmp_bits` (cost 35, 7 sites) a
-    /// call because our InstCombine made `scmp` of its select chain where the pin's
-    /// `matchSymmetricPair` (equality `icmp`) left it at 50; with that translated, the bound
-    /// held 17 cells above the pin at -Os and 18 at -O1 (corpus, 195 cells; 0 lost at -Os,
-    /// 1 at -O1: row WSZ-32).
+    /// SZ1 retired (2026-11-13): the pin's `OptSizeThreshold` 50 decides, as
+    /// the pin does (`tests/os_inline_growth.rs`). The bound had kept
+    /// `sf_cmp_bits` (cost 35, 7 sites) a call because our InstCombine made
+    /// `scmp` of its select chain where the pin's `matchSymmetricPair`
+    /// (equality `icmp`) left it at 50; with that translated, the bound
+    /// held 17 cells above the pin at -Os and 18 at -O1 (corpus, 195 cells; 0
+    /// lost at -Os, 1 at -O1: row WSZ-32).
     fn opt_size_inline_by_code_size(&self) -> bool {
         false
     }
 
-    /// The pin's `TotalAllocaSizeRecursiveCaller` (1024 bytes) decides, not a refusal of every
-    /// frame: wasm's shadow stack is in linear memory, as a flat target's is.
+    /// The pin's `TotalAllocaSizeRecursiveCaller` (1024 bytes) decides, not a
+    /// refusal of every frame: wasm's shadow stack is in linear memory, as
+    /// a flat target's is.
     fn inline_frames_into_recursive_callers(&self) -> bool {
         true
     }
 
-    /// A callee the -O1 size bound refused is tried inline as at -Os, the copy staying where the
-    /// caller comes out smaller: the pin's `inline_cost` shrinks a caller whose inlined copy
-    /// folds, which the bound's static size cannot see (`call_keeps`, `switch_header_marker_loop`).
+    /// A callee the -O1 size bound refused is tried inline as at -Os, the copy
+    /// staying where the caller comes out smaller: the pin's `inline_cost`
+    /// shrinks a caller whose inlined copy folds, which the bound's static
+    /// size cannot see (`call_keeps`, `switch_header_marker_loop`).
     fn inline_trials_at_o1(&self) -> bool {
         true
     }
 
-    /// The -O1 trial also inlines the sites its splice brings (#7700, m32 -Os): the pin inlines
-    /// callee-first at threshold 337 where the size bound clamps it, so `churn` into `hold` and
-    /// `hold` into `main` meet the constants together (`call_keeps` -O1: 263 B against the pin's 50).
+    /// The -O1 trial also inlines the sites its splice brings (#7700, m32 -Os):
+    /// the pin inlines callee-first at threshold 337 where the size bound
+    /// clamps it, so `churn` into `hold` and `hold` into `main` meet the
+    /// constants together (`call_keeps` -O1: 263 B against the pin's 50).
     fn opt_size_inline_chain_trial(&self) -> bool {
         true
     }
 
-    /// SZ2 tries the sites of a callee that stays as one unit: the pin inlines every site on its cost
-    /// and sinks the common call after (switch_header_marker_loop -Os: three `report(const)`).
+    /// SZ2 tries the sites of a callee that stays as one unit: the pin inlines
+    /// every site on its cost and sinks the common call after
+    /// (switch_header_marker_loop -Os: three `report(const)`).
     fn inline_trial_groups_sites(&self) -> bool {
         true
     }
 
-    /// The DAG legalizes odd-width loads and stores (`i24` is a 16-bit and an 8-bit access).
+    /// The DAG legalizes odd-width loads and stores (`i24` is a 16-bit and an
+    /// 8-bit access).
     fn selects_odd_sized_integers(&self) -> bool {
         true
     }
@@ -404,8 +410,8 @@ impl Tti for Wasm {
         let free = match op {
             CastKind::IntToPtr => legal_integer(from) && width(from) <= POINTER_BITS,
             CastKind::PtrToInt => legal_integer(to) && width(to) >= POINTER_BITS,
-            // `TargetTransformInfoImplBase`: a `trunc` to a legal integer is free
-            // (`n32:64`: `i32` and `i64`), whatever it comes from.
+            // `TargetTransformInfoImplBase`: a `trunc` to a legal integer is
+            // free (`n32:64`: `i32` and `i64`), whatever it comes from.
             CastKind::Trunc if legal_integer(to) => true,
             CastKind::Trunc | CastKind::BitCast => {
                 let integral = |ty: Ty| matches!(ty, Ty::Int(_) | Ty::Pointer);
@@ -510,10 +516,10 @@ mod tests {
         assert!(!Wasm.lftr_any_stride());
     }
 
-    /// A `trunc` of an `i64` to an `i32` cost one unit where the pin prices it at
-    /// none (`TargetTransformInfoImplBase`: a truncation to a legal integer):
-    /// the outer loop of `int64_divmod_edges` read 78 against the pin's 70 and
-    /// stayed rolled at -O3 (+33 executed instructions).
+    /// A `trunc` of an `i64` to an `i32` cost one unit where the pin prices it
+    /// at none (`TargetTransformInfoImplBase`: a truncation to a legal
+    /// integer): the outer loop of `int64_divmod_edges` read 78 against the
+    /// pin's 70 and stayed rolled at -O3 (+33 executed instructions).
     #[test]
     fn a_truncation_to_a_legal_integer_is_free() {
         let cost = |from, to| Wasm.cast_cost(CastKind::Trunc, to, from, CostKind::CodeSize);
@@ -570,8 +576,9 @@ mod tests {
     }
 
     /// The saturating add, subtract and shift had no price, so a loop that held
-    /// one could not be sized or unrolled (ssub_sat_i64_loop, sat_sub_u64_shared_compare
-    /// -O2/-O3: the pin unrolls the 3-trip loop, ours kept it, +25 and +347 instructions).
+    /// one could not be sized or unrolled (ssub_sat_i64_loop,
+    /// sat_sub_u64_shared_compare -O2/-O3: the pin unrolls the 3-trip loop,
+    /// ours kept it, +25 and +347 instructions).
     #[test]
     fn a_saturating_operation_has_the_pins_price() {
         let cost = |name, kind| Wasm.intrinsic_cost(name, None, &[], kind);

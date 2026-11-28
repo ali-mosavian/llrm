@@ -2,18 +2,18 @@
 //! address `check_locals` took until inlining made its call direct; with one
 //! IPSCCP (the pin's) the arguments stay and `memory_expansion` is 1332 B
 //! bigger at m32 -O2; m64 loses them too (-3281 B of text). The
-//! positive control of the SD443 A/B: the bench corpus never reached the pass. Needs the Open Watcom tree (tools/ow-fetch.sh) and
-//! `LLRM_PIN_CLANG`.
+//! positive control of the SD443 A/B: the bench corpus never reached the pass.
+//! Needs the Open Watcom tree (tools/ow-fetch.sh) and `LLRM_PIN_CLANG`.
 
 use std::path::Path;
 use std::process::Command;
 
 /// The interprocedural stage of `second_ipsccp.c` at -O2 for `target`.
-fn stage(target: &str, flag: &str) -> String {
-    assert!(
-        llrm_cc::ow_present(),
-        "the Open Watcom tree is missing: run tools/ow-fetch.sh; this test does not skip"
-    );
+fn stage(
+    target: &str,
+    flag: &str,
+) -> String {
+    assert!(llrm_cc::ow_present(), "the Open Watcom tree is missing: run tools/ow-fetch.sh; this test does not skip");
     assert!(
         std::env::var_os("LLRM_PIN_CLANG").is_some(),
         "LLRM_PIN_CLANG is not set: this test needs it and does not skip"

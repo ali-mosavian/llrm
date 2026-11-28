@@ -213,7 +213,11 @@ impl<W: Word> Range<W> {
 
     /// The same range in another word; the bounds fit it by construction.
     pub fn to_word<V: Word>(&self) -> Range<V> {
-        Range { lower: V::from_limbs(self.lower.to_limbs()), upper: V::from_limbs(self.upper.to_limbs()), width: self.width }
+        Range {
+            lower: V::from_limbs(self.lower.to_limbs()),
+            upper: V::from_limbs(self.upper.to_limbs()),
+            width: self.width,
+        }
     }
 
     fn w(&self) -> u32 {
@@ -2013,7 +2017,11 @@ impl<W: Word> Range<W> {
         if v == W::ZERO {
             return Self::full(width);
         }
-        Self::non_empty(width, rounding_udiv(W::ZERO, v, true), add(rounding_udiv(mask::<W>(width), v, false), W::ONE, width))
+        Self::non_empty(
+            width,
+            rounding_udiv(W::ZERO, v, true),
+            add(rounding_udiv(mask::<W>(width), v, false), W::ONE, width),
+        )
     }
 
     /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/IR/ConstantRange.cpp#L311>
@@ -2083,8 +2091,10 @@ impl<W: Word> Range<W> {
                 )
             }
             BinaryOp::Shl => {
-                let sh_amt =
-                    other.intersect_with(&Self::new(w, W::ZERO, add(W::from_u32(w - 1), W::ONE, w)), PreferredRangeType::Smallest);
+                let sh_amt = other.intersect_with(
+                    &Self::new(w, W::ZERO, add(W::from_u32(w - 1), W::ONE, w)),
+                    PreferredRangeType::Smallest,
+                );
                 if sh_amt.is_empty_set() {
                     return Self::full(w);
                 }
@@ -2238,7 +2248,8 @@ impl<W: Word> Range<W> {
             let lo = sdiv(sub(neg_l.upper, W::ONE, w), neg_r.lower, w);
             if neg_l.lower == signed_min && neg_r.upper == W::ZERO {
                 if neg_r.lower != mask::<W>(w) {
-                    let adj_neg_r_upper = if rhs.lower == mask::<W>(w) { rhs.upper } else { sub(neg_r.upper, W::ONE, w) };
+                    let adj_neg_r_upper =
+                        if rhs.lower == mask::<W>(w) { rhs.upper } else { sub(neg_r.upper, W::ONE, w) };
                     pos_res = pos_res.union_with(
                         &Self::new(w, lo, add(sdiv(neg_l.lower, sub(adj_neg_r_upper, W::ONE, w), w), W::ONE, w)),
                         smallest,
@@ -2253,8 +2264,10 @@ impl<W: Word> Range<W> {
                     );
                 }
             } else {
-                pos_res = pos_res
-                    .union_with(&Self::new(w, lo, add(sdiv(neg_l.lower, sub(neg_r.upper, W::ONE, w), w), W::ONE, w)), smallest);
+                pos_res = pos_res.union_with(
+                    &Self::new(w, lo, add(sdiv(neg_l.lower, sub(neg_r.upper, W::ONE, w), w), W::ONE, w)),
+                    smallest,
+                );
             }
         }
         let mut neg_res = Self::empty(w);
@@ -2390,7 +2403,8 @@ impl<W: Word> Range<W> {
         } else if self.is_empty_set() {
             "empty-set".to_owned()
         } else {
-            // Decimal only where the bounds fit `i128`; wider ranges print in hex.
+            // Decimal only where the bounds fit `i128`; wider ranges print in
+            // hex.
             if self.width <= 128 {
                 format!("[{},{})", signed(self.lower.low_u128(), self.width), signed(self.upper.low_u128(), self.width))
             } else {

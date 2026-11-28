@@ -1,6 +1,7 @@
-//! Arrays of stride 2 and 4 in a position independent loop each got a pointer of their own
-//! (`add rax,0x2`, `add rcx,0x4`): the pin refuses a scaled index beside a symbol. One counter
-//! with `[sym + i*4]` is what gcc and the non-PIE build make. Needs `LLRM_LLC`.
+//! Arrays of stride 2 and 4 in a position independent loop each got a pointer
+//! of their own (`add rax,0x2`, `add rcx,0x4`): the pin refuses a scaled index
+//! beside a symbol. One counter with `[sym + i*4]` is what gcc and the non-PIE
+//! build make. Needs `LLRM_LLC`.
 
 use std::path::Path;
 use std::process::Command;

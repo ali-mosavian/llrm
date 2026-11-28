@@ -19,12 +19,13 @@
 //! # Limits
 //! DEVIATE IU1: unless the target asks for use-list order
 //! (`Tti::lsr_users_in_use_list_order`), users of a value are visited in
-//! descending program order, not use-list order. Use-list order is edit history; the pin's order on parsed
-//! IR is the only reproducible one, and it breaks ties in LSR's register
-//! choice. With use-list order and `Tti::lsr_phi_users_first` a phi is met
-//! first all the same: the pin keeps the one operand of a phi it meets first
-//! (`Processed`), and which that is must not depend on edits (div_constants
-//! m64 -O1: 4334 B -> 4173 B, 6960 B -> 6854 B). Cost (IU1-COST): one map of the layout per loop and a block's
+//! descending program order, not use-list order. Use-list order is edit
+//! history; the pin's order on parsed IR is the only reproducible one, and it
+//! breaks ties in LSR's register choice. With use-list order and
+//! `Tti::lsr_phi_users_first` a phi is met first all the same: the pin keeps
+//! the one operand of a phi it meets first (`Processed`), and which that is
+//! must not depend on edits (div_constants m64 -O1: 4334 B -> 4173 B, 6960 B ->
+//! 6854 B). Cost (IU1-COST): one map of the layout per loop and a block's
 //! instruction numbers, where the pin has none (it was a map of every
 //! instruction: 1.9 M on d_faces -O2). Exit: use lists keep LLVM's order.
 //! Owner: w-5. Review: 2026-11-19.
@@ -37,9 +38,9 @@ use std::cell::RefCell;
 
 use llrm_analysis::scev::expr::{Kind, Scev};
 use llrm_analysis::scev::{Cx, ScalarEvolution};
+use llrm_mir::context::ConstantKind;
 use llrm_mir::dense::IdSet;
 use llrm_mir::module::{BlockId, Function, InstId, Operand, ValueDef};
-use llrm_mir::context::ConstantKind;
 use llrm_mir::opcode::{BinaryOp, CastOp, Opcode};
 use llrm_mir::valuetracking::pattern::phi_incoming;
 
@@ -214,8 +215,14 @@ impl IvUsers {
     ) -> Self {
         #[cfg(test)]
         BUILDS.with(|made| made.set(made.get() + 1));
-        let mut users =
-            Self { l, uses: Vec::new(), processed: IdSet::with_capacity(cx.function.instruction_count()), phi_uses: IdSet::with_capacity(0), ordered: 0, use_list_order: env.use_list_order };
+        let mut users = Self {
+            l,
+            uses: Vec::new(),
+            processed: IdSet::with_capacity(cx.function.instruction_count()),
+            phi_uses: IdSet::with_capacity(0),
+            ordered: 0,
+            use_list_order: env.use_list_order,
+        };
         let phis: Vec<InstId> =
             cx.function.iter_block(l).take_while(|&inst| cx.function.instruction(inst).opcode == Opcode::Phi).collect();
         for phi in phis {
@@ -286,10 +293,11 @@ impl IvUsers {
             // One instruction using the result twice is visited once.
             let mut seen = std::collections::HashSet::new();
             users.retain(|user| seen.insert(*user));
-            // DEVIATE IU1: a phi first, as in program order (stable, so the rest
-            // keep the list's): the pin's "do not recurse into a phi twice" keeps the
-            // operand met first, and edit history decides which that is.
-            // Where the target asks (`Tti::lsr_phi_users_first`).
+            // DEVIATE IU1: a phi first, as in program order (stable, so the
+            // rest keep the list's): the pin's "do not recurse into
+            // a phi twice" keeps the operand met first, and edit
+            // history decides which that is. Where the target asks
+            // (`Tti::lsr_phi_users_first`).
             if env.phi_users_first {
                 users.sort_by_key(|user| cx.function.instruction(*user).opcode != Opcode::Phi);
             }
@@ -506,20 +514,25 @@ fn scaled_by_a_user(
     cx: &Cx,
     value: llrm_mir::module::ValueId,
 ) -> bool {
-    cx.function.users(value).iter().any(|one| {
-        let user = cx.function.instruction(one.user);
-        match user.opcode {
-            Opcode::GetElementPtr { source } => {
-                let indices = vec![None; user.operands.len() - 1];
-                let (_, variable) = cx.layout.collect_offset(&cx.context.types, source, &indices);
-                variable.iter().any(|&(at, scale)| scale > 1 && user.operands[1 + at] == Operand::Value(value))
-            }
-            Opcode::Binary(op @ (BinaryOp::Mul | BinaryOp::Shl)) => {
-                let [Operand::Value(a), Operand::Constant(c)] = user.operands[..] else { return false };
-                let ConstantKind::Int(by) = cx.context.get(c).kind else { return false };
-                a == value && (op == BinaryOp::Shl || by > 1)
-            }
-            _ => false,
-        }
-    })
+    cx.function
+        .users(value)
+        .iter()
+        .any(
+            |one| {
+                let user = cx.function.instruction(one.user);
+                match user.opcode {
+                    Opcode::GetElementPtr { source } => {
+                        let indices = vec![None; user.operands.len() - 1];
+                        let (_, variable) = cx.layout.collect_offset(&cx.context.types, source, &indices);
+                        variable.iter().any(|&(at, scale)| scale > 1 && user.operands[1 + at] == Operand::Value(value))
+                    }
+                    Opcode::Binary(op @ (BinaryOp::Mul | BinaryOp::Shl)) => {
+                        let [Operand::Value(a), Operand::Constant(c)] = user.operands[..] else { return false };
+                        let ConstantKind::Int(by) = cx.context.get(c).kind else { return false };
+                        a == value && (op == BinaryOp::Shl || by > 1)
+                    }
+                    _ => false,
+                }
+            },
+        )
 }

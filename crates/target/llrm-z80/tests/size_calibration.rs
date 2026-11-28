@@ -16,9 +16,9 @@ use llrm_z80::target::Z80;
 const BAND: std::ops::RangeInclusive<f64> = 0.7..=1.25;
 
 fn audits() -> Vec<(String, i64, i64)> {
-    let dir = std::env::var_os("LLRM_SIZE_DIR").map(std::path::PathBuf::from).unwrap_or_else(|| {
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../llrm-6502/tests/data_size")
-    });
+    let dir = std::env::var_os("LLRM_SIZE_DIR")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../llrm-6502/tests/data_size"));
     let level = std::env::var("LLRM_SIZE_LEVEL").map_or(Level::Os, |text| Level::parse(&text).expect("a level"));
     let mut files: Vec<_> = std::fs::read_dir(&dir)
         .unwrap()

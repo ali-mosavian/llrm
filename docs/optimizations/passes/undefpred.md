@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/undefpred.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/undefpred.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/undefpred.rs sha256:ca0209281a259b11211d82afbc3162b9c18e9cf31ceac45b52ccf77ec25b3d7a -->
+<!-- src: crates/opt/llrm-transforms/src/undefpred.rs sha256:506b572efb55f48101aa043e97f9f042fa9d6f85e955dd06b2fbc44ae4006c87 -->
 
 # undefpred
 
@@ -30,8 +30,8 @@ The way in that gives the null is cut:
 |---|---|---|
 | [`removeUndefIntroducingPredecessor`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L9230) | `removed` | MIRROR; D1 |
 
-- D1. (retired) the pass is given the module's declarations, so a conditional
-  branch keeps the `llvm.assume` of its guarding condition.
+- D1. (retired) the pass is given the module's declarations, so a
+  conditional branch keeps the `llvm.assume` of its guarding condition.
 
 ## Used by
 Named by `simplifycfg`.

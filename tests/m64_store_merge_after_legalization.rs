@@ -15,9 +15,10 @@ fn constant_array_stores_past_the_chain_depth_still_merge() {
     assert!(done.status.success(), "{}", String::from_utf8_lossy(&done.stderr));
     let asm = String::from_utf8_lossy(&done.stdout);
     let stores = |size: &str| {
-        asm.lines().filter(|line| line.trim_start().starts_with(&format!("mov {size} ptr [rsp"))).filter(|line| {
-            line.rsplit(", ").next().is_some_and(|value| value.trim().parse::<i64>().is_ok())
-        }).count()
+        asm.lines()
+            .filter(|line| line.trim_start().starts_with(&format!("mov {size} ptr [rsp")))
+            .filter(|line| line.rsplit(", ").next().is_some_and(|value| value.trim().parse::<i64>().is_ok()))
+            .count()
     };
     let (words, dwords) = (stores("word"), stores("dword"));
     assert!(words <= 32 && dwords >= 5, "{words} word and {dwords} dword immediate stores:\n{asm}");

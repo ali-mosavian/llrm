@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/constanthoisting.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/constanthoisting.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/constanthoisting.rs sha256:38999ea53b2d7063bae18e58d344083ca0e12578cbc9ee2a2f665d2924646be2 -->
+<!-- src: crates/opt/llrm-transforms/src/constanthoisting.rs sha256:233e029096da2516e85ce772c18f883428b8c4d5939859990e73070a06632398 -->
 
 # constanthoisting
 
@@ -29,15 +29,18 @@ dominate the uses, and each use is rebased: it reads the base, or
                                  b1: store i64 %const, ptr %q
 ```
 
-DEVIATE 1 (exit 2026-12-31, [`consthoist-gep`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/ConstantHoisting.cpp#L84)):
+DEVIATE 1 (exit 2026-12-31,
+[`consthoist-gep`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/ConstantHoisting.cpp#L84)):
 constant `gep` expressions are not hoisted. The pin's option is off by
 default and a MIR operand is never a constant expression.
 
-DEVIATE 2 (exit 2026-12-31, [`consthoist-with-block-frequency`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/ConstantHoisting.cpp#L78)):
+DEVIATE 2 (exit 2026-12-31,
+[`consthoist-with-block-frequency`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/ConstantHoisting.cpp#L78)):
 block frequencies are always used; the option is on by default, so the
 dominator-only insertion point search is not translated.
 
-DEVIATE 3 (exit 2026-12-31, [`optsize`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/ConstantHoisting.cpp#L937)):
+DEVIATE 3 (exit 2026-12-31,
+[`optsize`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/ConstantHoisting.cpp#L937)):
 `shouldOptimizeForSize` reads the function's `optsize` or `minsize`; there
 is no profile summary.
 

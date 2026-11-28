@@ -15,10 +15,8 @@ fn asm(body: &str) -> String {
 
 #[test]
 fn a_constant_multiply_that_is_the_only_one_is_a_chain_not_a_call() {
-    let out = asm(
-        "define i32 @f(i32 %x) optsize nounwind {\n %r = mul i32 %x, 1000\n ret i32 %r\n}\n\
-         define i32 @g(i32 %x) optsize nounwind {\n %r = mul i32 %x, 75\n ret i32 %r\n}\n",
-    );
+    let out = asm("define i32 @f(i32 %x) optsize nounwind {\n %r = mul i32 %x, 1000\n ret i32 %r\n}\n\
+         define i32 @g(i32 %x) optsize nounwind {\n %r = mul i32 %x, 75\n ret i32 %r\n}\n");
     assert!(!out.contains("__mulsi3"), "the routine is called for x * 1000 or x * 75:\n{out}");
 }
 
@@ -54,14 +52,14 @@ fn six_functions_that_multiply_by_a_constant_share_the_routine_charge() {
     assert!(shared.contains("__mulsi3"), "six chains cost more than the routine they save once:\n{shared}");
 }
 
-/// qlight's `(long) raw * sval` is a `muls.w`, never the routine; the module counted it as a multiply of two
-/// variables, so its `* 1000000L` kept the call and linked `__mulsi3` for nothing else (bench/qlight +102 B).
+/// qlight's `(long) raw * sval` is a `muls.w`, never the routine; the module
+/// counted it as a multiply of two variables, so its `* 1000000L` kept the call
+/// and linked `__mulsi3` for nothing else (bench/qlight +102 B).
 #[test]
 fn a_halfword_product_does_not_count_as_linking_the_routine() {
-    let out = asm(
-        "define i32 @h(i16 %a, i16 %b) optsize nounwind {\n %x = sext i16 %a to i32\n %y = sext i16 %b to i32\n \
+    let out =
+        asm("define i32 @h(i16 %a, i16 %b) optsize nounwind {\n %x = sext i16 %a to i32\n %y = sext i16 %b to i32\n \
          %r = mul i32 %x, %y\n ret i32 %r\n}\n\
-         define i32 @g(i32 %x) optsize nounwind {\n %r = mul i32 %x, 1000000\n ret i32 %r\n}\n",
-    );
+         define i32 @g(i32 %x) optsize nounwind {\n %r = mul i32 %x, 1000000\n ret i32 %r\n}\n");
     assert!(!out.contains("__mulsi3"), "the chain was refused for a routine nothing links:\n{out}");
 }

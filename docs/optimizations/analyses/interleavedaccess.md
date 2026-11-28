@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-analysis/src/interleavedaccess.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/interleavedaccess.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-analysis/src/interleavedaccess.rs sha256:928bb8cdcb0887add665f801b506995e05e01ee966f5550f3debea2f94d8231a -->
+<!-- src: crates/opt/llrm-analysis/src/interleavedaccess.rs sha256:91fce486b19e98f8a17040c1d6b6b45a66e27a6c29aa89d7e74ecdb888b82b3c -->
 
 # interleavedaccess
 
@@ -26,10 +26,10 @@ for (i = 0; i < n; i++) { p[2*i] = a; p[2*i + 1] = b; }   // one store group, fa
 ```
 
 ## DEVIATE rows
-- IAI1 (owner llrm-arm64-vec, exit 2026-11-24): no `PredicatedScalarEvolution`
-  (LoopAccessAnalysis D24): the predicates `collectConstStrideAccesses`
-  would collect are never added, so an access whose stride needs an assumption
-  has stride 0 and joins no group.
+- IAI1 (owner llrm-arm64-vec, exit 2026-11-24): no
+  `PredicatedScalarEvolution` (LoopAccessAnalysis D24): the predicates
+  `collectConstStrideAccesses` would collect are never added, so an access
+  whose stride needs an assumption has stride 0 and joins no group.
 - IAI2 (same owner and exit): `MaxInterleaveGroupFactor` is its default, 8;
   the `-max-interleave-group-factor` option does not exist.
 

@@ -81,8 +81,8 @@ b3:
 }
 
 /// The way into a block that divides by a null-fed phi is cut by a conditional
-/// branch: the pin keeps `assume(cond)` where we kept nothing, so the facts that
-/// the branch gave (`%c` holds past the cut) were lost to later passes.
+/// branch: the pin keeps `assume(cond)` where we kept nothing, so the facts
+/// that the branch gave (`%c` holds past the cut) were lost to later passes.
 #[test]
 fn test_a_cut_conditional_branch_keeps_an_assume_of_its_condition() {
     let out = simplify(

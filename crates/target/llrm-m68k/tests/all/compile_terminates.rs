@@ -1,5 +1,6 @@
-//! A combine that rewrote an extension to an any-extension and back looped forever: `__ashldi3` (the 32-bit halves
-//! of a 64-bit shift) never finished compiling on the 68000 and 68020 (59 min at 100% CPU). Compiling is bounded.
+//! A combine that rewrote an extension to an any-extension and back looped
+//! forever: `__ashldi3` (the 32-bit halves of a 64-bit shift) never finished
+//! compiling on the 68000 and 68020 (59 min at 100% CPU). Compiling is bounded.
 
 use std::sync::mpsc;
 use std::time::Duration;

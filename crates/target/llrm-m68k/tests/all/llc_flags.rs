@@ -1,6 +1,7 @@
-//! `llrm-cc -fno-inline-functions` (and the other mid-end flags a program's `// flags:` line names)
-//! reached `llrm-m68k-llc`, which answered `unrecognized argument`: 19 corpus programs failed to
-//! compile at all, and the sweep counted them as unmeasured cells.
+//! `llrm-cc -fno-inline-functions` (and the other mid-end flags a program's `//
+//! flags:` line names) reached `llrm-m68k-llc`, which answered `unrecognized
+//! argument`: 19 corpus programs failed to compile at all, and the sweep
+//! counted them as unmeasured cells.
 
 use std::process::{Command, Output};
 
@@ -56,8 +57,9 @@ fn excess_precision_is_taken_as_there_is_none_to_keep() {
     assert!(llc(&["-fexcess-precision=standard"]).status.success());
 }
 
-/// `-fsanitize=bounds` (the `idioms` variant) answered `unrecognized argument`, the
-/// text of a typo. It is refused by name: a sanitizer is never silently dropped.
+/// `-fsanitize=bounds` (the `idioms` variant) answered `unrecognized argument`,
+/// the text of a typo. It is refused by name: a sanitizer is never silently
+/// dropped.
 #[test]
 fn a_sanitizer_is_refused_by_name() {
     for flag in ["-fsanitize=bounds", "-fno-sanitize=bounds"] {

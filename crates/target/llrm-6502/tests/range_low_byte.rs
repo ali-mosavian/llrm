@@ -1,4 +1,5 @@
-//! A word range check on a value below 256 is a byte range check and a zero high byte.
+//! A word range check on a value below 256 is a byte range check and a zero
+//! high byte.
 
 mod common;
 

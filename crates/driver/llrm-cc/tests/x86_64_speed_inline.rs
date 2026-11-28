@@ -1,5 +1,6 @@
-//! x86-64 -O2/-O3: a speed caller's inline is the pin's threshold, not a price in bytes (bytes are not counted at
-//! O1-O3, ruling 2026-11-14). At 312 milliclocks a byte `loop_fusion` kept `clear` a function called from every
+//! x86-64 -O2/-O3: a speed caller's inline is the pin's threshold, not a price
+//! in bytes (bytes are not counted at O1-O3, ruling 2026-11-14). At 312
+//! milliclocks a byte `loop_fusion` kept `clear` a function called from every
 //! nest. Needs `LLRM_LLC`.
 
 use std::path::Path;
@@ -28,8 +29,8 @@ fn assembly(
     std::fs::read_to_string(&asm).unwrap()
 }
 
-/// `loop_fusion.c`: the static `clear`, called from every nest, is inlined (22 calls and a second procedure before,
-/// 11 calls and `main` alone now).
+/// `loop_fusion.c`: the static `clear`, called from every nest, is inlined (22
+/// calls and a second procedure before, 11 calls and `main` alone now).
 #[test]
 fn a_static_helper_called_from_every_nest_is_inlined_at_speed() {
     for level in ["-O2", "-O3"] {

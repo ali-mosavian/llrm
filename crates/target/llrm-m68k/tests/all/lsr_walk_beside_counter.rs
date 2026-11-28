@@ -1,6 +1,8 @@
-//! `sum += cells[i] * (i + 1)`: the counter `i` stays live for the multiply, yet LSR's end-biased form (`lea` the end,
-//! `neg.l` the length, `(0,%a0,%d2)`) replaced the pointer walk: it saved a compare the live counter still pays, and
-//! lost the `(%a0)+` that is free on the 68000 (loop_versioning -O3, +3.4% clocks against gcc).
+//! `sum += cells[i] * (i + 1)`: the counter `i` stays live for the multiply,
+//! yet LSR's end-biased form (`lea` the end, `neg.l` the length, `(0,%a0,%d2)`)
+//! replaced the pointer walk: it saved a compare the live counter still pays,
+//! and lost the `(%a0)+` that is free on the 68000 (loop_versioning -O3, +3.4%
+//! clocks against gcc).
 
 use llrm_m68k::driver::{Level, assembly, cpu_of};
 

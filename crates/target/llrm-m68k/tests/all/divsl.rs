@@ -72,8 +72,10 @@ fn a_remainder_alone_is_one_divide_on_the_68020() {
     }
 }
 
-/// A remainder inside a loop was `divs.l`, `muls.l` and `sub.l`: the two-address multiply reads a copy of the quotient
-/// and its own product, and a branch reads the subtract's codes (bench/recgcd, run/idiv_loop_os: +12 B each at Os).
+/// A remainder inside a loop was `divs.l`, `muls.l` and `sub.l`: the
+/// two-address multiply reads a copy of the quotient and its own product, and a
+/// branch reads the subtract's codes (bench/recgcd, run/idiv_loop_os: +12 B
+/// each at Os).
 #[test]
 fn a_remainder_in_a_loop_is_one_divide_on_the_68020() {
     for (signed, one, other) in [(true, "divsl.l", "divs.l"), (false, "divul.l", "divu.l")] {

@@ -318,10 +318,15 @@ impl LiveRegMatrix {
         vreg: VReg,
         lr: &LiveRange,
     ) -> u64 {
-        lr.segments.iter().fold(u64::from(vreg), |key, segment| {
-            let key = key.wrapping_mul(0x100000001b3) ^ segment.start.get_index() as u64;
-            key.wrapping_mul(0x100000001b3) ^ segment.end.get_index() as u64
-        })
+        lr.segments
+            .iter()
+            .fold(
+                u64::from(vreg),
+                |key, segment| {
+                    let key = key.wrapping_mul(0x100000001b3) ^ segment.start.get_index() as u64;
+                    key.wrapping_mul(0x100000001b3) ^ segment.end.get_index() as u64
+                },
+            )
     }
 
     /// `query` (LiveRegMatrix.cpp#L160) followed by `checkInterference()`: does

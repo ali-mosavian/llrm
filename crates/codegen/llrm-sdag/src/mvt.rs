@@ -176,8 +176,9 @@ const VECTORS: [(MVT, MVT, u32); 36] = [
     (MVT::V16F64, MVT::F64, 16),
 ];
 
-/// A value type: a simple one, an integer of a width with no simple type, or a vector with no simple type
-/// (`<3 x i8>`; `EVT::getVectorVT` on a lane count no `MVT` has).
+/// A value type: a simple one, an integer of a width with no simple type, or a
+/// vector with no simple type (`<3 x i8>`; `EVT::getVectorVT` on a lane count
+/// no `MVT` has).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum EVT {
     Simple(MVT),
@@ -208,7 +209,8 @@ impl EVT {
         MVT::integer(bits).map_or(EVT::Int(bits), EVT::Simple)
     }
 
-    /// `EVT::getVectorVT`: the simple type when there is one, so equal types compare equal.
+    /// `EVT::getVectorVT`: the simple type when there is one, so equal types
+    /// compare equal.
     pub fn vector(
         element: MVT,
         lanes: u32,

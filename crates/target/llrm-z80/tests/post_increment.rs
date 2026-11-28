@@ -16,8 +16,9 @@ fn compile(
 
 /// A word copy loop: each pointer went back with `dec hl` and forward with `ld
 /// bc, #2; add hl, bc` (7 B and 32 T a trip a pointer); the access steps it as
-/// it goes. Since #9872 (bytes first) -O2 steps one pointer with `ld bc, #2; add hl, bc` again: copy is 53 B against
-/// 63 B and 212 T a trip against 279 T; no pointer goes back with `dec hl`.
+/// it goes. Since #9872 (bytes first) -O2 steps one pointer with `ld bc, #2;
+/// add hl, bc` again: copy is 53 B against 63 B and 212 T a trip against 279 T;
+/// no pointer goes back with `dec hl`.
 #[test]
 fn a_word_copy_loop_steps_its_pointers_with_the_access() {
     let asm = compile(

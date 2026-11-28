@@ -67,7 +67,8 @@ fn a_double_one_is_left_to_the_fpu() {
 fn a_float_constant_stays_an_fp_store_where_an_i32_store_is_not_legal() {
     use super::super::TargetLowering;
     use super::super::lowering::TargetLoweringInfo;
-    let mut tli = TargetLowering::empty(TargetLoweringInfo::new(&[MVT::I1, MVT::I8, MVT::I16], false).with_soft_float());
+    let mut tli =
+        TargetLowering::empty(TargetLoweringInfo::new(&[MVT::I1, MVT::I8, MVT::I16], false).with_soft_float());
     tli.init_actions();
     assert!(!tli.types.is_type_legal(EVT::I32) && !tli.is_operation_legal_or_custom(ISD::Store, EVT::I32));
     let (dag, root) = store_with(&tli, MVT::F32, 0x3FC0_0000);

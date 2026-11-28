@@ -82,7 +82,10 @@ struct Prices {
 impl Prices {
     /// `x + zext(c)` for a `c` of `leaves` compares joined by `and`/`or`: a
     /// `setcc` each and a joining `alu` between, against a jump each.
-    fn tree_wins(&self, leaves: i64) -> bool {
+    fn tree_wins(
+        &self,
+        leaves: i64,
+    ) -> bool {
         self.set * leaves + self.alu * (leaves - 1) + self.ext + self.alu > self.branch * leaves + self.alu
     }
 }
@@ -134,9 +137,11 @@ fn compare_tree(
     user: InstId,
     word_bits: u32,
 ) -> i64 {
-    let joins = |inst: InstId| {
-        matches!(function.instruction(inst).opcode, Opcode::Binary(BinaryOp::And | BinaryOp::Or))
-    };
+    let joins =
+        |inst: InstId| matches!(
+            function.instruction(inst).opcode,
+            Opcode::Binary(BinaryOp::And | BinaryOp::Or)
+        );
     if let Some(node) = defined_for(function, value, user).filter(|&node| joins(node)) {
         let [left, right] = function.instruction(node).operands[..] else { return 0 };
         let (left, right) = (
@@ -150,7 +155,8 @@ fn compare_tree(
 
 /// The chains of `function` priced above a branch, made branches. How many.
 /// `trees`: the types whose sum with a join of compares is branched too
-/// (DEVIATE SETCC-TREE-BRANCH), even where a `select` of it is `wanted` no more.
+/// (DEVIATE SETCC-TREE-BRANCH), even where a `select` of it is `wanted` no
+/// more.
 pub fn branched(
     context: &Context,
     function: &mut Function,

@@ -12,7 +12,8 @@
 //! escaping calls and records, and `run`, the fixpoint over the blocks.
 //!
 //! # Runs
-//! In the driver, once per module before code generation, when the module carries `#dbg_assign` records (`tracked`, `module_rewritten`).
+//! In the driver, once per module before code generation, when the module
+//! carries `#dbg_assign` records (`tracked`, `module_rewritten`).
 //!
 //! # Example
 //! A variable `x` kept in `%a` from its first use, and `y` in its stack slot

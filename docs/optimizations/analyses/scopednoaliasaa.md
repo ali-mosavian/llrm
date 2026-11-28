@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-analysis/src/scopednoaliasaa.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/scopednoaliasaa.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-analysis/src/scopednoaliasaa.rs sha256:39e739feb4864932519b9ce5d03384d7d4129482462e2e659b770d5f69984936 -->
+<!-- src: crates/opt/llrm-analysis/src/scopednoaliasaa.rs sha256:2e41faa5a580fc83dff6324932aaf3da5be15b7e96bf7621765a147d668c20c7 -->
 
 # scopednoaliasaa
 
@@ -12,8 +12,9 @@ promises not to alias. A scope is a node `!{self, domain, name}`. Accesses
 `A` and `B` do not alias if, for some domain, all of `A`'s scopes in it are
 among `B`'s `!noalias` ones, or the other way round. An access with either
 list missing says nothing. A call or fence carries the lists on itself.
-`ScopedNoAliasAA` is an `AAResults`; what it does not decide is the top of
-the lattice, for [`crate::aggregate::AggregateAA`](aggregate.md) to meet with the others.
+`ScopedNoAliasAA` is an `AAResults`; what it does not decide is the top
+of the lattice, for [`crate::aggregate::AggregateAA`](aggregate.md) to meet with the
+others.
 
 ## Example
 A load in scope `!1` and a store with `!noalias !{!1}`: apart.

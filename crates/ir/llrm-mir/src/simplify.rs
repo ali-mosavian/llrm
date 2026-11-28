@@ -82,7 +82,7 @@ use crate::valuetracking::{
 const RECURSION_LIMIT: u32 = 3;
 
 /// The `SimplifyQuery`: what an operand is, looked up in `function`.
-struct Query<'a> {
+pub(crate) struct Query<'a> {
     context: &'a Context,
     function: &'a Function,
     layout: &'a DataLayout,

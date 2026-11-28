@@ -316,8 +316,9 @@ impl FunctionPass for IndVars {
         let strengthened = crate::exitne::enabled()
             && outer.target().tti().is_some_and(|tti| tti.prefers_exit_ne())
             && crate::exitne::strengthened_in(&mut session, unit.context, unit.layout, unit.function, &outer);
-        // Beyond the pin, after LFTR has settled the exits: a counter of a width
-        // the target does not hold natively whose range fits one that it does.
+        // Beyond the pin, after LFTR has settled the exits: a counter of a
+        // width the target does not hold natively whose range fits one
+        // that it does.
         let narrowed = crate::narrowiv::enabled()
             && crate::narrowiv::narrowed_in(&mut session, unit.context, unit.layout, unit.function, &outer, self.size);
         // Beyond the pin: a cycle through a phi that only matters at a narrower

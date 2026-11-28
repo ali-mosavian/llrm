@@ -37,8 +37,10 @@ fn test_every_price_row_is_found_and_a_missing_name_is_not() {
     }
     assert!(checked > 1000, "{checked} rows");
     let x86 = X86::of_cpu("i486").unwrap();
-    // A name that is no intrinsic is invalid. An `llvm.` name no row and no pin case names is "going to be turned
-    // into a library call" (`getTypeBasedIntrinsicInstrCost`'s last line, #10048): 1 for code size, else 10.
+    // A name that is no intrinsic is invalid. An `llvm.` name no row and no pin
+    // case names is "going to be turned into a library call"
+    // (`getTypeBasedIntrinsicInstrCost`'s last line, #10048): 1 for code size,
+    // else 10.
     assert_eq!(x86.intrinsic_cost("no.such.thing", None, &[], CostKind::CodeSize), Cost::INVALID);
     assert_eq!(x86.intrinsic_cost("llvm.no.such.thing", None, &[], CostKind::CodeSize), Cost::of(1));
     assert_eq!(x86.intrinsic_cost("llvm.no.such.thing", None, &[], CostKind::RecipThroughput), Cost::of(10));
@@ -77,8 +79,9 @@ fn test_every_intrinsic_the_corpus_meets_has_a_price() {
     }
 }
 
-/// Long mode read the i486 rows: `ctlz.i64` cost 10 at x86-64 where the pin says 3, and 2 for the zero-poison call, so
-/// SimplifyCFG refused to turn `x ? clzl(x) : 64` into a select (bitcount_u64).
+/// Long mode read the i486 rows: `ctlz.i64` cost 10 at x86-64 where the pin
+/// says 3, and 2 for the zero-poison call, so SimplifyCFG refused to turn `x ?
+/// clzl(x) : 64` into a select (bitcount_u64).
 #[test]
 fn test_x86_64_prices_a_64_bit_count_from_its_own_rows() {
     let kind = CostKind::SizeAndLatency;

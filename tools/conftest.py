@@ -22,7 +22,6 @@ RUNNER_ENV = (
     "PRIORITY",
     "WAITS",
     "BATCH_CAP",
-    "PUSH_MODE",
     "LLRM_OW",  # runner.env: the Watcom tree and the measure ref; ab_env refuses both as pipeline switches
     "LLRM_MEASURE_REF",
     "BUILDSLOT_LANDING",  # parity_squash runs the whole batch inside buildslot.landing(); its tool tests inherit it
@@ -47,6 +46,6 @@ def _host_tools(tmp_path_factory, monkeypatch):
     if not shutil.which("rustc"):
         _stub(stubs, "rustc", "echo 'host: x86_64-unknown-linux-gnu'\n")
     monkeypatch.setenv("PATH", f"{stubs}{os.pathsep}{os.environ['PATH']}")
-    for who in ("AUTHOR", "COMMITTER"):  # a merge commit needs an identity; a bare host has none: 6 push_tip/parity_squash tests read "does not merge"
+    for who in ("AUTHOR", "COMMITTER"):  # a merge commit needs an identity; a bare host has none: parity_squash tests read "does not merge"
         monkeypatch.setenv(f"GIT_{who}_NAME", "t")
         monkeypatch.setenv(f"GIT_{who}_EMAIL", "t@t")

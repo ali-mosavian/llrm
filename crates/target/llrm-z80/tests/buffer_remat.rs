@@ -60,8 +60,9 @@ fn a_load_of_a_local_variable_is_not_remade_but_a_load_of_a_call_buffer_is() {
     assert!(!converted.tii.remat_shape(loads[1]), "a local variable");
 }
 
-/// With the address of a global made again where it is read, `copy_runs` spilled `hl` through the class of virtual
-/// register 0, a byte: `ld -4(ix), hl`, which the assembler refuses (the program no longer built at -Os).
+/// With the address of a global made again where it is read, `copy_runs`
+/// spilled `hl` through the class of virtual register 0, a byte: `ld -4(ix),
+/// hl`, which the assembler refuses (the program no longer built at -Os).
 #[test]
 fn a_pinned_pair_is_spilled_as_a_pair_not_a_byte() {
     let ir = include_str!("kernels/ir/copy_runs_os.ll");
@@ -69,8 +70,9 @@ fn a_pinned_pair_is_spilled_as_a_pair_not_a_byte() {
     assert!(!out.lines().any(|line| line.trim().ends_with("(ix), hl")), "{out}");
 }
 
-/// The address of a global was never made again: `is_move_with_reads` refused a move whose source is a symbol, so six
-/// loop-invariant addresses were stored once at entry and reloaded (`overflow_builtins` -O2 +56 B, -160 B since).
+/// The address of a global was never made again: `is_move_with_reads` refused a
+/// move whose source is a symbol, so six loop-invariant addresses were stored
+/// once at entry and reloaded (`overflow_builtins` -O2 +56 B, -160 B since).
 #[test]
 fn the_address_of_a_global_is_made_again_where_it_is_read() {
     use llrm_codegen::greedy::tii::TargetInstrInfo;

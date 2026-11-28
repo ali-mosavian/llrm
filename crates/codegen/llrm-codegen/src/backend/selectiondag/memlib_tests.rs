@@ -238,9 +238,11 @@ fn a_64_byte_memmove_at_m64_moves_four_16_byte_pieces() {
     assert_eq!(dump.matches("LLRM_MOVE128").count(), 1, "{dump}");
 }
 
-/// The memory_expansion Os cell grew 31 B once `memmove` of 64 bytes became the pin's four `movups` pairs (31 B) where
-/// gcc -Os and the library call are `mov edx, 64; jmp memmove` (10 B): tuned for size on x86-64 a constant copy whose
-/// pieces take more bytes than the call is the call, and a 16-byte one (one pair, 8 B) stays inline.
+/// The memory_expansion Os cell grew 31 B once `memmove` of 64 bytes became the
+/// pin's four `movups` pairs (31 B) where gcc -Os and the library call are `mov
+/// edx, 64; jmp memmove` (10 B): tuned for size on x86-64 a constant copy whose
+/// pieces take more bytes than the call is the call, and a 16-byte one (one
+/// pair, 8 B) stays inline.
 #[test]
 fn a_constant_copy_for_size_at_m64_is_a_call_where_the_pieces_take_more_bytes() {
     let tuning = llrm_mir::target::Tuning {
@@ -248,7 +250,8 @@ fn a_constant_copy_for_size_at_m64_is_a_call_where_the_pieces_take_more_bytes() 
         ..llrm_mir::target::Tuning::PIN
     };
     let tti = llrm_x86::tti::X86::of_cpu("x86-64").expect("a cpu").with_tuning(tuning);
-    let target = BuilderTarget::for_pointer_bits(64).with_libcalls(&["memcpy", "memmove"]).with_tti(Some(std::rc::Rc::new(tti)));
+    let target =
+        BuilderTarget::for_pointer_bits(64).with_libcalls(&["memcpy", "memmove"]).with_tti(Some(std::rc::Rc::new(tti)));
     let text = |bytes: u64, call: &str| {
         format!(
             "target datalayout = \"e-p:64:64-i64:64-n8:16:32:64\"\n\
@@ -276,8 +279,9 @@ fn a_constant_clear_for_size_without_memset_steps_by_whole_words() {
     assert!(dump.contains("$ecx, Constant:i32<64>") && dump.contains("ValueType:ch:i32"), "{dump}");
 }
 
-/// QB localarr -O2/-O3 at m32: a variable-length copy was an inline `rep movsd` (85.8M cycles, clang's
-/// `call memcpy` 74.9M). A length known only at run time is the pin's libcall at speed.
+/// QB localarr -O2/-O3 at m32: a variable-length copy was an inline `rep movsd`
+/// (85.8M cycles, clang's `call memcpy` 74.9M). A length known only at run time
+/// is the pin's libcall at speed.
 #[test]
 fn a_variable_copy_is_a_call_at_speed() {
     let target = BuilderTarget::for_pointer_bits(32).with_libcalls(&["memcpy"]);
@@ -285,9 +289,10 @@ fn a_variable_copy_is_a_call_at_speed() {
     assert!(dump.contains("'memcpy'") && !dump.contains("REP_MOVS"), "{dump}");
 }
 
-/// A runtime-length copy with no `memcpy` to call is `rep movsd` and an n&3 `rep movsb`. The tail once
-/// reloaded di/si with the copy's start, rewrote the first bytes and never copied the last n&3 (n=17:
-/// d[17] stayed old). The tail's di/si are the ones the dword copy left, read back.
+/// A runtime-length copy with no `memcpy` to call is `rep movsd` and an n&3
+/// `rep movsb`. The tail once reloaded di/si with the copy's start, rewrote the
+/// first bytes and never copied the last n&3 (n=17: d[17] stayed old). The
+/// tail's di/si are the ones the dword copy left, read back.
 #[test]
 fn a_copy_tail_continues_after_the_dwords() {
     let dump = built("copy", &BuilderTarget::for_pointer_bits(32).with_libcalls(&[])).expect("builds");

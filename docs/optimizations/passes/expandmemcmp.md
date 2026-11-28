@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/expandmemcmp.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/expandmemcmp.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/expandmemcmp.rs sha256:5b92d93636b3561640abd1b5866a9f3e28f29e245609ed2b0739c972baf94f05 -->
+<!-- src: crates/opt/llrm-transforms/src/expandmemcmp.rs sha256:beedbe807200ea5ebfedba72445c6ad5bfbc2191a03184ec171db5ecb71bef37 -->
 
 # expandmemcmp
 
@@ -26,15 +26,18 @@ asks for one outcome (`< 0`, `> 0`, ...) is one unsigned compare. Not in
 becomes `load i64` of both, `icmp ne`, `zext` to `i32`, and the `icmp eq`.
 
 ## Deviations
-- DEVIATE E1 (exit 2026-12-31, pin permalink [L778](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/ExpandMemCmp.cpp#L778)):
+- DEVIATE E1 (exit 2026-12-31, pin permalink
+  [L778](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/ExpandMemCmp.cpp#L778)):
   the pin's `int` is 32 bits. Here it is the call's own type, and a two-byte
   compare in a 16-bit `int` cannot be a subtraction (it wraps), so it takes
   the `ucmp` path. Exit: a pin with a 16-bit `int`.
-- DEVIATE E2 (exit 2026-12-31, pin permalink [L414](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/ExpandMemCmp.cpp#L414)):
+- DEVIATE E2 (exit 2026-12-31, pin permalink
+  [L414](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/ExpandMemCmp.cpp#L414)):
   a load at an offset from a constant global is not folded here (the pin's
   offset is a constant expression); the `getelementptr` index has the
   pointer's index width, not `i64`.
-- DEVIATE E3 (exit 2026-12-31, pin permalink [L1061](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/ExpandMemCmp.cpp#L1061)):
+- DEVIATE E3 (exit 2026-12-31, pin permalink
+  [L1061](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/ExpandMemCmp.cpp#L1061)):
   `SimplifyInstructionsInBlock` is not run; the combine that follows cleans
   the expansion. Dominators are not kept (no `DomTreeUpdater`).
 - DEVIATE E4: the profile-guided `shouldOptimizeForSize` is false (no

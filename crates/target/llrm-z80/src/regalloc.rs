@@ -134,9 +134,11 @@ impl Target for Z80Registers {
         matches!(inst.kind, Kind::Op("PACK")).then(|| (0, vec![(1, 0, 1), (2, 1, 1)]))
     }
 
-    /// DEVIATE HC1 (owner z80, exit 2026-12-15, as m68k's): the pin hoists a successor's identical head only. A
-    /// constant both successors of a guard load, one behind a spill, stays twice: queens `place` -Os 362 B against
-    /// 354 B with the guard's word test, its exit block losing the shared epilogue.
+    /// DEVIATE HC1 (owner z80, exit 2026-12-15, as m68k's): the pin hoists a
+    /// successor's identical head only. A constant both successors of a
+    /// guard load, one behind a spill, stays twice: queens `place` -Os 362 B
+    /// against 354 B with the guard's word test, its exit block losing the
+    /// shared epilogue.
     fn hoist_window() -> usize {
         4
     }
@@ -237,9 +239,11 @@ impl Target for Z80Registers {
         Some(Inst { may_store: true, ..Inst::new(Kind::Op(name), vec![Operand::Frame(slot), Operand::Use(register)]) })
     }
 
-    /// Worse rows (owner greedy-subreg, exit 2026-12-05; net -1083 B O2, -2636 B Os): O2 mem_length_boundaries_m32 +12,
-    /// sat_sub_u64_shared_compare +3, switch_peeled_table +4; Os mem_length_boundaries_m32 +1, sat_sub_u64_shared_compare
-    /// +1, rep_tails +2, wide_shift_by_one +3. Allocation shifts after a remade address; clocks unpriced.
+    /// Worse rows (owner greedy-subreg, exit 2026-12-05; net -1083 B O2, -2636
+    /// B Os): O2 mem_length_boundaries_m32 +12, sat_sub_u64_shared_compare
+    /// +3, switch_peeled_table +4; Os mem_length_boundaries_m32 +1,
+    /// sat_sub_u64_shared_compare +1, rep_tails +2, wide_shift_by_one +3.
+    /// Allocation shifts after a remade address; clocks unpriced.
     fn remats_symbol_addresses() -> bool {
         true
     }
@@ -297,7 +301,8 @@ impl Target for Z80Registers {
         slot: i32,
     ) -> Option<Inst> {
         // a half taken from a spilled pair is that half's byte of the cell
-        if let (Kind::Op(op @ ("LO" | "HI")), [Operand::Def(byte), Operand::Use(pair)]) = (inst.kind, &inst.operands[..])
+        if let (Kind::Op(op @ ("LO" | "HI")), [Operand::Def(byte), Operand::Use(pair)]) =
+            (inst.kind, &inst.operands[..])
             && *pair == register
             && byte != pair
             && !NO_FOLD.with(std::cell::Cell::get)
@@ -310,12 +315,16 @@ impl Target for Z80Registers {
                 )
             });
         }
-        let (Kind::Op("ADD8r" | "SUB8r" | "AND8r" | "OR8r" | "XOR8r" | "CP8r" | "AND16" | "OR16" | "XOR16"), Some(Operand::Use(second))) =
-            (inst.kind, inst.operands.get(2))
+        let (
+            Kind::Op("ADD8r" | "SUB8r" | "AND8r" | "OR8r" | "XOR8r" | "CP8r" | "AND16" | "OR16" | "XOR16"),
+            Some(Operand::Use(second)),
+        ) = (inst.kind, inst.operands.get(2))
         else {
             return None;
         };
-        let once = inst.operands.iter().filter(|o| matches!(o, Operand::Def(r) | Operand::Use(r) if *r == register)).count() == 1;
+        let once =
+            inst.operands.iter().filter(|o| matches!(o, Operand::Def(r) | Operand::Use(r) if *r == register)).count()
+                == 1;
         if *second != register || !once || NO_FOLD.with(std::cell::Cell::get) {
             return None;
         }

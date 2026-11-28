@@ -13,7 +13,8 @@ define i32 @f() {
   ret i32 %v
 }
 "#;
-const PIE: &str = "!llvm.module.flags = !{!0, !1}\n!0 = !{i32 8, !\"PIC Level\", i32 2}\n!1 = !{i32 7, !\"PIE Level\", i32 2}\n";
+const PIE: &str =
+    "!llvm.module.flags = !{!0, !1}\n!0 = !{i32 8, !\"PIC Level\", i32 2}\n!1 = !{i32 7, !\"PIE Level\", i32 2}\n";
 
 const OTHER_FLAGS: &str = "!llvm.module.flags = !{!0}\n!0 = !{i32 7, !\"uwtable\", i32 2}\n";
 

@@ -1124,16 +1124,6 @@ fn stays_in_memory(
     up: &UnrollingPreferences,
 ) -> bool {
     let function = &*run.function;
-    let cx = llrm_analysis::scev::Cx {
-        context: &*run.context,
-        globals: run.globals,
-        metadata: run.metadata,
-        function,
-        layout: run.layout,
-        loops: &analyzed.loops,
-        tree: &analyzed.tree,
-        assumptions: &analyzed.assumptions,
-    };
     let mut finishes: std::collections::BTreeMap<u32, bool> = Default::default();
     // Only a read that can run after the loop keeps the stores (nbody -O2: the
     // last update loop, after the step loop, is followed by reads of

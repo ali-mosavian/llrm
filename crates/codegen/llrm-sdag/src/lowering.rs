@@ -43,9 +43,10 @@ pub enum TypeAction {
     /// A float with no register class (`TypeSoftenFloat`): it travels as the
     /// integer of its width and its operations are library calls.
     SoftenFloat,
-    /// A vector type no register class holds (`TypeScalarizeVector` and its split/widen kin; the
-    /// DEVIATE SD13 subset only names it): the builder never creates such a value, it lowers a
-    /// vector IR type this way only where the target lists the vector as a register class.
+    /// A vector type no register class holds (`TypeScalarizeVector` and its
+    /// split/widen kin; the DEVIATE SD13 subset only names it): the builder
+    /// never creates such a value, it lowers a vector IR type this way only
+    /// where the target lists the vector as a register class.
     ScalarizeVector,
     /// A vector of two or more lanes no register class holds, whose half does
     /// or splits again (`TypeSplitVector`): the type legalizer makes two
@@ -270,8 +271,9 @@ impl TargetLoweringInfo {
         TargetLoweringInfo::new(&[MVT::I8, MVT::I16, MVT::I32, MVT::I64], false)
     }
 
-    /// m64 with `hasSSE2()`: the integer vectors join `VR128` (`X86ISelLowering.cpp`, the SSE2 arm:
-    /// `addRegisterClass(MVT::v16i8, ...)` and the other three).
+    /// m64 with `hasSSE2()`: the integer vectors join `VR128`
+    /// (`X86ISelLowering.cpp`, the SSE2 arm: `addRegisterClass(MVT::v16i8,
+    /// ...)` and the other three).
     pub fn x86_64_sse2() -> TargetLoweringInfo {
         TargetLoweringInfo::new(
             &[
@@ -309,7 +311,9 @@ impl TargetLoweringInfo {
         MVT::vectors()
             .filter(|&vt| !self.is_type_legal(vt.into()))
             .filter_map(|vt| match self.type_conversion(vt.into()) {
-                (TypeAction::WidenVector | TypeAction::PromoteInteger, EVT::Simple(to)) if self.vectors.contains(&to) => {
+                (TypeAction::WidenVector | TypeAction::PromoteInteger, EVT::Simple(to))
+                    if self.vectors.contains(&to) =>
+                {
                     Some((vt, to))
                 }
                 _ => None,
@@ -405,8 +409,9 @@ impl TargetLoweringInfo {
                     _ => (TypeAction::Legal, vt),
                 },
             },
-            // `getTypeConversion`, `TypeWidenVector` of a lane count that is no power of two (`v3i8`): the
-            // next power of two lanes (`v4i8`), which is a vector the pass looks at again.
+            // `getTypeConversion`, `TypeWidenVector` of a lane count that is no
+            // power of two (`v3i8`): the next power of two lanes (`v4i8`),
+            // which is a vector the pass looks at again.
             EVT::Vector(element, lanes) => (TypeAction::WidenVector, EVT::vector(element, lanes.next_power_of_two())),
             EVT::Int(bits) => {
                 if bits < 8 || !bits.is_power_of_two() {
@@ -483,8 +488,9 @@ mod tests {
         assert_eq!(soft.type_conversion(EVT::I32), (TypeAction::Legal, EVT::I32));
     }
 
-    /// A vector type is legal only where a register class holds it: SSE2 m64 yes, every other target
-    /// scalarizes (so no other target ever builds a vector value).
+    /// A vector type is legal only where a register class holds it: SSE2 m64
+    /// yes, every other target scalarizes (so no other target ever builds a
+    /// vector value).
     #[test]
     fn a_vector_type_is_legal_only_with_a_register_class() {
         let v = EVT::Simple(MVT::V16I8);
@@ -496,9 +502,9 @@ mod tests {
     }
 
     /// A vector under a D register has no register class: its lanes are
-    /// promoted to the narrowest wider type that makes a legal vector of as many
-    /// lanes (`getPreferredVectorAction`); `v4i8` was `ScalarizeVector`, which no
-    /// backend could build.
+    /// promoted to the narrowest wider type that makes a legal vector of as
+    /// many lanes (`getPreferredVectorAction`); `v4i8` was
+    /// `ScalarizeVector`, which no backend could build.
     #[test]
     fn a_vector_under_a_d_register_has_its_lanes_promoted() {
         let aarch64 = TargetLoweringInfo::aarch64();
@@ -510,8 +516,9 @@ mod tests {
         assert_eq!(promoted(MVT::V8I8), (TypeAction::Legal, EVT::Simple(MVT::V8I8)));
     }
 
-    /// x86 widens `v4i8` (`X86TargetLowering::getPreferredVectorAction`); promoting
-    /// it to `v4i32` would pre-empt the widening and diverge from the pin.
+    /// x86 widens `v4i8` (`X86TargetLowering::getPreferredVectorAction`);
+    /// promoting it to `v4i32` would pre-empt the widening and diverge from
+    /// the pin.
     #[test]
     fn x86_does_not_promote_the_lanes_of_a_narrow_vector() {
         let x86 = TargetLoweringInfo::x86_64_sse2();
@@ -520,7 +527,8 @@ mod tests {
     }
 
     /// A narrow vector is carried in the legal register type its conversion
-    /// names (`getVectorTypeBreakdown`'s first step); a legal one is not listed.
+    /// names (`getVectorTypeBreakdown`'s first step); a legal one is not
+    /// listed.
     #[test]
     fn a_narrow_vector_is_carried_in_the_register_its_conversion_names() {
         let x86 = TargetLoweringInfo::x86_64_sse2().vector_registers();

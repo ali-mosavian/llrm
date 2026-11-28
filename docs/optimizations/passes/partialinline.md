@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/partialinline.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/partialinline.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/partialinline.rs sha256:0639c3367bf129c775a8df55aa2479ee928f84a0999e72b971f5733b178784db -->
+<!-- src: crates/opt/llrm-transforms/src/partialinline.rs sha256:90e886ffd59d0efc11a9e60e0141f18e9c491d55ab730458b080ee112ec06e4c -->
 
 # partialinline
 
@@ -44,7 +44,9 @@ After the strength slot (the pin: `addIRPasses`, after LSR), before the
 code-generation-prepare passes.
 
 ## Example
-A `sqrt` call that may set `errno` becomes a `memory(none)` call that the target turns into an instruction, with the real call kept for the NaN or negative case.
+A `sqrt` call that may set `errno` becomes a `memory(none)` call that the
+target turns into an instruction, with the real call kept for the NaN or
+negative case.
 
 ```text
 %r = call double @sqrt(double %x) memory(none)

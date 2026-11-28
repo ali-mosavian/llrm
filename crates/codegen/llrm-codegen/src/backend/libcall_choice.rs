@@ -21,7 +21,8 @@
 //! description. Owner m68k. Review: 2026-12-20.
 //!
 //! # Runs
-//! Called by a target's libcall table (`llrm-m68k` `libcalls.rs`) at `-Os`, once per module.
+//! Called by a target's libcall table (`llrm-m68k` `libcalls.rs`) at `-Os`,
+//! once per module.
 //!
 //! # Example
 //! Each candidate carries what calling it saves; [`choose`] calls the set whose
