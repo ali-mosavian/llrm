@@ -3,6 +3,8 @@
 set -eu
 root=$(cd "$(dirname "$0")/.." && pwd)
 t=$(mktemp -d); trap 'rm -rf "$t"' EXIT
+# A stamped build (stamp.py require_named): the tool refuses a dist whose compilers name no commit.
+printf '#!/bin/sh\necho "llrm-llc aaaa1111"\n' > "$t/llrm-llc"; chmod +x "$t/llrm-llc"; export LLRM_EXPECT_BASE_SHA=aaaa1111 LLRM_EXPECT_SHA=aaaa1111 IDENTITY_SAME_LLC=1  # both sides share one directory here
 printf '#!/bin/sh\nwhile [ $# -gt 1 ]; do [ "$1" = -o ] && echo x > "$2"; shift; done\n' > "$t/ok"
 printf '#!/bin/sh\nexit 1\n' > "$t/refuse"
 printf '#!/bin/sh\nwhile [ $# -gt 1 ]; do [ "$1" = -o ] && echo y > "$2"; shift; done\n' > "$t/other"

@@ -6,6 +6,7 @@ from concurrent.futures import ThreadPoolExecutor
 A,L,D=sys.argv[1:4]; T=os.environ['QB_TREE']; b=os.environ.get('QB_SCRATCH',tempfile.gettempdir())
 sys.path.insert(0,os.path.join(os.path.dirname(os.path.abspath(__file__)),'..'))
 import qbrow
+import stamp
 from external_flags import flags as bar_flags, gcc_float  # the one flag set every external bar is built with
 # One row per arch. cc: -m/-march words every column gets; gcc: the baseline compiler (gcc 15.2; the distro's plain `gcc` is 13.4);
 # gcc_cc: gcc-only words (float mode, excess precision, CPU); clang: the pin's clang target words, None = no clang bar; llc: the
@@ -100,6 +101,7 @@ def report(res):
     return lines
 if __name__=='__main__':
     mods=product_modules()
+    stamp.require_named(D)  # DIST is the commit LLRM_EXPECT_SHA names, built clean
     qbrow.require_hosted(f'{D}/llrm-cc',tgt,{'LLRM_LLC':f"{D}/{R['llc']}"} if R['llc'] else {})
     if not mods: sys.exit('qbbars: `make -n -B` named no compile in '+T)
     with ThreadPoolExecutor(6) as ex: res=list(ex.map(one,mods))

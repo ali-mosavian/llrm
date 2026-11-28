@@ -71,6 +71,54 @@ def check(binary, expect_sha: str | None = None, allow_dirty: bool = False, labe
     return sha
 
 
+# One build run: the binaries of a cargo build, or the copies of one dist made from it, are written within this many
+# seconds of each other. A backend copied in from another build later is outside it.
+BUILD_RUN_SECONDS = 600
+
+
+def stamped(binary) -> bool:
+    """Whether `binary` answers --version with a stamp (a tree from before a backend had one does not)."""
+    try:
+        flags(binary)
+    except SystemExit:
+        return False
+    return True
+
+
+def same_build(path: Path, llc: Path) -> bool:
+    """Whether `path` came from the build that made `llc`: the dist's pair_build record (`ok`) lists both with the md5s they
+    still have, or, without a record, it was written within BUILD_RUN_SECONDS of `llc`."""
+    ok = path.resolve().parent.parent / "ok"
+    if path.resolve().parent.name == "dist" and ok.is_file():
+        recorded = {name: want for want, _, name in (line.partition("  ") for line in ok.read_text().splitlines()) if len(want) == 32}
+        return all(recorded.get(one.name) == hashlib.md5(one.read_bytes()).hexdigest() for one in (path, llc))
+    return abs(path.stat().st_mtime - llc.stat().st_mtime) <= BUILD_RUN_SECONDS
+
+
+def require_clean(dist, sha: str) -> str:
+    """`sha` when `dist`'s llrm-llc was built from it, clean, and so was every other stamped compiler in it (llrm-nib, llrm-qb,
+    each llrm-*-llc); SystemExit naming the first that was not. A dist built from e83149f+dirty stood for b6541d3901 in a whole A/B.
+    A backend that prints no stamp (a tree from before it had one) is the sha only as part of llrm-llc's build (`same_build`):
+    named on stderr as unstamped, and refused when it came from anywhere else."""
+    dist = Path(dist)
+    llc = dist / "llrm-llc"
+    if not llc.is_file():
+        raise SystemExit(f"{dist}: no llrm-llc, no stamped compiler: refused")
+    check(llc, sha, False, f"{dist}/llrm-llc")
+    others = sorted(path for path in dist.glob("llrm-*") if path.name in ("llrm-nib", "llrm-qb") or (path.name.endswith("-llc") and path.name != "llrm-llc"))
+    unstamped = []
+    for path in others:
+        if stamped(path):
+            check(path, sha, False, f"{dist}/{path.name}")
+        elif same_build(path, llc):
+            unstamped.append(path.name)
+        else:
+            raise SystemExit(f"{path} prints no stamp and is not from {llc.name}'s build (no record, written more than {BUILD_RUN_SECONDS} s apart): refused")
+    if unstamped:
+        print(f"unstamped (pre-stamp tree): {' '.join(unstamped)}", file=sys.stderr)
+    return read(llc)[0]
+
+
 def options(argv: list[str]) -> tuple[list[str], dict[str, str | None], bool]:
     """(argv without the options, {"sha", "base_sha"}, allow_dirty): `--expect-sha` names the build measured (the new side
     of a pair), `--expect-base-sha` the base side; the environment (LLRM_EXPECT_SHA, LLRM_EXPECT_BASE_SHA,
@@ -91,7 +139,21 @@ def options(argv: list[str]) -> tuple[list[str], dict[str, str | None], bool]:
     return rest, named, allow
 
 
+def require_named(dist, side: str = "sha") -> str:
+    """`require_clean` against the commit the environment names for `side`: LLRM_EXPECT_SHA (the new side, or the only one)
+    or LLRM_EXPECT_BASE_SHA; SystemExit when it names none. A measurement that names no commit measures no commit."""
+    variable = {"sha": "LLRM_EXPECT_SHA", "base_sha": "LLRM_EXPECT_BASE_SHA"}[side]
+    sha = os.environ.get(variable)
+    if not sha:
+        raise SystemExit(f"{variable} names no commit for {dist}: refused")
+    return require_clean(dist, sha)
+
+
 if __name__ == "__main__":
+    if sys.argv[1:2] == ["--require-clean"]:
+        # stamp.py --require-clean sha|base_sha DIST: the shell tools' form of require_named.
+        require_named(sys.argv[3], sys.argv[2])
+        sys.exit(0)
     rest, named, allow = options(sys.argv[1:])
     for one in rest:
         check(one, named["sha"], allow)
