@@ -85,6 +85,26 @@ def test_the_cheapest_ranked_tests_that_fit_a_crates_share_are_chosen():
     assert ps.unit_tests("llrm-none", 5.0, ranking) == [], "no ranking: all its tests, cut at the share"
 
 
+def test_a_share_in_instructions_picks_by_the_instructions_each_test_ran():
+    """llrm-m68k's 24 ranked tests read 0.0 s each and ran 6.4 G together: every_plan_computes_its_product alone is 5.9 G. Seconds rank nothing the budget counts."""
+    ranking = {"llrm-x": [("a", 0.0, 100_000_000), ("b", 0.0, 200_000_000), ("big", 0.0, 5_900_000_000)]}
+    assert ps.unit_tests("llrm-x", 3.0, ranking, instructions=4_000_000_000) == ["a", "b"]
+    assert ps.unit_tests("llrm-x", 3.0, ranking, instructions=150_000_000) == ["a"]
+
+
+def test_a_ranking_rewrites_its_own_crate_and_keeps_the_rest_of_the_file(tmp_path, monkeypatch):
+    """`--rank llrm-m68k` rewrote parity_smoke.toml whole: its comments and the cases list's layout were gone."""
+    path = tmp_path / "parity_smoke.toml"
+    path.write_text('# the cases, why\ncases = [\n  "arith",\n]\n\n[units."llrm-a"]\ntests = [\n  ["x", 0.1],\n]\n\n[units."llrm-b"]\ntests = []\n')
+    monkeypatch.setattr(ps, "SELECTION", path)
+    ps.write_ranking("llrm-a", [("y", 0.0, 5)])
+    ps.write_ranking("llrm-c", [("z", 0.0, 7)])
+    text = path.read_text()
+    assert text.startswith('# the cases, why\ncases = [\n  "arith",\n]\n') and '[units."llrm-b"]\ntests = []' in text, text
+    units = ps.selection()["units"]
+    assert units["llrm-a"]["tests"] == [["y", 0.0, 5]] and units["llrm-c"]["tests"] == [["z", 0.0, 7]], units
+
+
 def test_the_ranking_is_read_from_the_report_time_listing_cheapest_first():
     out = "test a::slow ... ok <0.900s>\ntest a::fast ... ok <0.001s>\ntest a::bad ... FAILED\ntest a::mid ... ok <0.020s>\n"
     assert ps.ranked(out) == [("a::fast", 0.001), ("a::mid", 0.02), ("a::slow", 0.9)]
@@ -737,7 +757,7 @@ def test_the_crates_whose_prs_blew_the_instruction_budget_have_a_ranking():
     """llrm-codegen had no ranking, so a codegen PR ran its whole lib: 168 G of 60 G, #5325's batch refused four times."""
     ranking = ps.selection().get("units", {})
     for crate in ("llrm-codegen", "llrm-mir", "llrm-cc"):
-        assert ps.unit_tests(crate, 6.4, {k: [(n, s) for n, s in v["tests"]] for k, v in ranking.items()}), crate
+        assert ps.unit_tests(crate, 6.4, {k: [tuple(one) for one in v["tests"]] for k, v in ranking.items()}, 4_000_000_000), crate
 
 
 def test_an_unranked_unit_step_runs_one_test_thread(monkeypatch):

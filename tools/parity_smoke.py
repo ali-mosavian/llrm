@@ -400,14 +400,18 @@ def share(allowance: float, crates: int) -> float:
     return allowance / max(crates, 1)
 
 
-def unit_tests(package: str, allowance: float, ranking: dict) -> list[str]:
-    """The names to run for `package`: its cheapest ranked tests whose cumulative cost fits `allowance`; [] where it has no ranking (all of them, cut at the allowance)."""
+def unit_tests(package: str, allowance: float, ranking: dict, instructions: int | None = None) -> list[str]:
+    """The names to run for `package`: its cheapest ranked tests whose cumulative cost fits the share, in instructions where the share and the ranking have
+    them, else in seconds; [] where it has no ranking (all of them, cut at the share)."""
+    entries = ranking.get(package, [])
+    counted = instructions is not None and entries and all(len(entry) > 2 for entry in entries)
     out, total = [], 0.0
-    for name, seconds in ranking.get(package, []):
-        if total + seconds > allowance:
+    for entry in sorted(entries, key=lambda entry: entry[2]) if counted else entries:
+        cost, limit = (entry[2], instructions) if counted else (entry[1], allowance)
+        if total + cost > limit:
             break
-        out.append(name)
-        total += seconds
+        out.append(entry[0])
+        total += cost
     return out
 
 
@@ -858,7 +862,7 @@ def cut_progress(output: str) -> tuple[int, int | None, bool]:
 def unit_step(package: str, allowance: float):
     def step(bins: Path, instructions: int | None = None) -> tuple[str, str]:
         ranking = selection().get("units", {})
-        names = unit_tests(package, allowance, {k: [(n, s) for n, s in v.get("tests", [])] for k, v in ranking.items()})
+        names = unit_tests(package, allowance, {k: [tuple(one) for one in v.get("tests", [])] for k, v in ranking.items()}, instructions)
         command = ["cargo", "test", "-q", "--lib", "-p", package] + (["--", "--exact", *names] if names else [])
         # an unranked crate runs its whole lib, cut by wall time: one test thread keeps that wall time the CPU it is charged (32 threads ran 32x the budget in it)
         env = None if names else {**os.environ, "RUST_TEST_THREADS": "1"}
@@ -952,24 +956,56 @@ def run_twice_over_budget(run) -> tuple[bool, str]:
     return ok, line
 
 
+RANK_CANDIDATES = 200  # the cheapest by time whose instructions are counted one by one
+
+
+def test_binary(package: str) -> Path | None:
+    """The `--lib` test binary cargo builds for `package`."""
+    done = subprocess.run(["cargo", "test", "--lib", "-p", package, "--no-run", "--message-format=json"], cwd=ROOT, capture_output=True, text=True)
+    for line in done.stdout.splitlines():
+        message = json.loads(line) if line.startswith("{") else {}
+        if message.get("reason") == "compiler-artifact" and message.get("profile", {}).get("test") and message.get("executable"):
+            if message.get("target", {}).get("kind") == ["lib"] or "lib" in message.get("target", {}).get("kind", []):
+                return Path(message["executable"])
+    return None
+
+
+def instructions_of_test(binary: Path, name: str) -> int | None:
+    """The user-space instructions of one test of `binary`, run alone."""
+    counts = Path(tempfile.mkstemp(prefix="rank-")[1])
+    try:
+        subprocess.run(["perf", "stat", "-x,", "-e", "instructions:u", "-o", str(counts), "--", str(binary), "--exact", name, "-q"], cwd=ROOT, capture_output=True)
+        return instructions_of(counts.read_text())
+    finally:
+        counts.unlink(missing_ok=True)
+
+
 def rank(package: str) -> None:
-    """Measure `package`'s unit tests once and write the cheapest into parity_smoke.toml (not per merge)."""
+    """Measure `package`'s unit tests once and write the cheapest into parity_smoke.toml (not per merge): the cheapest by time are counted in instructions one by
+    one, the budget's measure (a test of 0.0 s ran 5.9 G), and the 40 cheapest of those are kept."""
     env = {**os.environ, "RUSTC_BOOTSTRAP": "1"}
     done = subprocess.run(slotted(["cargo", "test", "--lib", "-p", package, "--", "-Z", "unstable-options", "--report-time", "--test-threads", "1"]), cwd=ROOT, capture_output=True, text=True, env=env)
-    tests = [(n, s) for n, s in ranked(done.stdout) if s <= 0.5][:40]
-    data = selection()
-    data.setdefault("units", {})[package] = {"tests": [[n, s] for n, s in tests]}
-    SELECTION.write_text(dump(data))
+    candidates = [(n, s) for n, s in ranked(done.stdout) if s <= 0.5][:RANK_CANDIDATES]
+    binary = test_binary(package)
+    counted = [(n, s, instructions_of_test(binary, n)) for n, s in candidates] if binary and perf_counts() else []
+    tests = sorted(((n, s, i) for n, s, i in counted if i is not None), key=lambda one: one[2])[:40] or [(n, s) for n, s in candidates[:40]]
+    write_ranking(package, tests)
     print(f"{package}: {len(tests)} tests ranked, cheapest {tests[0] if tests else None}")
 
 
-def dump(data: dict) -> str:
-    out = []
-    if "run" in data:
-        out.append("[run]\ncases = [" + ", ".join(f'"{c}"' for c in data["run"].get("cases", [])) + "]\n")
-    for package, one in sorted(data.get("units", {}).items()):
-        out.append(f'[units."{package}"]\ntests = [\n' + "".join(f'  ["{n}", {s}],\n' for n, s in one.get("tests", [])) + "]\n")
-    return "\n".join(out)
+def write_ranking(package: str, tests: list[tuple]) -> None:
+    """`[units."package"]` of parity_smoke.toml set to `tests`, the rest of the file as it was (comments and layout)."""
+    text = SELECTION.read_text() if SELECTION.exists() else ""
+    section = f'[units."{package}"]\ntests = [\n' + "".join(f"  {json.dumps(list(one))},\n" for one in tests) + "]\n"
+    head = f'[units."{package}"]'
+    if head in text:
+        start = text.index(head)
+        end = text.find("\n[", start + len(head))
+        text = text[:start] + section + (text[end + 1 :] if end >= 0 else "")
+        text = text.replace(section + "[", section + "\n[", 1)
+    else:
+        text = text.rstrip("\n") + "\n\n" + section
+    SELECTION.write_text(text)
 
 
 def main() -> int:
