@@ -143,7 +143,8 @@ fn spill_displacement_on(
                 Mc::Imm(disp) => Some(*disp),
                 _ => None,
             }),
-            // `(0,An)` is printed `(An)`: the register-indirect twin has no displacement operand
+            // `(0,An)` is printed `(An)`: the register-indirect twin has no
+            // displacement operand
             Line::Inst(inst) if inst.opcode.starts_with("MOVM32jm") => Some(0),
             _ => None,
         })

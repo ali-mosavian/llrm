@@ -7,7 +7,11 @@
 use std::path::Path;
 use std::process::Command;
 
-fn compile(name: &str, source: &str, flags: &[&str]) -> std::process::Output {
+fn compile(
+    name: &str,
+    source: &str,
+    flags: &[&str],
+) -> std::process::Output {
     let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("regparm-{name}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();

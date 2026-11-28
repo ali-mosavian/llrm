@@ -50,20 +50,29 @@ pub fn mulsi3_clocks(
     bits: u32,
 ) -> u32 {
     match fit(cpu) {
-        Some((narrow, wide)) => if bits > 16 { wide } else { narrow },
+        Some((narrow, wide)) => {
+            if bits > 16 {
+                wide
+            } else {
+                narrow
+            }
+        }
         None => 0,
     }
 }
 
-/// Bytes of `__mulsi3` a program that calls it links (assembled `mulsi3.s`, 2026-11-15): 54 at the 68000 and
-/// 68010, 12 from the 68020. A trial counts them against a build that calls the routine and another that does not.
+/// Bytes of `__mulsi3` a program that calls it links (assembled `mulsi3.s`,
+/// 2026-11-15): 54 at the 68000 and 68010, 12 from the 68020. A trial counts
+/// them against a build that calls the routine and another that does not.
 pub fn mulsi3_bytes(cpu: crate::dagisel::hooks::Cpu) -> usize {
     if cpu.at_least(crate::dagisel::hooks::Cpu::M68020) { 12 } else { 54 }
 }
 
-/// Whether a function of `module` other than `except` multiplies two variables, which a CPU without a long multiply
-/// calls `__mulsi3` for: the routine is then linked whatever a trial chooses for `except` (its own calls show in its
-/// items; two narrow operands are a `muls`, so this may say yes where the other function does not call).
+/// Whether a function of `module` other than `except` multiplies two variables,
+/// which a CPU without a long multiply calls `__mulsi3` for: the routine is
+/// then linked whatever a trial chooses for `except` (its own calls show in its
+/// items; two narrow operands are a `muls`, so this may say yes where the other
+/// function does not call).
 pub fn another_function_multiplies_variables(
     module: &llrm_mir::module::Module,
     except: &str,
@@ -78,17 +87,22 @@ pub fn another_function_multiplies_variables(
         .functions()
         .filter(|(_, global, function)| !function.is_declaration() && global.name.owned().as_deref() != Some(except))
         .any(|(_, _, function)| {
-        function.walk().any(|(_, inst)| {
-            let instruction = function.instruction(inst);
-            matches!(instruction.opcode, Opcode::Binary(BinaryOp::Mul))
-                && !instruction.operands.iter().any(|operand| matches!(operand, Operand::Constant(_)))
-                && !is_halfword_product(module, function, instruction)
+            function
+                .walk()
+                .any(
+                    |(_, inst)| {
+                        let instruction = function.instruction(inst);
+                        matches!(instruction.opcode, Opcode::Binary(BinaryOp::Mul))
+                            && !instruction.operands.iter().any(|operand| matches!(operand, Operand::Constant(_)))
+                            && !is_halfword_product(module, function, instruction)
+                    },
+                )
         })
-    })
 }
 
-/// Whether `instruction`, a multiply, is the product of two operands each a sign (or each a zero) extension from
-/// at most 16 bits: `muls.w` or `mulu.w`, which never calls `__mulsi3` (`(long) raw * sval` in `qlight`, whose
+/// Whether `instruction`, a multiply, is the product of two operands each a
+/// sign (or each a zero) extension from at most 16 bits: `muls.w` or `mulu.w`,
+/// which never calls `__mulsi3` (`(long) raw * sval` in `qlight`, whose
 /// `* 1000000L` then kept the call and linked the routine for nothing else).
 fn is_halfword_product(
     module: &llrm_mir::module::Module,
@@ -111,10 +125,12 @@ fn is_halfword_product(
     }
 }
 
-/// The bytes of `__mulsi3` a trial charges the build of `except` that calls it: none where another function
-/// multiplies variables (the routine is linked anyway), else the routine shared by this function and every other
-/// that multiplies or divides by a constant, which may call it too. Each of six functions of `urem_eq` saw the
-/// whole 54 B saved by its own chain and took it: +64 B for the module, the routine still saved only once.
+/// The bytes of `__mulsi3` a trial charges the build of `except` that calls it:
+/// none where another function multiplies variables (the routine is linked
+/// anyway), else the routine shared by this function and every other
+/// that multiplies or divides by a constant, which may call it too. Each of six
+/// functions of `urem_eq` saw the whole 54 B saved by its own chain and took
+/// it: +64 B for the module, the routine still saved only once.
 pub fn mulsi3_share(
     module: &llrm_mir::module::Module,
     except: &str,
@@ -126,8 +142,8 @@ pub fn mulsi3_share(
     if cpu.at_least(crate::dagisel::hooks::Cpu::M68020) || another_function_multiplies_variables(module, except, cpu) {
         return 0;
     }
-    // where clocks count too, the whole routine is the build's, as before: sharing it flipped `urem_eq` -O1 to
-    // the calls, 8.4 M to 12.9 M clocks
+    // where clocks count too, the whole routine is the build's, as before:
+    // sharing it flipped `urem_eq` -O1 to the calls, 8.4 M to 12.9 M clocks
     if price != crate::timing::Price::Size {
         return mulsi3_bytes(cpu);
     }
@@ -168,7 +184,9 @@ mod tests {
     /// fails when the routine changes and the numbers are stale.
     #[test]
     fn the_measured_routine_is_the_shipped_one() {
-        let hash = body().bytes().fold(0xcbf2_9ce4_8422_2325u64, |h, byte| (h ^ u64::from(byte)).wrapping_mul(0x100_0000_01b3));
+        let hash = body()
+            .bytes()
+            .fold(0xcbf2_9ce4_8422_2325u64, |h, byte| (h ^ u64::from(byte)).wrapping_mul(0x100_0000_01b3));
         assert_eq!(hash, MULSI3_SOURCE_STAMP, "__mulsi3 changed: measure the table in routine.rs again");
     }
 
@@ -176,7 +194,9 @@ mod tests {
     #[test]
     fn the_fit_is_the_measured_table() {
         use crate::dagisel::hooks::Cpu;
-        for (cpu, narrow, wide) in [(Cpu::M68000, 138 - 32, 340 - 96), (Cpu::M68010, 106 - 32, 248 - 96), (Cpu::M68020, 61, 61)] {
+        for (cpu, narrow, wide) in
+            [(Cpu::M68000, 138 - 32, 340 - 96), (Cpu::M68010, 106 - 32, 248 - 96), (Cpu::M68020, 61, 61)]
+        {
             assert_eq!((mulsi3_clocks(cpu, 1), mulsi3_clocks(cpu, 17)), (narrow, wide), "{cpu:?}");
         }
     }

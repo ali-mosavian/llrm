@@ -28,7 +28,6 @@ use super::{Mode, Operand, Size, mode, size_of};
 /// A table with its labels normalized once (`norm` of every row's labels was a
 /// quarter of a 68060 compile's instructions, run per row per lookup).
 struct Grid {
-    header: Vec<String>,
     rows: Vec<Vec<String>>,
     header_norm: Vec<String>,
     /// Per row: `norm` of its first column, of each instruction that column
@@ -71,7 +70,7 @@ fn grid(csv: &str) -> Grid {
         })
         .collect();
     let second_norm = rows.iter().map(|row| row.get(1).map(|one| norm(one))).collect();
-    Grid { header, rows, header_norm, first_norm, names_norm, second_norm }
+    Grid { rows, header_norm, first_norm, names_norm, second_norm }
 }
 
 /// The clocks of a cell: `1+n(n/0)`, `<=22(1/0)`. A dash is no entry.
@@ -250,8 +249,9 @@ fn by_destination(
     size: Size,
     mode: Mode,
 ) -> Option<u32> {
-    // Table 10-5 prints `(d16,PC)` and `(d8,PC,Xi*SF)` at the times of `(d16,An)` and
-    // `(d8,An,Xi*SF)`, and Table 10-10 has no PC column: the PC form is the address form.
+    // Table 10-5 prints `(d16,PC)` and `(d8,PC,Xi*SF)` at the times of
+    // `(d16,An)` and `(d8,An,Xi*SF)`, and Table 10-10 has no PC column: the
+    // PC form is the address form.
     let mode = match mode {
         Mode::PcDisp => Mode::Disp,
         Mode::PcIndex => Mode::Index,

@@ -397,21 +397,26 @@ fn test_an_exact_static_subscript_folds_into_a_32_bit_symbolic_address() {
 /// A negative subscript leaf, zero-extended, addressed `A%+20[esi+esi]`
 /// 128K past the element. The address stays 16 bit; the scaled index may be
 /// computed in a 32-bit `lea` (its low half is the same, and no header copy
-/// reshapes the loop now), or addressed through a zero-extended 32-bit register.
+/// reshapes the loop now), or addressed through a zero-extended 32-bit
+/// register.
 #[test]
 fn test_a_negative_static_subscript_stays_16_bit() {
     let body = main_listing(
         "NEGATIVE.BAS",
         b"DEFINT A-Z\r\nDIM a(-10 TO 10)\r\nFOR j = 0 TO 99\r\ni = (PEEK(j) AND 7) - 5\r\na(i) = j\r\nNEXT\r\nPRINT a(5)\r\n",
     );
-    // A 32-bit index register in an `A%` address is fine only where its upper half is zero: a
-    // `movzx r32, r16` before the use. An index that is a sign- or garbage-extended word reaches
-    // 128K past the array (real mode faults).
+    // A 32-bit index register in an `A%` address is fine only where its upper
+    // half is zero: a `movzx r32, r16` before the use. An index that is a
+    // sign- or garbage-extended word reaches 128K past the array (real mode
+    // faults).
     let lines: Vec<&str> = body.lines().map(str::trim).collect();
     for (at, line) in lines.iter().enumerate().filter(|(_, line)| line.contains("A%") && line.contains("[e")) {
         let register = &line[line.find("[e").unwrap() + 1..][..3];
         let zeroed = format!("movzx {register}, {}", &register[1..]);
-        assert!(lines[..at].iter().any(|before| *before == zeroed), "{line} uses {register} without `{zeroed}` before it\n{body}");
+        assert!(
+            lines[..at].iter().any(|before| *before == zeroed),
+            "{line} uses {register} without `{zeroed}` before it\n{body}"
+        );
     }
 }
 
@@ -943,7 +948,9 @@ fn test_qb_finalizer_attaches_callee_cleanup_to_far_return() {
     assert_eq!(returned.sources, vec![Loc::Imm(ir::Imm { value: 6, width: 2, address: None })]);
 }
 
-/// RPOINTLEAF treated readonly RPLANEDIST as a write to every descriptor. The callee returns what it reads: a store to a write-only global is removed with its load (#10547), and the callee is then `memory(none)`.
+/// RPOINTLEAF treated readonly RPLANEDIST as a write to every descriptor. The
+/// callee returns what it reads: a store to a write-only global is removed with
+/// its load (#10547), and the callee is then `memory(none)`.
 #[test]
 fn test_qb_module_instantiates_user_callee_modref_on_pointer_actuals() {
     let directory = tempfile::tempdir().expect("a directory");
@@ -2416,8 +2423,8 @@ fn test_a_register_live_through_a_loop_is_parked_for_its_counters() {
     // in one slot" is an expectation, not a pin measurement: pin llc at code16
     // parks two counters on this function and four on a loop of this shape
     // (2026-11-09, ~/scratch/handoff/plasma-ra-park-card-2026-11-09.md; both
-    // leads only, llc swaps the datalayout). PLASMA-RA-PARK re-derives the bound
-    // from a pin greedy run on our MIR.
+    // leads only, llc swaps the datalayout). PLASMA-RA-PARK re-derives the
+    // bound from a pin greedy run on our MIR.
     let slots: BTreeSet<&str> =
         regex::Regex::new(r"\[bp[-+]\d+\]").unwrap().find_iter(body).map(|found| found.as_str()).collect();
     assert!(slots.len() <= 1 && body.matches("[bp").count() <= 3, "{body}");

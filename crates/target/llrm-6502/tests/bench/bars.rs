@@ -46,10 +46,6 @@ impl Compiler {
             Compiler::Hand => "hand",
         }
     }
-
-    fn from_name(name: &str) -> Option<Compiler> {
-        [Compiler::Cc65, Compiler::Sdcc, Compiler::LlvmMos, Compiler::Hand].into_iter().find(|c| c.name() == name)
-    }
 }
 
 /// The optimizer flags `compiler` is given at `level` (`O1`, `O2`, `O3`, `Os`).

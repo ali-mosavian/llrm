@@ -23,8 +23,9 @@ fn test_memory_compare_is_priced_as_a_read_not_a_read_modify_write() {
     assert_eq!(classify("add", "word [bp-4],1", "8346fc01"), "alu_mr");
 }
 
-/// `inc dword ptr [bp-8]` was priced `alu_rr` (1 clk) where the 486 charges a read/modify/write
-/// `alu_mr` (3): a loop counter kept in memory looked as cheap as one in a register.
+/// `inc dword ptr [bp-8]` was priced `alu_rr` (1 clk) where the 486 charges a
+/// read/modify/write `alu_mr` (3): a loop counter kept in memory looked as
+/// cheap as one in a register.
 #[test]
 fn test_memory_inc_dec_neg_are_priced_as_a_read_modify_write() {
     for (mnemonic, raw) in [("inc", "66ff46f8"), ("dec", "66ff4ef8"), ("neg", "66f75ef8")] {
@@ -96,7 +97,8 @@ fn test_x87_exchange_is_explicitly_priced_for_every_cpu() {
 /// clocks and the load 3, so a hoisted constant copied each trip looked free
 /// (nbody -O2 m16: two copies a pair-loop trip, 1,200 trips). Every CPU states
 /// the copy; the 486 data sheet's figure differs (the 386 column carries the
-/// 486 numbers since #8311, by the user's 486/P5 rule: nobody uses the 386), the others tie with the load until measured.
+/// 486 numbers since #8311, by the user's 486/P5 rule: nobody uses the 386),
+/// the others tie with the load until measured.
 #[test]
 fn test_x87_register_copy_is_its_own_priced_form() {
     assert_eq!(classify("fld", "st1", "d9c1"), "x87_copy");

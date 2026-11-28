@@ -408,7 +408,6 @@ pub fn shared_stage(
 /// `flow::machine_with` runs them, as the body-to-body step
 /// [`allocate_greedy_after`] takes.
 pub fn shared_prelude(body: llrm_codegen::model::lir::LirBody) -> Result<llrm_codegen::model::lir::LirBody, String> {
-    use llrm_codegen::model::passes::LIRTransform;
     thread_local! {
         static CLASSES: std::rc::Rc<llrm_codegen::backend::classes::RegisterClasses> =
             std::rc::Rc::new(llrm_codegen::backend::classes::RegisterClasses::of(&crate::target::M68k));
@@ -437,7 +436,10 @@ pub fn shared_prelude(body: llrm_codegen::model::lir::LirBody) -> Result<llrm_co
     )?;
     let mut body = body;
     for phase in phases.iter_mut() {
-        if matches!(phase.class_name(), "MachineSink" | "PhiElimination" | "TwoAddress") {
+        if matches!(
+            phase.class_name(),
+            "MachineSink" | "PhiElimination" | "TwoAddress"
+        ) {
             body = phase.transform(body)?;
         }
     }
@@ -465,7 +467,12 @@ pub fn shared_licm(
         arch.operand_bytes(),
     );
     shared_stage(function, |classes, constrain| {
-        Box::new(llrm_codegen::backend::machinelicm::MachineLicm { classes, segments, size, constrain: Some(constrain) })
+        Box::new(llrm_codegen::backend::machinelicm::MachineLicm {
+            classes,
+            segments,
+            size,
+            constrain: Some(constrain),
+        })
     })
 }
 

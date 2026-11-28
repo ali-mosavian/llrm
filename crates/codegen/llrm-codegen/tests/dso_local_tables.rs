@@ -15,9 +15,7 @@ const IR: &str = r#"
 @weak_hidden = extern_weak hidden global i32
 "#;
 
-fn names_and_locality(
-    dso_local_symbols: bool,
-) -> Vec<(String, bool)> {
+fn names_and_locality(dso_local_symbols: bool) -> Vec<(String, bool)> {
     let module = llrm_mir::parse::module(IR).expect("parses");
     let (names, local) = module_tables(&module, dso_local_symbols, false);
     names.iter().cloned().zip(local.iter().copied()).collect()

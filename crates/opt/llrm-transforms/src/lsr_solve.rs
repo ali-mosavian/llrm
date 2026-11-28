@@ -284,7 +284,7 @@ impl Collection<'_, '_> {
         }
         let forward: Vec<usize> = (0..self.uses.len()).collect();
         let reversed: Vec<usize> = forward.iter().rev().copied().collect();
-        let mut solution = Vec::new();
+        let mut solution;
         let mut solution_cost;
         loop {
             (solution, solution_cost) = self.search(se, &forward);

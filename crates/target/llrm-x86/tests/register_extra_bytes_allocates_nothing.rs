@@ -11,8 +11,8 @@ use llrm_lir::{Held, Loc, Operation, Semantics};
 use llrm_x86::register_cost::register_extra_bytes;
 
 struct Counting;
-// Per thread: the harness's own thread and any other test allocate meanwhile, and a process-wide count
-// failed the gate of #10317 under load.
+// Per thread: the harness's own thread and any other test allocate meanwhile,
+// and a process-wide count failed the gate of #10317 under load.
 thread_local! { static ALLOCATIONS: Cell<usize> = const { Cell::new(0) }; }
 
 unsafe impl GlobalAlloc for Counting {
@@ -69,8 +69,9 @@ fn pricing_a_register_allocates_nothing() {
     assert_eq!(made, 0, "{made} allocations pricing the registers");
 }
 
-/// A process-wide allocation counter counted the harness thread and failed the gate of #10317 under load.
-/// Another thread allocating in a loop all through the measured window is not this thread's allocations.
+/// A process-wide allocation counter counted the harness thread and failed the
+/// gate of #10317 under load. Another thread allocating in a loop all through
+/// the measured window is not this thread's allocations.
 #[test]
 fn another_thread_allocating_is_not_counted() {
     static STOP: AtomicBool = AtomicBool::new(false);

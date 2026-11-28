@@ -205,7 +205,8 @@ fn a_call_register_mask_names_eflags() {
     let module = llrm_mir::parse::module(&text).unwrap_or_else(|error| panic!("{error}"));
     let layout = DataLayout::parse(module.datalayout.as_deref().expect("a datalayout")).expect("a datalayout");
     let target = BuilderTarget::for_pointer_bits(32).with_libcalls(&["memcpy", "memmove", "memset"]);
-    let eflags = super::super::dagisel_adapter::pin_register(super::super::dagisel_adapter::EFLAGS_ID).expect("a pin number");
+    let eflags =
+        super::super::dagisel_adapter::pin_register(super::super::dagisel_adapter::EFLAGS_ID).expect("a pin number");
     let mut masks = 0;
     for (id, _, function) in module.functions() {
         let convention =

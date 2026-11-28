@@ -3,7 +3,9 @@
 //! Writes `ids.rs`, one `x86_<cpu>.rs` per CPU in `features.toml` and `mod.rs`
 //! into DIR.
 
-#![deny(unused_mut)] // the landing gate builds with warnings denied; an unused `mut` refused every batch
+// the landing gate builds with warnings denied; an unused `mut` refused every
+// batch
+#![deny(unused_mut)]
 
 use std::process::ExitCode;
 

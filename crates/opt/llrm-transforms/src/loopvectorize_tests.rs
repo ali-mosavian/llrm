@@ -2,7 +2,7 @@
 //! widens, with the pin's factors (`opt -passes=loop-vectorize` on aarch64: i16
 //! copy of 1920 is VF 8, IC 2), and the ones it leaves alone.
 
-use llrm_mir::target::{Machine as _, Neutral};
+use llrm_mir::target::Neutral;
 
 use super::LoopVectorize;
 use crate::testing::parsed;

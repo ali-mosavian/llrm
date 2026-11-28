@@ -12,7 +12,8 @@ fn asm(
     cpu: &str,
     level: Level,
 ) -> String {
-    // `x` and `y` are `(short)v` widened again: 17 sign bits, no `sext` of an argument to see through
+    // `x` and `y` are `(short)v` widened again: 17 sign bits, no `sext` of an
+    // argument to see through
     let ir = format!(
         "{LAYOUT}define i32 @f(i32 %v, i32 %w) {{\n  %t = trunc i32 %v to i16\n  %x = sext i16 %t to i32\n  %u = trunc i32 %w to i16\n  %y = sext i16 %u to i32\n{body}\n}}"
     );

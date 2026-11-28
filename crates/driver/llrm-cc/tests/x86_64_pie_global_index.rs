@@ -3,9 +3,9 @@
 //! backend formed `lea r,[rip+sym]` at every use in the loop: histo -O2 was
 //! 88 B larger (2136 B object against 2048 B). The size no longer measures it
 //! (the loops are vectorized now, 3032 B), so the test reads the loops: no
-//! symbol address is made inside one. This is a PROXY for that symptom: it fails
-//! on `-O0`, where the symbol is formed in the loop, but reverting the LSR
-//! refusal alone leaves it green. Needs `LLRM_LLC`.
+//! symbol address is made inside one. This is a PROXY for that symptom: it
+//! fails on `-O0`, where the symbol is formed in the loop, but reverting the
+//! LSR refusal alone leaves it green. Needs `LLRM_LLC`.
 
 use std::path::Path;
 use std::process::Command;

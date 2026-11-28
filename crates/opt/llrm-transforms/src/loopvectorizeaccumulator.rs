@@ -21,10 +21,12 @@
 //!   accumulator.
 //!
 //! # Runs
-//! Inside `loopvectorize`, on a reduction whose vector is wider than a register.
+//! Inside `loopvectorize`, on a reduction whose vector is wider than a
+//! register.
 //!
 //! # Example
-//! `acc = acc + x` with `x: <16 x i64>` on a 128-bit target becomes eight adds of `<2 x i64>` pieces of `x` into one `<2 x i64>` accumulator.
+//! `acc = acc + x` with `x: <16 x i64>` on a 128-bit target becomes eight adds
+//! of `<2 x i64>` pieces of `x` into one `<2 x i64>` accumulator.
 
 use llrm_mir::context::{Constant, ConstantKind, Context};
 use llrm_mir::edit::Position;
@@ -58,12 +60,8 @@ pub(crate) fn fold_pieces(
     wide: ValueId,
 ) -> ValueId {
     let narrow = context.types.intern(Type::Vector { element, count: lanes });
-    let poison = Operand::Constant(
-        context.constant(Constant {
-            ty: function.value(wide).ty,
-            kind: ConstantKind::Poison,
-        }),
-    );
+    let poison =
+        Operand::Constant(context.constant(Constant { ty: function.value(wide).ty, kind: ConstantKind::Poison }));
     let mut total = acc;
     for piece in 0..vf / lanes {
         let mask = (piece * lanes..(piece + 1) * lanes).map(|lane| lane as i32).collect();

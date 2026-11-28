@@ -165,7 +165,10 @@ fn rewrite_loop(
         l.get_blocks()
             .iter()
             .flat_map(|&block| function.iter_block(block))
-            .filter(|&inst| matches!(function.instruction(inst).opcode, Opcode::GetElementPtr { .. }))
+            .filter(|&inst| matches!(
+                function.instruction(inst).opcode,
+                Opcode::GetElementPtr { .. }
+            ))
             .collect()
     };
     let mut changed = false;
@@ -180,13 +183,8 @@ fn rewrite_loop(
         let index = rewriter.expand_code_for(env, context, declared, function, se, plan.index, None);
         // An "uglygep": no real GEP calculation has to be found that leads to
         // the SCEV, and some aliasing information stays.
-        let extended = function.create_instruction(
-            Opcode::Cast(CastOp::ZExt),
-            index_ty,
-            vec![index],
-            Flags::default(),
-            None,
-        );
+        let extended =
+            function.create_instruction(Opcode::Cast(CastOp::ZExt), index_ty, vec![index], Flags::default(), None);
         function.insert(extended, Position::Before(gep)).expect("a placed extension");
         let extended = Operand::Value(function.instruction(extended).result.expect("a value"));
         let i8 = byte_type(context);

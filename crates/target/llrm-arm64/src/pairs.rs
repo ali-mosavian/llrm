@@ -35,7 +35,11 @@ static UNKNOWN: std::sync::LazyLock<MemOperand> = std::sync::LazyLock::new(MemOp
 pub(crate) fn touch(inst: &Inst) -> Option<Touch<'_>> {
     // `LD1i32` and its kin are loads: they pass a load, as the pin's `mayAlias`
     // lets any two loads pass.
-    if matches!(inst, Inst::VectorLoadLane { .. } | Inst::VectorLoadReplicate { .. } | Inst::VectorLoadStructure { .. }) {
+    if matches!(
+        inst,
+        Inst::VectorLoadLane { .. } | Inst::VectorLoadReplicate { .. } | Inst::VectorLoadStructure { .. }
+    )
+    {
         return Some(Touch { store: false, mmo: &UNKNOWN, bytes: 16, at: None });
     }
     let (store, mem, addr, mmo) = match inst {
@@ -131,7 +135,12 @@ pub(crate) fn is_memory(inst: &Inst) -> bool {
 fn ordered(inst: &Inst) -> bool {
     matches!(
         inst,
-        Inst::Atomic { .. } | Inst::Dmb { .. } | Inst::Word { .. } | Inst::VectorStoreLane { .. } | Inst::VectorLoadReplicate { .. } | Inst::VectorLoadLane { .. }
+        Inst::Atomic { .. }
+            | Inst::Dmb { .. }
+            | Inst::Word { .. }
+            | Inst::VectorStoreLane { .. }
+            | Inst::VectorLoadReplicate { .. }
+            | Inst::VectorLoadLane { .. }
             | Inst::VectorLoadStructure { .. }
             | Inst::VectorStoreStructure { .. }
     )

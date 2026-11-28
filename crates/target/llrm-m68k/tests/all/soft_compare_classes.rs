@@ -34,7 +34,8 @@ define dso_local i32 @six_f(float noundef %a, float noundef %b) {
 fn the_six_predicates_of_one_pair_are_two_compare_calls() {
     for cpu in ["68000", "68020"] {
         let asm = assembly(IR, cpu_of(cpu).unwrap(), Level::O2).expect("compiles");
-        let mut calls: Vec<&str> = asm.lines().filter_map(|line| line.trim().strip_prefix("jsr")).map(str::trim).collect();
+        let mut calls: Vec<&str> =
+            asm.lines().filter_map(|line| line.trim().strip_prefix("jsr")).map(str::trim).collect();
         calls.sort();
         assert_eq!(calls, ["__gesf2", "__lesf2"], "{cpu}:\n{asm}");
     }

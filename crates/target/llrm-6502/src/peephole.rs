@@ -2911,11 +2911,9 @@ pub fn zero_cells_with_stz(asm: &mut Asm) {
     if !asm.cmos {
         return;
     }
-    for (load, store, register) in [
-        (Op::Lda, Op::Sta, Registers::A),
-        (Op::Ldx, Op::Stx, Registers::X),
-        (Op::Ldy, Op::Sty, Registers::Y),
-    ] {
+    for (load, store, register) in
+        [(Op::Lda, Op::Sta, Registers::A), (Op::Ldx, Op::Stx, Registers::X), (Op::Ldy, Op::Sty, Registers::Y)]
+    {
         zero_run_with_stz(asm, load, store, register);
     }
 }
@@ -2933,10 +2931,7 @@ fn zero_run_with_stz(
             lines.get(n).and_then(Line::inst).is_some_and(|i| i.op == load && i.operand == Operand::Imm("0".into()))
         };
         let cell = |n: usize| {
-            lines
-                .get(n)
-                .and_then(Line::inst)
-                .is_some_and(|i| i.op == store && matches!(i.operand, Operand::Direct(_)))
+            lines.get(n).and_then(Line::inst).is_some_and(|i| i.op == store && matches!(i.operand, Operand::Direct(_)))
         };
         let mut runs = Vec::new();
         let mut at = 0;

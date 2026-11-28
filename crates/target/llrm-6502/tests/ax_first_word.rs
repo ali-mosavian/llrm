@@ -1,6 +1,7 @@
-//! The first integer word argument is in A:X (llvm-mos's CC_MOS), for the program's
-//! own functions and for the routines the compiler names (mem*, compiler-rt); a
-//! pointer is in the pointer pairs (`pointer_args_in_cells.rs`).
+//! The first integer word argument is in A:X (llvm-mos's CC_MOS), for the
+//! program's own functions and for the routines the compiler names (mem*,
+//! compiler-rt); a pointer is in the pointer pairs
+//! (`pointer_args_in_cells.rs`).
 
 mod common;
 
@@ -110,9 +111,10 @@ fn an_argument_in_x_is_loaded_before_an_indirect_call() {
     assert!(t2.contains("ldx rc3"), "x is never loaded for the callee:\n{t2}");
 }
 
-/// A word arriving in A:X and kept across a call is copied into callee-saved cells (`rc8:rc9`). The
-/// copy was made before the prologue pushed those cells, so the push saved the argument and the caller's
-/// `rc8` came back changed (`frameless` -O2: 1011, not 499).
+/// A word arriving in A:X and kept across a call is copied into callee-saved
+/// cells (`rc8:rc9`). The copy was made before the prologue pushed those cells,
+/// so the push saved the argument and the caller's `rc8` came back changed
+/// (`frameless` -O2: 1011, not 499).
 #[test]
 fn an_argument_copied_into_a_callee_saved_cell_is_saved_first() {
     let asm = text(

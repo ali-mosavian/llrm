@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/pushfold.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/pushfold.rs); edit the header, not this file.
-<!-- src: crates/codegen/llrm-codegen/src/backend/pushfold.rs sha256:d4e77993721d0f7a6acb0466751ba269751d25b7ea896bd28b29fa914bca6a30 -->
+<!-- src: crates/codegen/llrm-codegen/src/backend/pushfold.rs sha256:f4a6ae8d3bea65f817902bce865ab9455e4b83300b49f05f44614add008ecd94 -->
 
 # pushfold
 
@@ -25,9 +25,9 @@ A `push` whose one source is a value qualifies when:
   earlier pushes of the sequence move.
 
 The push then reads the cell and the load is deleted. The pin does this when
-it turns the stores of a reserved call frame into pushes, which `callframe.rs`
-does here (DEVIATE CF1). The pin skips it where `slowTwoMemOps` holds; the i486 and the 8086 do
-not set it.
+it turns the stores of a reserved call frame into pushes, which
+`callframe.rs` does here (DEVIATE CF1). The pin skips it where
+`slowTwoMemOps` holds; the i486 and the 8086 do not set it.
 
 DEVIATE CF2 (no number): a volatile load is not folded. The pin's
 [`canFoldIntoRegPush`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86CallFrameOptimization.cpp#L603)
@@ -41,9 +41,10 @@ has a 16-byte stack alignment, so `isProfitable` keeps one 4-byte argument
 a store into the reserved frame (`movl %edi,(%esp)`). `x86_32-wat` keeps a
 slot's alignment (`CalleeFacts::stack_alignment`: the target's only where
 it needs aligned calls), so the same translated pass pushes it, as the
-pin's would at that alignment (`one_push_is_not_worth_the_adjustments_but_two_are`).
-The m32 frame facts (`stack_alignment`, `aligned_calls`) are the default
-convention's (watcall32), also for `-mabi=sysv` code: sat_builtins -O1/-O2
+pin's would at that alignment
+(`one_push_is_not_worth_the_adjustments_but_two_are`). The m32 frame facts
+(`stack_alignment`, `aligned_calls`) are the default convention's
+(watcall32), also for `-mabi=sysv` code: sat_builtins -O1/-O2
 +7/+28 B against pin_clang (one byte a `report` call). Steps: (a) read
 the facts per function convention: tried 2026-11-08 and disproved (one
 accessor holds two facts, the call alignment, 16 at sysv32, and the

@@ -1,5 +1,5 @@
-//! DEVIATE LFTR1: following the pin's step-one counter rule grew z80 `variadic` by 30 B at -O2 and
-//! 51 B at -Os; the knob must stay on here.
+//! DEVIATE LFTR1: following the pin's step-one counter rule grew z80 `variadic`
+//! by 30 B at -O2 and 51 B at -Os; the knob must stay on here.
 
 use llrm_mir::tti::Tti;
 

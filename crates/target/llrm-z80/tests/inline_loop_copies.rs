@@ -1,11 +1,14 @@
-//! A callee that holds a loop, inlined at several sites of a loop of its caller, is a variant the driver prices
-//! against the calls (DEVIATE LOOP-COPY-TRIAL): idioms -O2 made 13 copies of `sum` and 10 of `init`, 4555 B and
-//! 25.58M T, where the calls are 1993 B and 24.49M T (-O1: 1869 B, 24.47M T).
+//! A callee that holds a loop, inlined at several sites of a loop of its
+//! caller, is a variant the driver prices against the calls (DEVIATE
+//! LOOP-COPY-TRIAL): idioms -O2 made 13 copies of `sum` and 10 of `init`, 4555
+//! B and 25.58M T, where the calls are 1993 B and 24.49M T (-O1: 1869 B, 24.47M
+//! T).
 
 use llrm_z80::compile::{effective, refuses_loop_copies, text};
 use llrm_z80::driver::{Level, Request, loop_copies_made, selections_with_alternatives};
 
-/// `sum` called at three sites of a loop of `main`: clang -O2 IR, the loop kept as a callee.
+/// `sum` called at three sites of a loop of `main`: clang -O2 IR, the loop kept
+/// as a callee.
 const IR: &str = "target datalayout = \"e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16-S8\"\n\
 @a = internal global [160 x i16] zeroinitializer\n\
 declare void @report(i32)\n\
@@ -29,8 +32,9 @@ fn calls_of_sum(request: &Request) -> usize {
     text(IR, "main", 0, request).expect("compiles").matches("call _sum").count()
 }
 
-/// The mid-end of the trial compile leaves the calls where the default one inlines them, and the default one
-/// says it made such copies: a driver that cannot tell has nothing to price.
+/// The mid-end of the trial compile leaves the calls where the default one
+/// inlines them, and the default one says it made such copies: a driver that
+/// cannot tell has nothing to price.
 #[test]
 fn the_trial_compile_refuses_the_copies_the_default_one_makes_and_notes() {
     let inlined = Request::new(Level::O2);
@@ -42,18 +46,20 @@ fn the_trial_compile_refuses_the_copies_the_default_one_makes_and_notes() {
     assert!(calls_of_sum(&refused) >= 3, "the refused compile keeps the calls");
 }
 
-/// `sum` holds one `mul i32` of two sign-extended words, which the module prices as a call (`LONE_MULTIPLY`), so
-/// the module that keeps the calls is smaller than the one with the copies, and `effective` refuses the copies:
-/// ucsim, -O2, 419 B / 48452 T against 483 B / 47125 T with them (before the lone multiply was a call, the
-/// calls module was 550 B and the copies stayed).
+/// `sum` holds one `mul i32` of two sign-extended words, which the module
+/// prices as a call (`LONE_MULTIPLY`), so the module that keeps the calls is
+/// smaller than the one with the copies, and `effective` refuses the copies:
+/// ucsim, -O2, 419 B / 48452 T against 483 B / 47125 T with them (before the
+/// lone multiply was a call, the calls module was 550 B and the copies stayed).
 #[test]
 fn the_copies_of_a_callee_with_a_lone_multiply_are_refused() {
     let chosen = effective(IR, &Request::new(Level::O2)).expect("chooses");
     assert!(chosen.refuse_loop_copies, "kept at {:?}", chosen.level);
 }
 
-/// idioms -O2 (measured on ucsim): the copies are bigger and slower, so the module without them is kept at the
-/// rate, at -O3, and at the strict levels by bytes; byval_inline -O2 (244 B / 4981 T against 329 B / 9148 T
+/// idioms -O2 (measured on ucsim): the copies are bigger and slower, so the
+/// module without them is kept at the rate, at -O3, and at the strict levels by
+/// bytes; byval_inline -O2 (244 B / 4981 T against 329 B / 9148 T
 /// without) keeps its copy.
 #[test]
 fn the_module_without_the_copies_is_kept_where_it_is_smaller_and_not_slower() {

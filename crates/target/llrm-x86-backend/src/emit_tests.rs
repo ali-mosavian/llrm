@@ -1,4 +1,4 @@
-use llrm_codegen::backend::selectiondag::emit_api::{EmitContext, EmitError};
+use llrm_codegen::backend::selectiondag::emit_api::{EmitContext, EmitError, EmitState, Emitted};
 use llrm_codegen::backend::selectiondag::opcodes::OpcodeMap;
 use llrm_codegen::backend::selectiondag::schedule::{SchedInfo, schedule};
 use llrm_codegen::backend::selectiondag::*;
@@ -9,7 +9,15 @@ use llrm_support::hash::HashMap;
 use llrm_target::Target;
 use llrm_x86_dagisel::generated::x86_i486::MACHINE_OPCODES;
 
-use crate::emit::emit;
+use crate::emit::emit_in;
+
+fn emit(
+    dag: &SelectionDAG,
+    units: &[llrm_codegen::backend::selectiondag::schedule::Unit],
+    ctx: &EmitContext<'_>,
+) -> Result<Emitted, EmitError> {
+    emit_in(dag, units, ctx, &mut EmitState::default(), 0)
+}
 
 const EAX: u32 = u32::MAX;
 const NO_FLAGS: &[u16] = &[];
@@ -410,7 +418,6 @@ fn test_a_constant_read_three_times_is_loaded_once_where_bytes_are_strict() {
 fn argument_areas_are_not_rescanned_once_per_call() {
     use std::sync::Arc;
 
-    use llrm_codegen::backend::selectiondag::emit_api::EmitState;
     use llrm_codegen::model::ir::{Held, Imm, Mem, Operation, Semantics};
     use llrm_codegen::model::lir::Insn;
 

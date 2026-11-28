@@ -197,8 +197,8 @@ fn sinking_in_a_loop_of_many_blocks_walks_each_block_once_for_its_pressure() {
     // The pin caches a block's pressure for the block being processed
     // (`CachedRegisterPressure`); every query walked it again, and the
     // liveness behind it was solved again after each sunk instruction
-    // (a very large function: 15% of its compile instructions in `pressure_exceeds`).
-    // The bound is work, not wall clock.
+    // (a very large function: 15% of its compile instructions in
+    // `pressure_exceeds`). The bound is work, not wall clock.
     let mut function = loop_of_diamonds(200);
     let before = pressure_scans();
     assert!(machine_sink::<Wide>(&mut function), "nothing sank: the test measures nothing");

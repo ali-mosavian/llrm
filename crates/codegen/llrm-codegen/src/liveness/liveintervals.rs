@@ -37,6 +37,8 @@ use std::sync::Arc;
 
 mod handlemove;
 
+use llrm_lir::valuelanes::ValueLanes;
+
 use super::cfg::{Cfg, DomTree};
 use super::eqclasses::{ConnectedVNInfoEqClasses, distribute_range};
 use super::liverange::{LiveInterval, LiveRange, Segment, VNInfo, Vn};
@@ -44,7 +46,6 @@ use super::liverangecalc::{Ctx, LiveIntervalCalc, Operand};
 use super::slotindex::{InstrKey, SlotIndex, SlotIndexes};
 use crate::model::ir::Loc;
 use crate::model::lir::{Insn, LirBody};
-use llrm_lir::valuelanes::ValueLanes;
 use crate::support::hash::{HashMap, HashSet};
 
 // How many `LiveIntervals` this thread has built, for a test that a phase that
@@ -251,7 +252,8 @@ impl LiveIntervals {
         let instr = one.id();
         // A def that keeps the rest of the value reads it (`readsReg()`).
         for (at, &value) in one.defines.iter().enumerate() {
-            // a value defined twice (both bytes of a pair) names a lane each time
+            // a value defined twice (both bytes of a pair) names a lane each
+            // time
             let nth = one.defines[..at].iter().filter(|v| **v == value).count();
             self.push_def(one, instr, value, nth);
         }
@@ -291,7 +293,8 @@ impl LiveIntervals {
         nth: usize,
     ) {
         let reads_reg = one.partial_defs.contains(&value);
-        let lanes = one.def_lanes.iter().filter(|(v, _)| *v == value).nth(nth).map_or(Operand::ALL, |(_, lanes)| *lanes);
+        let lanes =
+            one.def_lanes.iter().filter(|(v, _)| *v == value).nth(nth).map_or(Operand::ALL, |(_, lanes)| *lanes);
         let early_clobber = one.early_clobbers.contains(&value);
         self.push_operand(value, Operand { instr, is_def: true, reads_reg, early_clobber, lanes });
     }
@@ -538,7 +541,8 @@ impl LiveIntervals {
                     continue;
                 }
                 let Some(insn) = self.insns.get(key).map(Arc::clone) else { return None };
-                // An instruction of a parallel copy shares its index: not moved.
+                // An instruction of a parallel copy shares its index: not
+                // moved.
                 if insn.group.is_some() {
                     return None;
                 }
@@ -1714,7 +1718,6 @@ mod tests {
         assert!(!lis.interval(1).has_sub_ranges(), "no lane def, no sub-range");
     }
 
-
     /// `x.hi := a; x.lo := b; use x.hi; use x`: the high byte is defined
     /// before the low one, as joining the bytes' own defs into a pair puts
     /// them. A lane def does not end the other lanes: the pair is live from
@@ -1742,7 +1745,6 @@ mod tests {
         assert_eq!(segments.len(), 2, "a value for each lane def");
         assert_eq!(segments[0].end, segments[1].start, "no gap between the lane defs' values");
     }
-
 
     /// `x.lo := a; x.hi := b; use x.hi; use x.hi`: both reads name the high
     /// byte, so the low byte's value is never read and is not live past its

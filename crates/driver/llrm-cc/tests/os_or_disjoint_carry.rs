@@ -17,10 +17,7 @@ unsigned h(unsigned r, unsigned mb) { return (r << 1) | (r < mb); }
 
 #[test]
 fn test_m32_shifted_value_plus_a_compare_is_adc_or_sbb() {
-    assert!(
-        llrm_cc::ow_present(),
-        "the Open Watcom tree is missing: run tools/ow-fetch.sh; this test does not skip"
-    );
+    assert!(llrm_cc::ow_present(), "the Open Watcom tree is missing: run tools/ow-fetch.sh; this test does not skip");
     assert!(
         std::env::var_os("LLRM_CLANG_M16").is_some(),
         "LLRM_CLANG_M16 is not set: this test needs it and does not skip"

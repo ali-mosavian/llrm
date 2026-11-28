@@ -31,12 +31,12 @@ static REGISTERS: LazyLock<Vec<llrm_target::registers::Register>> =
 /// The limit of every pressure set here (`computePSetLimit`): a register
 /// counts if its root is a `gpr`; `a6` and `sp` never.
 ///
-/// DEVIATE M68K-LICM-LIMIT (owner wasm-3, exit 2026-12-10, when early_exit_index
-/// 68000 -O2/-O3 is under gcc with the limit at 9): the pin counts
-/// `a6` in a function with no frame pointer (`getReservedRegs`, AR16 limit 9).
-/// With 9 the shared `MachineLICM` hoists one more value than ours keeps in a
-/// register: early_exit_index 68000 -O2/-O3 +4 B (over gcc), early_exit_widths
-/// +18 B, with `%a6` allocatable either way.
+/// DEVIATE M68K-LICM-LIMIT (owner wasm-3, exit 2026-12-10, when
+/// early_exit_index 68000 -O2/-O3 is under gcc with the limit at 9): the pin
+/// counts `a6` in a function with no frame pointer (`getReservedRegs`, AR16
+/// limit 9). With 9 the shared `MachineLICM` hoists one more value than ours
+/// keeps in a register: early_exit_index 68000 -O2/-O3 +4 B (over gcc),
+/// early_exit_widths +18 B, with `%a6` allocatable either way.
 pub fn pressure_limits() -> Vec<u32> {
     (0..PRESSURE.sets.len())
         // A set whose largest class the table leaves out holds no value
@@ -136,8 +136,8 @@ impl Target for M68k {
         |row| row == "SWAP"
     }
 
-    /// The pin hoists the `lea` of a symbol out of a loop: `word_array_abs_x` -O2 ran two a trip
-    /// (+12% clocks at 68020 against gcc).
+    /// The pin hoists the `lea` of a symbol out of a loop: `word_array_abs_x`
+    /// -O2 ran two a trip (+12% clocks at 68020 against gcc).
     fn hoists_register_free_ops(&self) -> bool {
         true
     }

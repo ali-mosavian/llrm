@@ -1,6 +1,8 @@
-//! copy_runs -O2 (1411 B / 206971 T against 1317 B / 203982 T at -O1): `sum(48)` was inlined at two sites, +94 B. Its
-//! bound is known, but a trip's body (32 units) times 48 is over the full-unroll threshold, so the copy folds
-//! nothing and is as big as the callee: the known-bound exemption holds only where the unrolled body fits.
+//! copy_runs -O2 (1411 B / 206971 T against 1317 B / 203982 T at -O1):
+//! `sum(48)` was inlined at two sites, +94 B. Its bound is known, but a trip's
+//! body (32 units) times 48 is over the full-unroll threshold, so the copy
+//! folds nothing and is as big as the callee: the known-bound exemption holds
+//! only where the unrolled body fits.
 
 use llrm_z80::compile::text;
 use llrm_z80::driver::{Level, Request};

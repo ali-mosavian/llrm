@@ -121,9 +121,8 @@ impl TypeLegalizer<'_> {
             let EVT::Simple(src_mvt) = src_vt else { return None };
             // `widenIntegerVectorElementType`: a lane with no `MVT` (the `i2`
             // of a mask) is not a legal type, so the two steps are not taken.
-            let new_src = MVT::integer(src_bits * 2)
-                .and_then(|lane| MVT::vector(lane, src_mvt.lanes()?))
-                .map(EVT::Simple);
+            let new_src =
+                MVT::integer(src_bits * 2).and_then(|lane| MVT::vector(lane, src_mvt.lanes()?)).map(EVT::Simple);
             // A half with no `MVT` (`v4i8`) is not a legal type.
             let split_src = MVT::vector(src_mvt.element()?, src_mvt.lanes()? / 2).map(EVT::Simple);
             let split_lo = new_src.and_then(|new_src| split_dest(new_src)).map(|(lo, _)| lo);
@@ -189,7 +188,8 @@ impl TypeLegalizer<'_> {
         lo_vt: EVT,
         hi_vt: EVT,
     ) -> Option<(SDValue, SDValue)> {
-        let (then, other, cond) = (self.dag.operand(select, 1), self.dag.operand(select, 2), self.dag.operand(select, 0));
+        let (then, other, cond) =
+            (self.dag.operand(select, 1), self.dag.operand(select, 2), self.dag.operand(select, 0));
         let (ll, lh) = self.split_operand(then)?;
         let (rl, rh) = self.split_operand(other)?;
         let cond_vt = self.dag.value_type(cond);
@@ -362,13 +362,16 @@ impl TypeLegalizer<'_> {
                         }
                     }
                     let node = if used.len() <= 2 {
-                        let slot = |source: i32| used.iter().position(|&seen| seen == source).expect("a used source") as i32;
+                        let slot =
+                            |source: i32| used.iter().position(|&seen| seen == source).expect("a used source") as i32;
                         let local: Vec<i32> = part
                             .iter()
                             .map(|&lane| if lane < 0 { -1 } else { slot(lane / new_elts) * new_elts + lane % new_elts })
                             .collect();
-                        let first = used.first().map_or_else(|| self.dag.get_undef(vt), |&source| inputs[source as usize]);
-                        let second = used.get(1).map_or_else(|| self.dag.get_undef(vt), |&source| inputs[source as usize]);
+                        let first =
+                            used.first().map_or_else(|| self.dag.get_undef(vt), |&source| inputs[source as usize]);
+                        let second =
+                            used.get(1).map_or_else(|| self.dag.get_undef(vt), |&source| inputs[source as usize]);
                         self.dag.get_vector_shuffle(vt, first, second, &local)
                     } else {
                         let element = vt.element();
@@ -379,7 +382,11 @@ impl TypeLegalizer<'_> {
                                     return self.dag.get_undef(element);
                                 }
                                 let index = self.dag.get_constant((lane % new_elts) as u128, EVT::I64);
-                                self.dag.get_node(ISD::ExtractElement, element, &[inputs[(lane / new_elts) as usize], index])
+                                self.dag.get_node(
+                                    ISD::ExtractElement,
+                                    element,
+                                    &[inputs[(lane / new_elts) as usize], index],
+                                )
                             })
                             .collect();
                         self.dag.get_build_vector(vt, &lanes)
@@ -426,7 +433,9 @@ impl TypeLegalizer<'_> {
         operand: SDValue,
     ) -> bool {
         let (result, source) = (self.dag.value_type(node), self.dag.value_type(operand));
-        result.is_vector() && source.is_vector() && result.element().size_in_bits() * 2 < source.element().size_in_bits()
+        result.is_vector()
+            && source.is_vector()
+            && result.element().size_in_bits() * 2 < source.element().size_in_bits()
     }
 
     /// `SplitVectorOperand`: an operand `at` of node `n` is a vector to split.
@@ -479,7 +488,8 @@ impl TypeLegalizer<'_> {
                     .and_then(|element| MVT::vector(element, lanes * 2))
                     .map(EVT::Simple)
                     .ok_or_else(|| unsupported("split truncation with no half-lane type"))?;
-                let (lo, hi) = (self.dag.get_node(ISD::Truncate, half, &[lo]), self.dag.get_node(ISD::Truncate, half, &[hi]));
+                let (lo, hi) =
+                    (self.dag.get_node(ISD::Truncate, half, &[lo]), self.dag.get_node(ISD::Truncate, half, &[hi]));
                 let joined = self.dag.get_node(ISD::ConcatVectors, inter, &[lo, hi]);
                 self.dag.get_node(ISD::Truncate, result_vt, &[joined])
             }

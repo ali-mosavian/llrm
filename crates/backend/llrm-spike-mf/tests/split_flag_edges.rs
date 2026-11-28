@@ -7,7 +7,7 @@ mod common;
 
 use common::{Two, v};
 use llrm_spike_mf::regalloc::split_flag_edges;
-use llrm_spike_mf::{Block, Inst, Kind, MFunction, Operand, Phi};
+use llrm_spike_mf::{Block, Inst, Kind, MFunction, Phi};
 
 fn op(name: &'static str) -> Inst {
     Inst::new(Kind::Op(name), vec![])

@@ -956,20 +956,27 @@ out:
 }
 
 /// A dispatch loop of eight handlers that all jump back to its header was
-/// split into three nested loops (the pin gives it one latch: `separateNestedLoop`
-/// is tried for fewer than eight back edges only), and the interpreter
-/// `exec_loop` ran four more register copies and a shared join per op.
+/// split into three nested loops (the pin gives it one latch:
+/// `separateNestedLoop` is tried for fewer than eight back edges only), and the
+/// interpreter `exec_loop` ran four more register copies and a shared join per
+/// op.
 #[test]
 fn test_a_loop_with_eight_back_edges_is_not_separated_into_nested_loops() {
     let handlers = 8;
     let arms: String = (0..handlers).map(|k| format!("i32 {k}, label %a{k} ")).collect();
     let bodies: String = (0..handlers)
         .map(|k| {
-            let moved = if k % 2 == 0 { format!("  %sp{k} = add i32 %sp, {k}\n") } else { format!("  %sp{k} = add i32 %sp, 0\n") };
+            let moved = if k % 2 == 0 {
+                format!("  %sp{k} = add i32 %sp, {k}\n")
+            } else {
+                format!("  %sp{k} = add i32 %sp, 0\n")
+            };
             format!("a{k}:\n{moved}  br label %h\n\n")
         })
         .collect();
-    let sp: String = (0..handlers).map(|k| if k % 3 == 0 { format!(", [ %sp, %a{k} ]") } else { format!(", [ %sp{k}, %a{k} ]") }).collect();
+    let sp: String = (0..handlers)
+        .map(|k| if k % 3 == 0 { format!(", [ %sp, %a{k} ]") } else { format!(", [ %sp{k}, %a{k} ]") })
+        .collect();
     let (before, after) = simplify(&format!(
         "define i32 @f(i32 %n) {{
 b0:

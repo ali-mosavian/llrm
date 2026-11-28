@@ -74,7 +74,13 @@ pub struct Chain {
 
 impl Chain {
     pub fn of(mode: Mode) -> Chain {
-        Chain { off: mode == Mode::Kept, pin: mode == Mode::Pin, shapes_only: mode == Mode::TrialPinShapes, used: Rc::default(), synthesized: Rc::default() }
+        Chain {
+            off: mode == Mode::Kept,
+            pin: mode == Mode::Pin,
+            shapes_only: mode == Mode::TrialPinShapes,
+            used: Rc::default(),
+            synthesized: Rc::default(),
+        }
     }
 
     /// Whether this build decomposed at least one multiply.
@@ -97,7 +103,10 @@ impl Chain {
         !self.pin && !self.off && !self.shapes_only
     }
 
-    pub(super) fn allows(&self, yes: bool) -> bool {
+    pub(super) fn allows(
+        &self,
+        yes: bool,
+    ) -> bool {
         let yes = yes && !self.off;
         if yes {
             self.used.set(true);

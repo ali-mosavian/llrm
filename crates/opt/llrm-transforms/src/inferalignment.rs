@@ -398,6 +398,7 @@ impl State<'_> {
 }
 
 /// `inferAlignment(F, AC, DT)`. Whether anything changed.
+#[cfg(test)]
 fn infer_alignment(
     context: &mut Context,
     globals: &[GlobalValue],

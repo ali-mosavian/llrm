@@ -34,7 +34,8 @@
 //! [`crate::backend::shrinkwrap`], which places the set-up this makes possible.
 //!
 //! # Example
-//! `fib(n)` tests `n < 2` and returns; the block of its calls reads `m = mov n`, so the entry sets up no frame.
+//! `fib(n)` tests `n < 2` and returns; the block of its calls reads `m = mov
+//! n`, so the entry sets up no frame.
 
 use std::sync::Arc;
 

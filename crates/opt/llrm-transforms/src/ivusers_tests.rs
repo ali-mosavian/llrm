@@ -85,7 +85,14 @@ fn with_flagged_users(
         asked.set(asked.get() + 1);
         true
     };
-    let env = Env { safe_to_speculate: &safe, ephemeral: &|_| false, native_widths: &[], use_list_order, phi_operand_uses, phi_users_first: PHI_FIRST.with(Cell::get) };
+    let env = Env {
+        safe_to_speculate: &safe,
+        ephemeral: &|_| false,
+        native_widths: &[],
+        use_list_order,
+        phi_operand_uses,
+        phi_users_first: PHI_FIRST.with(Cell::get),
+    };
     let grown = llrm_mir::dense::idset_resizes::<InstId>();
     let users = IvUsers::of(&mut se, &cx, header, &env);
     GROWN.with(|n| n.set(llrm_mir::dense::idset_resizes::<InstId>() - grown));
@@ -213,7 +220,14 @@ fn test_the_block_places_are_made_once_for_all_the_loops_of_a_function() {
         assumptions: &assumptions,
     };
     let mut se = ScalarEvolution::new();
-    let env = Env { safe_to_speculate: &|_| true, ephemeral: &|_| false, native_widths: &[], use_list_order: false, phi_operand_uses: false, phi_users_first: false };
+    let env = Env {
+        safe_to_speculate: &|_| true,
+        ephemeral: &|_| false,
+        native_widths: &[],
+        use_list_order: false,
+        phi_operand_uses: false,
+        phi_users_first: false,
+    };
     let before = llrm_mir::module::block_places_built();
     let headers: Vec<_> = loops.top_level_loops().map(|one| one.get_header()).collect();
     assert_eq!(headers.len(), 6);
@@ -288,7 +302,14 @@ fn users_on_a_16_bit_native_target(text: &str) -> Vec<String> {
     };
     let mut se = ScalarEvolution::new();
     let header = loops.top_level_loops().next().expect("a loop").get_header();
-    let env = Env { safe_to_speculate: &|_: InstId| true, ephemeral: &|_| false, native_widths: &[16], use_list_order: false, phi_operand_uses: false, phi_users_first: false };
+    let env = Env {
+        safe_to_speculate: &|_: InstId| true,
+        ephemeral: &|_| false,
+        native_widths: &[16],
+        use_list_order: false,
+        phi_operand_uses: false,
+        phi_users_first: false,
+    };
     let users = IvUsers::of(&mut se, &cx, header, &env);
     users.uses.iter().map(|u| format!("{:?}", function.instruction(u.user).opcode)).collect()
 }
@@ -353,7 +374,10 @@ exit:
         // The loop is the second block; its first gep is `%a`.
         let a = function
             .iter_block(function.layout()[1])
-            .find(|&inst| matches!(function.instruction(inst).opcode, Opcode::GetElementPtr { .. }))
+            .find(|&inst| matches!(
+                function.instruction(inst).opcode,
+                Opcode::GetElementPtr { .. }
+            ))
             .expect("the gep of %a");
         let index = function.instruction(a).operands[1];
         function.set_operand(a, 1, index);
@@ -402,9 +426,15 @@ exit:
 ";
     let phi_operands = |asked: bool| {
         let mut found = Vec::new();
-        with_flagged_users(text, false, asked, |_| {}, |cx, _, users, _, _| {
-            found = users.uses.iter().map(|u| named(cx, u)).filter(|(opcode, _)| opcode == "Phi").collect();
-        });
+        with_flagged_users(
+            text,
+            false,
+            asked,
+            |_| {},
+            |cx, _, users, _, _| {
+                found = users.uses.iter().map(|u| named(cx, u)).filter(|(opcode, _)| opcode == "Phi").collect();
+            },
+        );
         found.sort();
         found
     };
@@ -415,9 +445,9 @@ exit:
 
 /// DEVIATE IU1, phis first. div_constants_ulong m64 -O1: a phi merges `i`,
 /// `16 - i` and more; the pin's "do not recurse into a phi twice" keeps the
-/// operand it meets first and drops the rest, so a phi met first leaves `16 - i`
-/// computed in place. In use-list order a re-added `16 - i` was met before the
-/// phi, which took it as the phi's use: a second counter, one more
+/// operand it meets first and drops the rest, so a phi met first leaves `16 -
+/// i` computed in place. In use-list order a re-added `16 - i` was met before
+/// the phi, which took it as the phi's use: a second counter, one more
 /// callee-saved push (4334 B against 4173 B).
 #[test]
 fn a_phi_is_met_before_the_other_users_of_a_counter_in_use_list_order() {

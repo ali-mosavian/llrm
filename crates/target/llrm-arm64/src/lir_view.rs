@@ -154,11 +154,11 @@ pub fn content(op: &Op) -> i64 {
     hasher.finish() as i64
 }
 
-/// The `adrp` and `add :lo12:` the pin keeps as one `MOVaddr` until after
-/// allocation (`AArch64ExpandPseudo`): a page register defined once, read by
-/// one `add` of the same symbol in the same block. By block: the index of the
-/// `add` and of its `adrp`. As one instruction the allocator can make the
-/// address again where it is needed instead of spilling it.
+// The `adrp` and `add :lo12:` the pin keeps as one `MOVaddr` until after
+// allocation (`AArch64ExpandPseudo`): a page register defined once, read by
+// one `add` of the same symbol in the same block. By block: the index of the
+// `add` and of its `adrp`. As one instruction the allocator can make the
+// address again where it is needed instead of spilling it.
 thread_local! {
     static PAIR_RUNS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }

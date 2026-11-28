@@ -1,5 +1,6 @@
-//! `llrm-m68k-llc -S -o - FILE.ll` wrote its assembly to a file named `-` in the working directory (a stray
-//! `crates/target/llrm-m68k/-` was committed that way). `-` is stdout.
+//! `llrm-m68k-llc -S -o - FILE.ll` wrote its assembly to a file named `-` in
+//! the working directory (a stray `crates/target/llrm-m68k/-` was committed
+//! that way). `-` is stdout.
 
 use std::process::Command;
 

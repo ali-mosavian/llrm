@@ -43,7 +43,10 @@ fn two_unsigned_halves_are_multiplied_with_mulu_w_where_the_long_multiply_is_a_c
     for cpu in NO_LONG_MULTIPLY {
         for level in [Level::O2, Level::Os] {
             let out = asm(&product("zext", "zext"), cpu, level);
-            assert!(out.contains("mulu\t") && !out.contains("__mulsi3") && !out.contains("mulu.l"), "{cpu} {level:?}:\n{out}");
+            assert!(
+                out.contains("mulu\t") && !out.contains("__mulsi3") && !out.contains("mulu.l"),
+                "{cpu} {level:?}:\n{out}"
+            );
         }
     }
 }
@@ -56,9 +59,11 @@ fn two_signed_halves_are_multiplied_with_muls_w_where_the_long_multiply_is_a_cal
     }
 }
 
-/// `(u32)a * b` of two words was `moveq #0,%d1; move.w a,%d1; moveq #0,%d0; move.w b,%d0; muls.l %d1,%d0` (16 B,
-/// 43 clocks on the 68020); `mulu.w` and `muls.w` read the low word only, so the operand's extension is dead
-/// (mul_words_to_long, bench/dot at 68020 Os). The extension of the tied operand is still made.
+/// `(u32)a * b` of two words was `moveq #0,%d1; move.w a,%d1; moveq #0,%d0;
+/// move.w b,%d0; muls.l %d1,%d0` (16 B, 43 clocks on the 68020); `mulu.w` and
+/// `muls.w` read the low word only, so the operand's extension is dead
+/// (mul_words_to_long, bench/dot at 68020 Os). The extension of the tied
+/// operand is still made.
 #[test]
 fn extended_halfwords_take_the_word_multiply_on_every_cpu() {
     for cpu in CPUS {
@@ -130,7 +135,8 @@ fn the_word_multiply_is_priced_no_slower_than_the_long_one_on_every_cpu() {
 
 #[test]
 fn a_constant_operand_is_left_to_the_pins_folds() {
-    // `(x + 3) * 5` is `x * 5 + 15` in the pin; the half multiply must not take the product first
+    // `(x + 3) * 5` is `x * 5 + 15` in the pin; the half multiply must not take
+    // the product first
     let ir = "target datalayout = \"E-m:e-p:32:16:32-i8:8:8-i16:16:16-i32:16:32-n8:16:32-a:0:16-S16\"\n\
               define i32 @f(i16 %a) {\n  %x = zext i16 %a to i32\n  %s = add i32 %x, 3\n  %m = mul i32 %s, 5\n  ret i32 %m\n}";
     let out = asm(ir, "68000", Level::O2);
@@ -138,16 +144,22 @@ fn a_constant_operand_is_left_to_the_pins_folds() {
     assert!(out.contains("#15"), "the fold's constant 3 * 5 is added after the product:\n{out}");
 }
 
-/// `(short n) * 1000` was `ext.l` and a chain or `__mulsi3` (68000 -O1 +60 B, -Os +70 B against gcc; -O2 +14 B; 68020+ +12 B in
-/// `register_args_truncate`) because the half multiply left every constant operand to the folds. gcc: `muls.w #1000,%d1`.
+/// `(short n) * 1000` was `ext.l` and a chain or `__mulsi3` (68000 -O1 +60 B,
+/// -Os +70 B against gcc; -O2 +14 B; 68020+ +12 B in `register_args_truncate`)
+/// because the half multiply left every constant operand to the folds. gcc:
+/// `muls.w #1000,%d1`.
 #[test]
 fn a_halfword_times_a_constant_that_fits_it_is_one_muls_w() {
     let ir = "target datalayout = \"E-m:e-p:32:16:32-i8:8:8-i16:16:16-i32:16:32-n8:16:32-a:0:16-S16\"\n\
               define i32 @f(i16 %a) {\n  %x = sext i16 %a to i32\n  %m = mul i32 %x, 1000\n  ret i32 %m\n}";
     for cpu in CPUS {
         let out = asm(ir, cpu, Level::Os);
-        assert!(out.contains("muls\t") && out.contains("#1000") && !out.contains("__mulsi3") && !out.contains("muls.l"), "{cpu} Os:\n{out}");
-        // -O1 is judged by clocks: a chain or `muls.l` may beat `muls.w`, a libcall never does
+        assert!(
+            out.contains("muls\t") && out.contains("#1000") && !out.contains("__mulsi3") && !out.contains("muls.l"),
+            "{cpu} Os:\n{out}"
+        );
+        // -O1 is judged by clocks: a chain or `muls.l` may beat `muls.w`, a
+        // libcall never does
         let out = asm(ir, cpu, Level::O1);
         assert!(!out.contains("__mulsi3"), "{cpu} O1:\n{out}");
     }
@@ -158,8 +170,9 @@ const NINE_LIVE: &str = "target datalayout = \"E-m:e-p:32:16:32-i8:8:8-i16:16:16
 const NINE_LAST: &str = "target datalayout = \"E-m:e-p:32:16:32-i8:8:8-i16:16:16-i32:16:32-n8:16:32-a:0:16-S16\"\n\
               define i32 @f(i16 %a) {\n  %x = sext i16 %a to i32\n  %m = mul i32 %x, 9\n  ret i32 %m\n}";
 
-/// algebra 68000 -Os +2 B: `(long)*a * 9 ... - (long)*a` took `muls.w` where the chain `x<<3 + x` stood. The half multiply
-/// overwrites its operand, so a live one costs a copy, which the chain's own move already counts.
+/// algebra 68000 -Os +2 B: `(long)*a * 9 ... - (long)*a` took `muls.w` where
+/// the chain `x<<3 + x` stood. The half multiply overwrites its operand, so a
+/// live one costs a copy, which the chain's own move already counts.
 #[test]
 fn a_live_operand_costs_the_half_multiply_a_copy() {
     for level in [Level::O1, Level::Os] {
@@ -168,17 +181,19 @@ fn a_live_operand_costs_the_half_multiply_a_copy() {
     }
 }
 
-/// algebra 68000 -O1 +2 B: the half multiply is smaller and slower than the chain, so at -O1 (each axis strict) it must beat
-/// the chain on both to replace it.
+/// algebra 68000 -O1 +2 B: the half multiply is smaller and slower than the
+/// chain, so at -O1 (each axis strict) it must beat the chain on both to
+/// replace it.
 #[test]
 fn at_o1_a_chain_the_half_multiply_does_not_beat_on_both_axes_stays() {
     let out = asm(NINE_LAST, "68000", Level::O1);
     assert!(!out.contains("muls"), "{out}");
 }
 
-/// `sum += cells[i] * (i + 1)` over a `short i` kept the `ext.l` of `i + 1` (`move.l %d1,%d4; ext.l %d4; muls
-/// %d3,%d4`, 4 clocks an iteration in loop_versioning -O3 68000, +5.7% against gcc): `muls.w` reads the low word of
-/// its destination only.
+/// `sum += cells[i] * (i + 1)` over a `short i` kept the `ext.l` of `i + 1`
+/// (`move.l %d1,%d4; ext.l %d4; muls %d3,%d4`, 4 clocks an iteration in
+/// loop_versioning -O3 68000, +5.7% against gcc): `muls.w` reads the low word
+/// of its destination only.
 #[test]
 fn a_halfword_multiplicand_is_not_extended_first() {
     let ir = "target datalayout = \"E-m:e-p:32:16:32-i8:8:8-i16:16:16-i32:16:32-n8:16:32-a:0:16-S16\"
