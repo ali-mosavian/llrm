@@ -121,3 +121,31 @@ def test_the_vouch_that_let_a_pr_land_is_logged(capsys):
     run, calls = stub({"isDraft": False, "headRefOid": HEAD, "state": "OPEN"})
     assert ps.squash("7", info(), "", run=run)
     assert f"#7: vouched: 7 {HEAD} 2026-11-28T17:14Z coordinator" in capsys.readouterr().out
+
+
+def test_a_known_red_line_goes_to_the_log_never_the_squash_body(capsys):
+    """Rule 11-04: a squash body is empty. --known-red put "Known red: sc (2438)" in the commit."""
+    run, calls = stub({"isDraft": False, "headRefOid": HEAD, "state": "OPEN"})
+    assert ps.squash("7", info(), "Known red: sc (2438)", run=run)
+    [cmd] = merges(calls)
+    assert cmd[cmd.index("--body") + 1] == ""
+    assert "Known red: sc (2438)" in capsys.readouterr().out
+
+
+def test_a_tree_the_runner_formatted_after_the_test_is_still_compared(tmp_path):
+    """A head the runner formatted after its test landed with "tree not compared": the expected tree is the tested commit with the formatted head merged in."""
+    sh(tmp_path, "init", "-q", "-b", "main")
+    (tmp_path / "a.rs").write_text("fn a(){}\n")
+    sh(tmp_path, "add", "-A")
+    sh(tmp_path, "commit", "-qm", "base")
+    sh(tmp_path, "checkout", "-qb", "pr")
+    (tmp_path / "b.rs").write_text("fn b(){}\n")
+    sh(tmp_path, "add", "-A")
+    sh(tmp_path, "commit", "-qm", "pr")
+    tested = sh(tmp_path, "rev-parse", "HEAD")
+    (tmp_path / "b.rs").write_text("fn b() {}\n")
+    sh(tmp_path, "commit", "-qam", "style: fmt")
+    formatted = sh(tmp_path, "rev-parse", "HEAD")
+    tree, why = ps.expected_tree(tested, [formatted], cwd=tmp_path)
+    assert not why and tree == sh(tmp_path, "rev-parse", f"{formatted}^{{tree}}")
+    assert tree != sh(tmp_path, "rev-parse", f"{tested}^{{tree}}")
