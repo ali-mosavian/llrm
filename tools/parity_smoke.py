@@ -665,6 +665,7 @@ SCANNERS = {
     "no_kill_by_pattern": "scans scripts",
     "no_partial_ecx_counts": "scans the 32-bit runtime assembly",
     "selectiondag_registry": "reads the SD registry in the plan and every source's SD numbers",
+    "tmp_paths_per_process": "reads the tests' sources for fixed scratch names",
     "no_local_paths": "scans docs",
     "target_facts": "reads the target descriptions' facts",
     "no_todo": "scans sources",
