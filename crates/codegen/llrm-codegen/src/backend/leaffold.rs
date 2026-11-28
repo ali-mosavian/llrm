@@ -1,4 +1,5 @@
-//! A constant a leaf block makes for a join, made in the block that jumps to it.
+//! A constant a leaf block makes for a join, made in the block that jumps to
+//! it.
 //!
 //! # How it works
 //! A block of one constant and a jump (`v := mov 3; jmp J`) that one branch
@@ -30,8 +31,8 @@
 //! Phase 1 of the machine phases, after `SharedConstants`, before `SsaSpill`.
 //!
 //! # Example
-//! At -Os on a target that enables it, a leaf block holding only a constant and a
-//! jump is removed and the constant is made in the block that branched to it.
+//! At -Os on a target that enables it, a leaf block holding only a constant and
+//! a jump is removed and the constant is made in the block that branched to it.
 //!
 //! ```text
 //! p:  cmp x, 7 ; je l    l: v := mov 3 ; jmp j   j: r = phi [l: v]
@@ -102,9 +103,7 @@ fn ends_with(
     block: &LirBlock,
     ops: &[Operation],
 ) -> Option<usize> {
-    let last = block.insns.iter().rposition(|one| {
-        one.what.as_ref().is_some_and(|what| ops.contains(&what.op))
-    })?;
+    let last = block.insns.iter().rposition(|one| one.what.as_ref().is_some_and(|what| ops.contains(&what.op)))?;
     Some(last)
 }
 
@@ -141,12 +140,16 @@ pub fn folded(body: &LirBody) -> LirBody {
                     continue;
                 }
                 let Some(what) = _constant_made_in(leaf, value) else { continue };
-                if !matches!(what.sources.first(), Some(Loc::Imm(imm)) if imm.address.is_none()) {
+                if !matches!(
+                    what.sources.first(),
+                    Some(Loc::Imm(imm)) if imm.address.is_none()
+                ) {
                     continue;
                 }
-                let reached = real(pred).iter().filter_map(|one| one.what.as_ref()).any(|last| {
-                    matches!(last.op, Operation::Jump | Operation::Branch) && last.target == Some(from)
-                });
+                let reached = real(pred)
+                    .iter()
+                    .filter_map(|one| one.what.as_ref())
+                    .any(|last| matches!(last.op, Operation::Jump | Operation::Branch) && last.target == Some(from));
                 // One fold per branching block; none where it already reaches
                 // the join (the phi would take two values from it).
                 if !reached
@@ -198,17 +201,19 @@ pub fn folded(body: &LirBody) -> LirBody {
             ));
             // Ahead of the compare the branch reads: a `mov r, 0` between them
             // would keep the flags from being a `xor`'s to clobber.
-            let mut cut = ends_with(old, &[Operation::Jump, Operation::Branch, Operation::Return]).map_or(insns.len(), |_| {
-                let mut cut = insns.len();
-                while cut > 0
-                    && insns[cut - 1].what.as_ref().is_some_and(|w| {
-                        matches!(w.op, Operation::Jump | Operation::Branch | Operation::Return)
-                    })
-                {
-                    cut -= 1;
-                }
-                cut
-            });
+            let mut cut =
+                ends_with(old, &[Operation::Jump, Operation::Branch, Operation::Return]).map_or(insns.len(), |_| {
+                    let mut cut = insns.len();
+                    while cut > 0
+                        && insns[cut - 1]
+                            .what
+                            .as_ref()
+                            .is_some_and(|w| matches!(w.op, Operation::Jump | Operation::Branch | Operation::Return))
+                    {
+                        cut -= 1;
+                    }
+                    cut
+                });
             while cut > 0 && insns[cut - 1].what.as_ref().is_some_and(|w| w.op == Operation::Compare) {
                 cut -= 1;
             }
@@ -320,9 +325,21 @@ mod tests {
             "t",
             0,
             [
-                block(0, vec![of("cmp", Operation::Compare, None), of("je", Operation::Branch, Some(1)), first], &[1, 4]),
+                block(
+                    0,
+                    vec![of("cmp", Operation::Compare, None), of("je", Operation::Branch, Some(1)), first],
+                    &[1, 4],
+                ),
                 block(1, vec![make(11, 3), of("jmp", Operation::Jump, Some(9))], &[9]),
-                block(4, vec![of("cmp", Operation::Compare, None), of("je", Operation::Branch, Some(2)), of("jmp", Operation::Jump, Some(3))], &[2, 3]),
+                block(
+                    4,
+                    vec![
+                        of("cmp", Operation::Compare, None),
+                        of("je", Operation::Branch, Some(2)),
+                        of("jmp", Operation::Jump, Some(3)),
+                    ],
+                    &[2, 3],
+                ),
                 block(2, vec![make(12, 5), of("jmp", Operation::Jump, Some(9))], &[9]),
                 block(3, vec![make(13, 0), of("jmp", Operation::Jump, Some(9))], &[9]),
                 join,
@@ -344,7 +361,8 @@ mod tests {
         let done = folded(&body);
         assert!(at(&done, 1).is_none() && at(&done, 2).is_none(), "the leaves are gone");
         assert_eq!(names(at(&done, 0).unwrap()), ["mov", "cmp", "je", "jmp"]);
-        let branch = at(&done, 0).unwrap().insns.iter().find_map(|one| one.what.as_ref().filter(|w| w.op == Operation::Branch));
+        let branch =
+            at(&done, 0).unwrap().insns.iter().find_map(|one| one.what.as_ref().filter(|w| w.op == Operation::Branch));
         assert_eq!(branch.and_then(|w| w.target), Some(9));
         let phi = &at(&done, 9).unwrap().phis[0];
         assert!(phi.incoming.contains(&(0, 11)) && phi.incoming.contains(&(4, 12)), "{:?}", phi.incoming);
@@ -401,7 +419,15 @@ mod tests {
     fn test_a_block_that_is_a_branching_block_and_a_join_keeps_its_phis_predecessors() {
         let middle = LirBlock {
             phis: vec![Phi { result: 9, incoming: vec![(1, 11), (2, 12)] }].into(),
-            ..block(5, vec![of("cmp", Operation::Compare, None), of("je", Operation::Branch, Some(6)), of("jmp", Operation::Jump, Some(8))], &[6, 8])
+            ..block(
+                5,
+                vec![
+                    of("cmp", Operation::Compare, None),
+                    of("je", Operation::Branch, Some(6)),
+                    of("jmp", Operation::Jump, Some(8)),
+                ],
+                &[6, 8],
+            )
         };
         let last = LirBlock {
             phis: vec![Phi { result: 15, incoming: vec![(6, 14), (8, 9)] }].into(),
@@ -411,7 +437,15 @@ mod tests {
             "t",
             0,
             [
-                block(0, vec![of("cmp", Operation::Compare, None), of("je", Operation::Branch, Some(1)), of("jmp", Operation::Jump, Some(2))], &[1, 2]),
+                block(
+                    0,
+                    vec![
+                        of("cmp", Operation::Compare, None),
+                        of("je", Operation::Branch, Some(1)),
+                        of("jmp", Operation::Jump, Some(2)),
+                    ],
+                    &[1, 2],
+                ),
                 block(1, vec![make(11, 3), of("jmp", Operation::Jump, Some(5))], &[5]),
                 block(2, vec![make(12, 4), of("jmp", Operation::Jump, Some(5))], &[5]),
                 middle,
@@ -430,7 +464,8 @@ mod tests {
         for join in &done.blocks {
             for phi in join.phis.iter() {
                 for (from, _) in &phi.incoming {
-                    let pred = at(&done, *from).unwrap_or_else(|| panic!("phi of {} reads from the gone block {from}", join.at));
+                    let pred = at(&done, *from)
+                        .unwrap_or_else(|| panic!("phi of {} reads from the gone block {from}", join.at));
                     assert!(pred.succ.contains(&join.at), "{from} is no predecessor of {}", join.at);
                 }
             }

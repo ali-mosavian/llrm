@@ -164,7 +164,8 @@ pub fn lea_start(
     let costs = &cpu.operations;
     // A prefixed dword `lea` is its encoding's price, by the parts it names.
     let price = if costs.address_dword > 0 && width != operand && width > 1 {
-        costs.address_dword + costs.address_third * (terms.len() + usize::from(cell.offset != 0)).saturating_sub(2) as i64
+        costs.address_dword
+            + costs.address_third * (terms.len() + usize::from(cell.offset != 0)).saturating_sub(2) as i64
     } else {
         costs.sized(costs.address, width, operand)
     };

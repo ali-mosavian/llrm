@@ -5,8 +5,9 @@ mod common;
 use common::pipeline::datalayout;
 use llrm_6502::driver::{Level, Request, assembly};
 
-/// `store (fptrunc x)` was combined into a truncating store of the `double`, which the target
-/// has no instruction for: no `__truncdfsf2` call, eight bytes written over a four-byte object.
+/// `store (fptrunc x)` was combined into a truncating store of the `double`,
+/// which the target has no instruction for: no `__truncdfsf2` call, eight bytes
+/// written over a four-byte object.
 #[test]
 fn a_double_stored_as_a_float_is_converted_by_the_library_first() {
     let ir = "define void @g(ptr %q, ptr %p) {\n  %x = load double, ptr %q\n  %r = fptrunc double %x to float\n  store float %r, ptr %p\n  ret void\n}\n";

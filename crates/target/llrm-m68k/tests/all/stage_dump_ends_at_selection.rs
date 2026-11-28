@@ -1,7 +1,8 @@
-//! `LLRM_MIR_STAGES` stopped at the shared pipeline's last stage, but the m68k mid-end (LSR with the m68k TTI,
-//! exit-test and multiply narrowing) edits the IR after it: the dump showed a pointer walk where selection read the
-//! end-biased index, and compiling the dumped IR again ran LSR twice and gave a third shape (a day of COPY-OS
-//! chasing a form the dump did not show).
+//! `LLRM_MIR_STAGES` stopped at the shared pipeline's last stage, but the m68k
+//! mid-end (LSR with the m68k TTI, exit-test and multiply narrowing) edits the
+//! IR after it: the dump showed a pointer walk where selection read the
+//! end-biased index, and compiling the dumped IR again ran LSR twice and gave a
+//! third shape (a day of COPY-OS chasing a form the dump did not show).
 
 use llrm_m68k::driver::{Level, TARGET_MID_END_STAGE, assembly_dumping, cpu_of};
 
@@ -27,8 +28,11 @@ fn the_dump_ends_with_the_ir_after_the_targets_own_mid_end() {
     let last = dir.join(TARGET_MID_END_STAGE);
     let text = std::fs::read_to_string(&last).unwrap_or_else(|error| panic!("{}: {error}", last.display()));
     assert!(text.contains("define") && text.contains("@clear"), "{text}");
-    let mut stages: Vec<_> =
-        std::fs::read_dir(&dir).unwrap().filter_map(|entry| entry.ok()?.file_name().into_string().ok()).filter(|name| name.ends_with(".ll")).collect();
+    let mut stages: Vec<_> = std::fs::read_dir(&dir)
+        .unwrap()
+        .filter_map(|entry| entry.ok()?.file_name().into_string().ok())
+        .filter(|name| name.ends_with(".ll"))
+        .collect();
     stages.sort();
     assert_eq!(stages.last().map(String::as_str), Some(TARGET_MID_END_STAGE), "{stages:?}");
     let _ = std::fs::remove_dir_all(&dir);

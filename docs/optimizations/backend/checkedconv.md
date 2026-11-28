@@ -1,10 +1,10 @@
 > Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/checkedconv.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/checkedconv.rs); edit the header, not this file.
-<!-- src: crates/codegen/llrm-codegen/src/backend/checkedconv.rs sha256:e8494b8652c8af3001f415947b06aed16fe5f8b37202580dad19e032e5a14a2b -->
+<!-- src: crates/codegen/llrm-codegen/src/backend/checkedconv.rs sha256:25b2385d44af32032405266c97a89356b0192a339f33d4ebe77e0bc9b4a8ab55 -->
 
 # checkedconv
 
-Expands `llvm.experimental.fp{to}{s,u}i.checked`, a float taken to an integer together
-with whether it fits, before instruction selection.
+Expands `llvm.experimental.fp{to}{s,u}i.checked`, a float taken to an
+integer together with whether it fits, before instruction selection.
 
 ## How it works
 Where the target converts into an integer wider than the result

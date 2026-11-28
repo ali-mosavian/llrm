@@ -57,15 +57,19 @@ pub fn dead_machine_instruction_elim<C>(function: &mut MFunction<C>) -> bool {
                 live |= inst.reads_flags();
             }
             let before = block.phis.len();
-            block.phis.retain(|phi| {
-                let unread = matches!(phi.result, Reg::Virt(value) if readers[value as usize] == 0);
-                if unread {
-                    for &(_, register) in &phi.incoming {
-                        adjust(&mut readers, register, -1);
-                    }
-                }
-                !unread
-            });
+            block
+                .phis
+                .retain(
+                    |phi| {
+                        let unread = matches!(phi.result, Reg::Virt(value) if readers[value as usize] == 0);
+                        if unread {
+                            for &(_, register) in &phi.incoming {
+                                adjust(&mut readers, register, -1);
+                            }
+                        }
+                        !unread
+                    },
+                );
             gone |= block.phis.len() != before;
         }
         if !gone {

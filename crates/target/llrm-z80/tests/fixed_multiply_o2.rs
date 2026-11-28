@@ -1,6 +1,8 @@
-//! fixed_point -O2/-O3 (15010 B / 1298178 T against 9170 B / 1028697 T at -O1): its `llvm.*mul.fix.sat` products were
-//! 240 `__mulhi3` calls in `main` where -O1 has 72 and 42 `__umulhisi3`. A function with a fixed-point multiply of 32
-//! bits or more is also selected with the product call, and the module price picks the smaller.
+//! fixed_point -O2/-O3 (15010 B / 1298178 T against 9170 B / 1028697 T at -O1):
+//! its `llvm.*mul.fix.sat` products were 240 `__mulhi3` calls in `main` where
+//! -O1 has 72 and 42 `__umulhisi3`. A function with a fixed-point multiply of
+//! 32 bits or more is also selected with the product call, and the module price
+//! picks the smaller.
 
 use llrm_z80::compile::text;
 use llrm_z80::driver::{Level, Request};

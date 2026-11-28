@@ -2,10 +2,7 @@
 
 use std::process::Command;
 
-fn assembly(
-    name: &str,
-    ir: &str,
-) -> String {
+fn assembly(ir: &str) -> String {
     let guard = tempfile::tempdir().unwrap();
     let dir = guard.path().to_path_buf();
     let source = dir.join("g.ll");
@@ -28,7 +25,7 @@ fn assembly(
 /// them the three zero arrays.
 #[test]
 fn a_zero_initialised_array_is_reserved_not_emitted() {
-    let text = assembly("array", "@a = global [1024 x i16] zeroinitializer\n");
+    let text = assembly("@a = global [1024 x i16] zeroinitializer\n");
     assert!(text.contains(".area _BSS"), "{text}");
     assert!(text.contains(".ds 2048"), "{text}");
     assert!(!text.contains(".db 0,0"), "{text}");
@@ -38,7 +35,7 @@ fn a_zero_initialised_array_is_reserved_not_emitted() {
 /// stays in the image: a ROM table has no start-up clear.
 #[test]
 fn initialised_and_constant_data_keep_their_bytes() {
-    let text = assembly("kept", "@d = global [4 x i8] c\"\\00\\01\\00\\00\"\n@k = constant [4 x i8] zeroinitializer\n");
+    let text = assembly("@d = global [4 x i8] c\"\\00\\01\\00\\00\"\n@k = constant [4 x i8] zeroinitializer\n");
     assert!(text.contains(".db 0,1,0,0"), "{text}");
     assert!(text.contains(".db 0,0,0,0"), "{text}");
 }

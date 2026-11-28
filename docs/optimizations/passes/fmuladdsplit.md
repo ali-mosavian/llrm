@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/fmuladdsplit.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/fmuladdsplit.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/fmuladdsplit.rs sha256:417c393e6d649627a9cc0bbe066f4cb83031b9b6ff9fd2d327ae552fca4ccdd1 -->
+<!-- src: crates/opt/llrm-transforms/src/fmuladdsplit.rs sha256:738fc0ed5e0757dee8094c15bb7b0fe3b6f1a3183594e65432041387173438cb -->
 
 # fmuladdsplit
 
@@ -35,8 +35,8 @@ changes the unrolling price of the loop that holds it. Only the invariant
 product is split here.
 
 ## Example
-A `llvm.fmuladd` in a loop whose factors are defined outside it and whose addend
-is not becomes `fmul` and `fadd`, so LICM hoists the multiply.
+A `llvm.fmuladd` in a loop whose factors are defined outside it and whose
+addend is not becomes `fmul` and `fadd`, so LICM hoists the multiply.
 
 ```text
 loop:  %p = call fmuladd(%r, 6.7e7, %x)        loop:  %m = fmul %r, 6.7e7

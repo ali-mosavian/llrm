@@ -30,13 +30,15 @@ fn the_loop_calls_fib_and_branches_back_conditionally() {
 }
 
 /// An interpreter's handlers meet in a join that jumps to the one `goto *`
-/// dispatch. One round of tail duplication copies the dispatch into the join and
-/// stops; the pin repeats until nothing changes (`tailDuplicateBlocks`), so the
-/// join, now a computed goto itself, is copied into every handler. QB's arm64
-/// `exec_loop` -Os kept 19 indirect branches where clang has 155: +19..47% instructions.
+/// dispatch. One round of tail duplication copies the dispatch into the join
+/// and stops; the pin repeats until nothing changes (`tailDuplicateBlocks`), so
+/// the join, now a computed goto itself, is copied into every handler. QB's
+/// arm64 `exec_loop` -Os kept 19 indirect branches where clang has 155:
+/// +19..47% instructions.
 #[test]
 fn every_handler_ends_in_its_own_indirect_branch_not_a_jump_to_a_shared_dispatch() {
-    let asm = driver::assembly(include_str!("data/taildup_dispatch_chain.ll"), Platform::Linux, Level::Os).expect("lowers");
+    let asm =
+        driver::assembly(include_str!("data/taildup_dispatch_chain.ll"), Platform::Linux, Level::Os).expect("lowers");
     let indirect = asm.lines().filter(|line| line.trim_start().starts_with("br x")).count();
     assert!(indirect >= 3, "{indirect} indirect branches for 3 handlers:\n{asm}");
 }

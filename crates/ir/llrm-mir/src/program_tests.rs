@@ -9,7 +9,9 @@ use crate::module::Function;
 use crate::module::{GlobalKind, Linkage, Module};
 use crate::opcode::Attribute;
 use crate::parse;
-use crate::passes::{Analyses, Analysis, FunctionUses, ModuleAnalyses, ModuleAnalysis, ModulePass, PassManager, PreservedAnalyses};
+use crate::passes::{
+    Analyses, Analysis, FunctionUses, ModuleAnalyses, ModuleAnalysis, ModulePass, PassManager, PreservedAnalyses,
+};
 use crate::program::{Program, ProgramAnalyses, ProgramAnalysis, ProgramPass};
 use crate::target::Neutral;
 
@@ -228,7 +230,9 @@ fn an_edited_body_is_the_only_one_function_uses_walks_again() {
 /// every compile that dropped a last use).
 #[test]
 fn function_uses_brought_up_to_date_forget_a_name_no_body_uses() {
-    let with = module("define void @f() {\nentry:\n  ret void\n}\ndefine void @g() {\nentry:\n  call void @f()\n  ret void\n}\n");
+    let with = module(
+        "define void @f() {\nentry:\n  ret void\n}\ndefine void @g() {\nentry:\n  call void @f()\n  ret void\n}\n",
+    );
     let without = module("define void @f() {\nentry:\n  ret void\n}\ndefine void @g() {\nentry:\n  ret void\n}\n");
     let mut analyses = ModuleAnalyses::of(&with, Rc::new(Neutral));
     analyses.get::<FunctionUses>(&with);

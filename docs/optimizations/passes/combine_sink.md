@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/combine_sink.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/combine_sink.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/combine_sink.rs sha256:48e2551132608e4e55bd5003f885a4c5f2c44ce9469d30cca574914e65038907 -->
+<!-- src: crates/opt/llrm-transforms/src/combine_sink.rs sha256:47d74b06e02453469a240edcdcf8d5e6bbe184b603753c69621f86ae18769fbd -->
 
 # combine_sink
 
@@ -42,7 +42,8 @@ llrm has not translated); `isDroppable` is the `llvm.assume` call (MIR has
 no operand bundles, so no `dereferenceable` bundle keeps a sink away);
 `isEHPad` is `landingpad` (MIR has no funclet pads); debug records are not
 moved (MIR has none); a float is not sunk to a block that only ends the
-function where the target has an x87 stack (`floats_across_blocks`, DEVIATE SINK-X87).
+function where the target has an x87 stack (`floats_across_blocks`, DEVIATE
+SINK-X87).
 
 ## Example
 `%x` is read only in `b1`, whose only predecessor is `b0`:

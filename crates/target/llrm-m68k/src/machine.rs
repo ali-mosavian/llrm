@@ -136,7 +136,6 @@ impl Machine for M68kMachine {
 /// tables: clocks first, then the extension word's bytes at the CPU's price
 /// (`timing::order`). On the 68000 it is 14 clk against 8 for a long.
 pub fn index_is_dearer_than_plain(cpu: crate::dagisel::hooks::Cpu) -> bool {
-    use crate::dagisel::hooks::Cpu;
     static DEARER: crate::percpu::PerCpu<bool> = crate::percpu::PerCpu::new();
     *DEARER.get(cpu, |cpu| {
         let price = |text: &str, bytes: u32| {
@@ -551,6 +550,12 @@ impl Tti for M68k {
     /// A size build refuses an inline of a callee that stays when it grows
     /// the code (SZ1): the callee's bytes against the call sequence's.
     fn opt_size_inline_by_code_size(&self) -> bool {
+        true
+    }
+
+    /// DEVIATE SZ1-O1 (row SZ1-O1): the SZ1 rule holds -O1 too; a small
+    /// platform pays for bytes at every level.
+    fn opt_size_inline_rule_at_o1(&self) -> bool {
         true
     }
 

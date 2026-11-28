@@ -355,7 +355,15 @@ impl Registers {
             }
         }
         let live_out = if optimize { crate::liveness::liveness(f).1 } else { Vec::new() };
-        Registers { optimize, live_out, defs, uses, first_def, positions: HashMap::default(), entering: HashMap::default() }
+        Registers {
+            optimize,
+            live_out,
+            defs,
+            uses,
+            first_def,
+            positions: HashMap::default(),
+            entering: HashMap::default(),
+        }
     }
 
     /// The block holding the one definition of `reg` whose value is live on
@@ -370,7 +378,8 @@ impl Registers {
     ) -> Option<usize> {
         if !self.entering.contains_key(&reg) {
             let n = f.blocks.len();
-            let defines: Vec<bool> = f.blocks.iter().map(|b| b.iter().any(|inst| inst.defs().any(|r| r == reg))).collect();
+            let defines: Vec<bool> =
+                f.blocks.iter().map(|b| b.iter().any(|inst| inst.defs().any(|r| r == reg))).collect();
             // The definitions (by block) that reach each block's entry.
             let mut reaching: Vec<Vec<usize>> = vec![Vec::new(); n];
             let mut work: Vec<usize> = (0..n).filter(|&b| defines[b]).collect();

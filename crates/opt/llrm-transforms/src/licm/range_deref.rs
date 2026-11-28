@@ -1,6 +1,6 @@
-//! DEVIATE LM2 (beyond the pin; owner w11, exit 2026-11-24; target opt-in `Tti::licm_range_deref`): a load through a
-//! variable index into an object of known size is dereferenceable when SCEV
-//! bounds the offset inside it.
+//! DEVIATE LM2 (beyond the pin; owner w11, exit 2026-11-24; target opt-in
+//! `Tti::licm_range_deref`): a load through a variable index into an object of
+//! known size is dereferenceable when SCEV bounds the offset inside it.
 //!
 //! The pin's `isDereferenceableAndAlignedPointer` reads constant offsets only,
 //! and `isDereferenceableAndAlignedInLoop` (SCEV) only a pointer that is an

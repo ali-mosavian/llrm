@@ -12,8 +12,8 @@
 //!
 //! A path that never reaches Save pays nothing: no push, no frame, a bare
 //! `ret`. A path that falls into a return the early paths share takes its
-//! registers back at its own end, where it falls in, or, if it jumps, in the one
-//! split block (`tryToSplitRestore`) every such jump goes through.
+//! registers back at its own end, where it falls in, or, if it jumps, in the
+//! one split block (`tryToSplitRestore`) every such jump goes through.
 //!
 //! ```mermaid
 //! %%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, Helvetica Neue, Arial, DejaVu Sans, sans-serif','fontSize':'15px','primaryColor':'#475569','primaryTextColor':'#ffffff','primaryBorderColor':'#334155','lineColor':'#64748b','secondaryColor':'#475569','tertiaryColor':'transparent','clusterBkg':'transparent','clusterBorder':'#64748b','edgeLabelBackground':'#334155','textColor':'#64748b','titleColor':'#64748b'},'flowchart':{'curve':'basis','nodeSpacing':38,'rankSpacing':52,'padding':16,'wrappingWidth':360,'htmlLabels':true,'useMaxWidth':true}}}%%
@@ -257,28 +257,35 @@ pub fn wrapped(
 ) -> Option<Wrap> {
     let shape = shape_of(body);
     let args = (kept.clone(), frame, stack_addressed, size);
-    let found = body.facts.0.stash::<Asked, _>(|asked| {
-        asked
-            .0
-            .iter()
-            .find(|answer| {
-                answer.args == args
-                    && answer.shape == shape
-                    && answer.stamp.differing(body).is_some_and(|changed| changed.is_empty())
-            })
-            .map(|answer| answer.wrap.clone())
-    });
+    let found = body
+        .facts
+        .0
+        .stash::<Asked, _>(
+            |asked| asked
+                .0
+                .iter()
+                .find(|answer| {
+                    answer.args == args
+                        && answer.shape == shape
+                        && answer.stamp.differing(body).is_some_and(|changed| changed.is_empty())
+                })
+                .map(|answer| answer.wrap.clone()),
+        );
     if let Some(wrap) = found {
         return wrap;
     }
     let wrap = wrapped_afresh(body, kept, frame, stack_addressed, size);
     let answer = Answer { stamp: crate::analysis::facts::Stamp::of(body), shape, args, wrap: wrap.clone() };
-    body.facts.0.stash::<Asked, _>(|asked| {
-        if asked.0.len() == ASKS_KEPT {
-            asked.0.remove(0);
-        }
-        asked.0.push(answer);
-    });
+    body.facts
+        .0
+        .stash::<Asked, _>(
+            |asked| {
+                if asked.0.len() == ASKS_KEPT {
+                    asked.0.remove(0);
+                }
+                asked.0.push(answer);
+            },
+        );
     wrap
 }
 
@@ -304,33 +311,36 @@ fn placed_once(
 ) -> Option<saverestore::Placement> {
     let shape = shape_of(body);
     let args = (kept.clone(), frame);
-    let found = body.facts.0.stash::<Placed, _>(|placed| {
-        placed
-            .0
-            .iter()
-            .find(|answer| {
-                answer.args == args
-                    && answer.shape == shape
-                    && answer.stamp.differing(body).is_some_and(|changed| changed.is_empty())
-            })
-            .map(|answer| answer.placement.clone())
-    });
+    let found = body
+        .facts
+        .0
+        .stash::<Placed, _>(
+            |placed| placed
+                .0
+                .iter()
+                .find(|answer| {
+                    answer.args == args
+                        && answer.shape == shape
+                        && answer.stamp.differing(body).is_some_and(|changed| changed.is_empty())
+                })
+                .map(|answer| answer.placement.clone()),
+        );
     if let Some(placement) = found {
         return placement;
     }
     let placement = solve();
-    let answer = PlacedAnswer {
-        stamp: crate::analysis::facts::Stamp::of(body),
-        shape,
-        args,
-        placement: placement.clone(),
-    };
-    body.facts.0.stash::<Placed, _>(|placed| {
-        if placed.0.len() == ASKS_KEPT {
-            placed.0.remove(0);
-        }
-        placed.0.push(answer);
-    });
+    let answer =
+        PlacedAnswer { stamp: crate::analysis::facts::Stamp::of(body), shape, args, placement: placement.clone() };
+    body.facts
+        .0
+        .stash::<Placed, _>(
+            |placed| {
+                if placed.0.len() == ASKS_KEPT {
+                    placed.0.remove(0);
+                }
+                placed.0.push(answer);
+            },
+        );
     placement
 }
 
@@ -440,9 +450,11 @@ fn wrapped_afresh(
                 _ => false,
             };
             if body.blocks.iter().filter(|block| from_save.contains(&block.at)).any(|block| {
-                block.insns.iter().filter_map(|one| one.what.as_ref()).any(|what| {
-                    what.dests.iter().chain(&what.sources).any(&through_stack)
-                })
+                block
+                    .insns
+                    .iter()
+                    .filter_map(|one| one.what.as_ref())
+                    .any(|what| what.dests.iter().chain(&what.sources).any(&through_stack))
             }) {
                 continue;
             }
@@ -614,9 +626,9 @@ fn ends_on_taken_edge_into(
     let Some(what) = printed.next() else { return false };
     // A two-way block ends in the branch and a jump to the other successor.
     if what.op == ir::Operation::Jump && what.target != Some(restore.at) {
-        return printed.next().is_some_and(|branch| {
-            branch.op == ir::Operation::Branch && branch.target == Some(restore.at)
-        });
+        return printed
+            .next()
+            .is_some_and(|branch| branch.op == ir::Operation::Branch && branch.target == Some(restore.at));
     }
     what.op == ir::Operation::Branch && what.target == Some(restore.at) && from.0 + 1 != to.0
 }
@@ -629,12 +641,17 @@ fn never_leaves(
     body: &LirBody,
     block: BlockId,
 ) -> bool {
-    body.blocks.get(block.0 as usize).is_some_and(|one| {
-        one.succ.is_empty()
-            && !one.insns.iter().rev().find(|insn| crate::backend::masm::prints(insn)).is_some_and(|insn| {
-                insn.what.as_ref().is_some_and(|what| what.op == ir::Operation::Return)
-            })
-    })
+    body.blocks
+        .get(block.0 as usize)
+        .is_some_and(
+            |one| one.succ.is_empty()
+                && !one
+                    .insns
+                    .iter()
+                    .rev()
+                    .find(|insn| crate::backend::masm::prints(insn))
+                    .is_some_and(|insn| insn.what.as_ref().is_some_and(|what| what.op == ir::Operation::Return)),
+        )
 }
 
 fn leaves_by_one_jump(
@@ -711,8 +728,9 @@ impl<'a> Uses<'a> {
 
     /// `useOrDefCSROrFI`: any frame index is a use, an incoming argument's
     /// included, so a function whose entry block reads a stack argument keeps
-    /// its Save there, framed or not (x_collatz -O3: the saves were wrapped past
-    /// the early exit and the epilogue paid a `jmp` to the shared bare `ret`).
+    /// its Save there, framed or not (x_collatz -O3: the saves were wrapped
+    /// past the early exit and the epilogue paid a `jmp` to the shared bare
+    /// `ret`).
     fn insn_needs(
         &self,
         one: &Insn,
@@ -1075,9 +1093,19 @@ mod tests {
         let a = make(vec![3]);
         let first = wrapped(&a, &kept, None, false, false);
         // The same instructions, shared, behind another successor list.
-        let b = a.with_blocks(
-            a.blocks.iter().map(|one| if one.at == 2 { LirBlock { succ: vec![].into(), ..(**one).clone() }.into() } else { one.clone() }).collect(),
-        );
+        let b =
+            a.with_blocks(
+                a.blocks
+                    .iter()
+                    .map(|one| {
+                        if one.at == 2 {
+                            LirBlock { succ: vec![].into(), ..(**one).clone() }.into()
+                        } else {
+                            one.clone()
+                        }
+                    })
+                    .collect(),
+            );
         let second = wrapped(&b, &kept, None, false, false);
         assert_eq!(b.facts.0.counted("shrinkwrap"), 2, "the second body was asked afresh");
         assert!(first.is_some());

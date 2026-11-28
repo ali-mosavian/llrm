@@ -3,8 +3,9 @@
 //! saved `rc8`/`rc9` and a spilled argument at the offsets of the new frame
 //! from the old stack pointer, into the caller's slots: `arg_registers_abi`
 //! (hand-sunk `deep`) HALTed at -O1..-Os on the plain compiler. Needs
-//! `llrm-cc` built (`LLRM_CC`). The source's result is `t * 3 + s`: with `t + s` tailcallelim's
-//! accumulator (#10651) made the recursion a loop and no frame was left to open.
+//! `llrm-cc` built (`LLRM_CC`). The source's result is `t * 3 + s`: with `t +
+//! s` tailcallelim's accumulator (#10651) made the recursion a loop and no
+//! frame was left to open.
 
 use std::process::Command;
 

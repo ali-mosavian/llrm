@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/framelowering.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/framelowering.rs); edit the header, not this file.
-<!-- src: crates/codegen/llrm-codegen/src/backend/framelowering.rs sha256:ea3abff6ce15e413e845f680f79fa2ca7b23f85110426520355d9e07c782e2ae -->
+<!-- src: crates/codegen/llrm-codegen/src/backend/framelowering.rs sha256:6a0027124724b799476fe2e11849d39b58d4d7c9538abce265d3497c09aee7fa -->
 
 # framelowering
 
@@ -32,13 +32,13 @@ dead caller-saved register in an epilogue) where one is free.
   add esp,12; pop edi; pop esi; pop ebp
 ```
 
-DEVIATE FL-1 (no number, owner object-refactor): Windows and SEH, funclets, the tail
-call return-address reserve, a Swift async context, the red zone, the
-stack probe and DWARF CFI are not translated: none applies to i486.
+DEVIATE FL-1 (no number, owner object-refactor): Windows and SEH, funclets,
+the tail call return-address reserve, a Swift async context, the red zone,
+the stack probe and DWARF CFI are not translated: none applies to i486.
 
-DEVIATE FL-2 (no number, owner object-refactor): `mergeSPUpdates` and `mergeSPAdd`,
-which fold an adjacent stack update into this one, are not translated: a
-function of the frame alone sees no neighbour.
+DEVIATE FL-2 (no number, owner object-refactor): `mergeSPUpdates` and
+`mergeSPAdd`, which fold an adjacent stack update into this one, are not
+translated: a function of the frame alone sees no neighbour.
 
 DEVIATE CG7 (slot table row 80): `masm::parts` calls this for the flat
 m32 frames built at entry (`saved_first`); every other frame (16-bit, the

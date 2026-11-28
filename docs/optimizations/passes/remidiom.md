@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/remidiom.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/remidiom.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/remidiom.rs sha256:dd2f71768ade5c6dba71aebd584beb350ba1488a579885855996a0114ade2b38 -->
+<!-- src: crates/opt/llrm-transforms/src/remidiom.rs sha256:77eb31c3abe34ca7dbbff3a2fe237e662e77566f43da5f363c4df9bec7a26adf -->
 
 # remidiom
 
@@ -24,8 +24,10 @@ counter ScalarEvolution proves is `trunc x + k` for a constant `k` (`x % c +
 1` becomes `(x + 1) - (x / c) * c` once LSR picks the counter `x + 1`); the
 fold then adds `k` to the remainder.
 
-The same tree with the counter added after the subtraction, `a + (C - (x / c)
-* c)` (LSR's `i % 97 + 2` over the counter `i + 40`: `C` = 3, then `-41`), is
+The same tree with the counter added after the subtraction, `a + (C - (x /
+c)
+* c)` (LSR's `i % 97 + 2` over the counter `i + 40`: `C` = 3, then `-41`),
+  is
 `x % c + (k + C)` for `a` = `x + k`; the pin's fold does not see it either.
 
 DEVIATE REM1: the pin has this fold in the DAG (`foldRemainderIdiom`,

@@ -59,11 +59,14 @@ fn test_m32_os_a_xor_loop_over_shorts_stays_element_wise() {
     assert!(xors(&body).1 >= 1, "-Os widened the loop (bytes rank first there): {body:#?}");
 }
 
-/// A xor-accumulating byte loop was widened to `<4 x i8>` with an `llvm.vector.reduce.xor` at the exit, which the word lowering does not take: llc stopped with
-/// "--isel=dag: aggregate or vector value" (known_loads_walks at m32 -O2, 10 programs x86_32-wat/dos).
+/// A xor-accumulating byte loop was widened to `<4 x i8>` with an
+/// `llvm.vector.reduce.xor` at the exit, which the word lowering does not take:
+/// llc stopped with "--isel=dag: aggregate or vector value" (known_loads_walks
+/// at m32 -O2, 10 programs x86_32-wat/dos).
 #[test]
 fn test_m32_a_reduction_loop_stays_scalar_and_compiles() {
-    let source = "unsigned char xr(unsigned char n) { unsigned char t = 0, i; for (i = 0; i < n; ++i) t ^= 1; return t; }\n";
+    let source =
+        "unsigned char xr(unsigned char n) { unsigned char t = 0, i; for (i = 0; i < n; ++i) t ^= 1; return t; }\n";
     let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("word-reduce-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
@@ -83,8 +86,10 @@ fn test_m32_a_reduction_loop_stays_scalar_and_compiles() {
     assert!(run.status.success(), "{}", String::from_utf8_lossy(&run.stderr));
 }
 
-/// A splat of a byte stored by a loop whose stores are dead left `extractelement i32` behind (the extract read a shuffle the lowering had already made an
-/// integer): llc stopped with "a stage stopped: a vector type" on stack_arrays_copy at x86_32-dos -O2.
+/// A splat of a byte stored by a loop whose stores are dead left
+/// `extractelement i32` behind (the extract read a shuffle the lowering had
+/// already made an integer): llc stopped with "a stage stopped: a vector type"
+/// on stack_arrays_copy at x86_32-dos -O2.
 #[test]
 fn test_m32_a_lane_read_of_an_already_lowered_splat_compiles() {
     let source = "unsigned char bench(unsigned char v) { unsigned char a[70]; int i; for (i = 0; i < 63; ++i) a[i] = v; return a[0]; }\n";

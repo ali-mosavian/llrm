@@ -79,7 +79,8 @@ fn based(
         // ([L1590][arg]): a parameter is not what this activation made, nor a
         // `noalias` parameter's object, captured or not.
         //
-        // [arg]: https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Analysis/BasicAliasAnalysis.cpp#L1590
+        // [arg]:
+        // https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Analysis/BasicAliasAnalysis.cpp#L1590
         //
         // DEVIATE ALIAS1: no `noalias` call result as the local object, no
         // `extractvalue` of a parameter as argument-like, no `byval` here
@@ -101,7 +102,10 @@ fn is_argument(
     function: &Function,
     base: Operand,
 ) -> bool {
-    matches!(base, Operand::Value(value) if matches!(function.value(value).def, ValueDef::Argument(_)))
+    matches!(
+        base,
+        Operand::Value(value) if matches!(function.value(value).def, ValueDef::Argument(_))
+    )
 }
 
 /// An object no other object overlaps: a stack slot, a global, or what a

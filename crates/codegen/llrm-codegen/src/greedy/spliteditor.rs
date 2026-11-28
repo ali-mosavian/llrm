@@ -1413,7 +1413,8 @@ impl<'d> SplitEditor<'d> {
         let mut seen: Vec<(InstrKey, bool, bool, ValueLanes)> = Vec::new();
         for op in cx.lis.operands(parent_reg) {
             let (read, define) = (op.reads_reg, op.is_def || !op.reads_reg);
-            // A def that keeps the rest of the value reads the lanes it does not name.
+            // A def that keeps the rest of the value reads the lanes it does
+            // not name.
             let lanes = match (read, op.is_def) {
                 (false, _) => ValueLanes(0),
                 (true, true) => ValueLanes(!op.lanes.0),
@@ -1725,7 +1726,9 @@ mod tests {
             &self,
             insn: &Insn,
         ) -> bool {
-            insn.what.as_ref().is_some_and(|w| w.op == Operation::Move && matches!(w.sources.as_slice(), [Loc::Held(_)]))
+            insn.what
+                .as_ref()
+                .is_some_and(|w| w.op == Operation::Move && matches!(w.sources.as_slice(), [Loc::Held(_)]))
         }
 
         fn is_pure_def(
@@ -2005,9 +2008,9 @@ mod tests {
     }
 
     /// The copy a split left unread goes, and so does the literal it copied:
-    /// `eliminateDeadDefs` goes on to a definition whose last reader was erased.
-    /// overflow_builtins m64 -O1: three `mov rcx, offset X` left before the
-    /// loop, never read (21 B).
+    /// `eliminateDeadDefs` goes on to a definition whose last reader was
+    /// erased. overflow_builtins m64 -O1: three `mov rcx, offset X` left
+    /// before the loop, never read (21 B).
     #[test]
     fn the_definition_a_dead_copy_read_is_erased_with_it() {
         use crate::model::ir::Imm;

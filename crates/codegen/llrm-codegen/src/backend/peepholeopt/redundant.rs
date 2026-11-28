@@ -1,7 +1,8 @@
 //! A compare whose flags an earlier compare or subtract of the same block
 //! already holds.
 //!
-//! Translated from the redundant-flag half of `X86InstrInfo::optimizeCompareInstr`
+//! Translated from the redundant-flag half of
+//! `X86InstrInfo::optimizeCompareInstr`
 //! ([X86InstrInfo.cpp#L5473](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86InstrInfo.cpp#L5473)):
 //! [`matching`] is `isRedundantFlagInstr`
 //! ([L4949](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86InstrInfo.cpp#L4949)),
@@ -313,7 +314,8 @@ mod tests {
         a: Loc,
         b: Loc,
     ) -> Arc<Insn> {
-        let uses = [&a, &b].iter().filter_map(|loc| if let Loc::Held(h) = loc { Some(h.value) } else { None }).collect();
+        let uses =
+            [&a, &b].iter().filter_map(|loc| if let Loc::Held(h) = loc { Some(h.value) } else { None }).collect();
         insn(at, Operation::Compare, "cmp", vec![a, b], uses)
     }
 
@@ -346,12 +348,7 @@ mod tests {
     /// `cmp a,b; jl; cmp a,b; jne`: the second compare is the first's flags.
     #[test]
     fn test_a_repeated_compare_is_the_earlier_one() {
-        let body = body_of(vec![
-            cmp(0, held(1), held(2)),
-            jcc(1, "jl"),
-            cmp(2, held(1), held(2)),
-            jcc(3, "jne"),
-        ]);
+        let body = body_of(vec![cmp(0, held(1), held(2)), jcc(1, "jl"), cmp(2, held(1), held(2)), jcc(3, "jne")]);
         assert_eq!(names(&compares_reused(&body)), ["cmp", "jl", "jne"]);
     }
 
@@ -435,7 +432,12 @@ mod tests {
             for pair in 0..pairs {
                 let at = pair * 4;
                 let (a, b) = ((pair * 2) as u32 + 1, (pair * 2) as u32 + 2);
-                insns.extend([cmp(at, held(a), held(b)), jcc(at + 1, "jl"), cmp(at + 2, held(a), held(b)), jcc(at + 3, "jne")]);
+                insns.extend([
+                    cmp(at, held(a), held(b)),
+                    jcc(at + 1, "jl"),
+                    cmp(at + 2, held(a), held(b)),
+                    jcc(at + 3, "jne"),
+                ]);
             }
             let body = body_of(insns);
             let before = crate::backend::liveness::effects_worked_out();

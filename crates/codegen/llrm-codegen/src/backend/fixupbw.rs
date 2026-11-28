@@ -185,9 +185,7 @@ impl FixupBw {
                 self.try_replace_copy(regs, bits, one, *dest, *src, dead)
             }
             // DEVIATE FB3: MOV16ri
-            ("mov", 2, Loc::Imm(_)) if self.widens_word_immediate => {
-                self.try_replace_immediate(regs, one, *dest, dead)
-            }
+            ("mov", 2, Loc::Imm(_)) if self.widens_word_immediate => self.try_replace_immediate(regs, one, *dest, dead),
             // MOVSX16rr8, MOVZX16rr8
             ("movsx" | "movzx", 2, Loc::Reg(src)) if src.width == 1 => {
                 self.try_replace_extend(regs, bits, one, *dest, Some(*src), dead)
@@ -307,12 +305,22 @@ impl FixupBw {
     }
 }
 
-/// `one` reads a frame cell. Before the frame layout it has no encoding to size, and the pin widens a spill
-/// reload (`MOV8rm` of a slot) as it does any load: above real mode the dword form is not refused for it.
+/// `one` reads a frame cell. Before the frame layout it has no encoding to
+/// size, and the pin widens a spill reload (`MOV8rm` of a slot) as it does any
+/// load: above real mode the dword form is not refused for it.
 fn reads_frame_cell(one: &Insn) -> bool {
-    one.what.as_ref().is_some_and(|what| {
-        what.sources.iter().any(|place| matches!(place, Loc::Mem(cell) if cell.addr.is_some_and(|addr| addr.space == Space::Frame)))
-    })
+    one.what
+        .as_ref()
+        .is_some_and(
+            |what| what.sources
+                .iter()
+                .any(
+                    |place| matches!(
+                        place,
+                        Loc::Mem(cell) if cell.addr.is_some_and(|addr| addr.space == Space::Frame)
+                    ),
+                ),
+        )
 }
 
 /// `one` with the opcode `name`, the destination `wide` and, if given, the
@@ -378,7 +386,14 @@ mod tests {
             IndexMap::default(),
         );
         body.bits = 32;
-        let done = FixupBw { size: false, widens_byte: true, widens_word: true, strict_bytes: false, widens_word_immediate: false }.fixed(&body);
+        let done = FixupBw {
+            size: false,
+            widens_byte: true,
+            widens_word: true,
+            strict_bytes: false,
+            widens_word_immediate: false,
+        }
+        .fixed(&body);
         let one = &done.blocks[0].insns[0];
         let what = one.what.as_ref().expect("semantics");
         (what.name.as_deref().expect("a name").to_owned(), what.dests[0].clone())
@@ -395,9 +410,9 @@ mod tests {
 
     /// crc -Os: `mov dx, 8` into a register whose upper half nothing reads paid
     /// the operand-size prefix a clock on each of the outer loop's nine trips
-    /// (1029 clk against gcc's 1020 with its `movl $8, %ecx`). DEVIATE FB3 makes
-    /// it `mov edx, 8`; where the upper half is read, or the key is off, it
-    /// stays.
+    /// (1029 clk against gcc's 1020 with its `movl $8, %ecx`). DEVIATE FB3
+    /// makes it `mov edx, 8`; where the upper half is read, or the key is
+    /// off, it stays.
     #[test]
     fn a_word_immediate_into_a_register_with_a_dead_upper_half_is_the_dword_move() {
         let run = |widens: bool, later_reads_edx: bool| -> Loc {
@@ -463,7 +478,14 @@ mod tests {
             IndexMap::default(),
         );
         body.bits = 32;
-        let done = FixupBw { size: false, widens_byte: true, widens_word: true, strict_bytes: false, widens_word_immediate: false }.fixed(&body);
+        let done = FixupBw {
+            size: false,
+            widens_byte: true,
+            widens_word: true,
+            strict_bytes: false,
+            widens_word_immediate: false,
+        }
+        .fixed(&body);
         done.blocks[0].insns[0].what.as_ref().expect("semantics").name.clone().expect("a name").to_string()
     }
 
@@ -512,13 +534,22 @@ mod tests {
             IndexMap::default(),
         );
         body.bits = 64;
-        let done = FixupBw { size: false, widens_byte: true, widens_word: true, strict_bytes: false, widens_word_immediate: false }.fixed(&body);
+        let done = FixupBw {
+            size: false,
+            widens_byte: true,
+            widens_word: true,
+            strict_bytes: false,
+            widens_word_immediate: false,
+        }
+        .fixed(&body);
         let name = done.blocks[0].insns[0].what.as_ref().and_then(|what| what.name.clone()).expect("a name");
         assert_eq!(&*name, "movzx");
     }
-    /// `mov cl, [frame-54]` at 64 bits: a spill slot has no encoding until the frame layout either, so the probe
-    /// refused `movzx ecx, ...` and the partial write waited on the last write of RCX, a whole clamp chain of
-    /// the loop before (jpeg_fixed -O2/-O3 m64: +8% clocks against clang at 3% fewer instructions).
+    /// `mov cl, [frame-54]` at 64 bits: a spill slot has no encoding until the
+    /// frame layout either, so the probe refused `movzx ecx, ...` and the
+    /// partial write waited on the last write of RCX, a whole clamp chain of
+    /// the loop before (jpeg_fixed -O2/-O3 m64: +8% clocks against clang at 3%
+    /// fewer instructions).
     #[test]
     fn a_byte_reload_of_a_frame_slot_is_widened_at_64_bits() {
         use crate::model::ir::{Addr, Mem, Space};
@@ -536,12 +567,20 @@ mod tests {
             IndexMap::default(),
         );
         body.bits = 64;
-        let done = FixupBw { size: false, widens_byte: true, widens_word: true, strict_bytes: false, widens_word_immediate: false }.fixed(&body);
+        let done = FixupBw {
+            size: false,
+            widens_byte: true,
+            widens_word: true,
+            strict_bytes: false,
+            widens_word_immediate: false,
+        }
+        .fixed(&body);
         let name = done.blocks[0].insns[0].what.as_ref().and_then(|what| what.name.clone()).expect("a name");
         assert_eq!(&*name, "movzx");
     }
-    /// Real mode sizes exactly (`0F B6` is a byte longer there, and the 66h prefix more): the same reload at 16
-    /// bits keeps the byte load, as before the frame-cell exception.
+    /// Real mode sizes exactly (`0F B6` is a byte longer there, and the 66h
+    /// prefix more): the same reload at 16 bits keeps the byte load, as
+    /// before the frame-cell exception.
     #[test]
     fn a_byte_reload_of_a_frame_slot_stays_at_16_bits() {
         use crate::model::ir::{Addr, Mem, Space};
@@ -559,7 +598,14 @@ mod tests {
             IndexMap::default(),
         );
         body.bits = 16;
-        let done = FixupBw { size: false, widens_byte: true, widens_word: true, strict_bytes: false, widens_word_immediate: false }.fixed(&body);
+        let done = FixupBw {
+            size: false,
+            widens_byte: true,
+            widens_word: true,
+            strict_bytes: false,
+            widens_word_immediate: false,
+        }
+        .fixed(&body);
         let name = done.blocks[0].insns[0].what.as_ref().and_then(|what| what.name.clone()).expect("a name");
         assert_eq!(&*name, "mov");
     }
@@ -570,13 +616,7 @@ mod tests {
     fn a_byte_load_stays_where_bytes_are_strict_and_widens_at_speed() {
         let kept = |strict_bytes: bool| {
             let cell = Loc::Mem(crate::model::ir::Mem { through: RegId::ESI, ..crate::model::ir::Mem::new(None, 1) });
-            let load = Arc::new(Insn::new(
-                0,
-                Some((0, 0)),
-                Some(copy(reg(RegId::CL, 1), cell)),
-                vec![],
-                vec![],
-            ));
+            let load = Arc::new(Insn::new(0, Some((0, 0)), Some(copy(reg(RegId::CL, 1), cell)), vec![], vec![]));
             let ret = Semantics { name: Some("ret".into()), ..Semantics::new(Operation::Return) };
             let mut ret = Insn::new(1, Some((1, 1)), Some(ret), vec![], vec![]);
             ret.reads_complete = true;
@@ -588,7 +628,14 @@ mod tests {
                 IndexMap::default(),
             );
             body.bits = 32;
-            let done = FixupBw { size: false, widens_byte: true, widens_word: true, strict_bytes, widens_word_immediate: false }.fixed(&body);
+            let done = FixupBw {
+                size: false,
+                widens_byte: true,
+                widens_word: true,
+                strict_bytes,
+                widens_word_immediate: false,
+            }
+            .fixed(&body);
             done.blocks[0].insns[0].what.as_ref().and_then(|what| what.name.clone()).expect("a name").to_string()
         };
         assert_eq!(kept(true), "mov");

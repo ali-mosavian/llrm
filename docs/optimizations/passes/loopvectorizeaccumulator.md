@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/loopvectorizeaccumulator.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/loopvectorizeaccumulator.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/loopvectorizeaccumulator.rs sha256:8149ca87d6483aa2d2232b9880a9ee9d00b27668b36ef2d9345565095aebe480 -->
+<!-- src: crates/opt/llrm-transforms/src/loopvectorizeaccumulator.rs sha256:903a9221e8c0c01cd5fbbd294490844a7f08ebeb1e060462eb7f2bf5fe78db62 -->
 
 # loopvectorizeaccumulator
 
@@ -25,7 +25,9 @@ registers `x` is already split into.
   accumulator.
 
 ## Runs
-Inside `loopvectorize`, on a reduction whose vector is wider than a register.
+Inside `loopvectorize`, on a reduction whose vector is wider than a
+register.
 
 ## Example
-`acc = acc + x` with `x: <16 x i64>` on a 128-bit target becomes eight adds of `<2 x i64>` pieces of `x` into one `<2 x i64>` accumulator.
+`acc = acc + x` with `x: <16 x i64>` on a 128-bit target becomes eight adds
+of `<2 x i64>` pieces of `x` into one `<2 x i64>` accumulator.

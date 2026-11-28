@@ -59,10 +59,13 @@ fn a_select_of_a_value_and_its_negation_is_abs() {
     assert!(out.contains("@llvm.abs.i16(i16 %x, i1 true)"), "{out}");
 }
 
-/// `x < 0 ? 0 : (x > 255 ? 255 : x)` is `smax` and `smin` in ONE combine, as the pin's `InstCombine` leaves it: the inner select becomes
-/// `smin`, and the outer one (a user of it) must see that call as the intrinsic. It did not while the declaration was pending in the pass,
-/// so `clamp` stayed `select (icmp slt x, 0), 0, smin(x, 255)` and, inlined into wasm jpeg_fixed -O2, its compare folded into the sdiv's
-/// operand: +4 executed instructions per pixel channel, +0.76% of the run against the pin.
+/// `x < 0 ? 0 : (x > 255 ? 255 : x)` is `smax` and `smin` in ONE combine, as
+/// the pin's `InstCombine` leaves it: the inner select becomes `smin`, and the
+/// outer one (a user of it) must see that call as the intrinsic. It did not
+/// while the declaration was pending in the pass, so `clamp` stayed `select
+/// (icmp slt x, 0), 0, smin(x, 255)` and, inlined into wasm jpeg_fixed -O2, its
+/// compare folded into the sdiv's operand: +4 executed instructions per pixel
+/// channel, +0.76% of the run against the pin.
 #[test]
 fn a_clamp_of_two_selects_is_min_and_max_in_one_combine() {
     let out = combined(
@@ -135,8 +138,9 @@ fn a_step_that_may_wrap_stays_a_select() {
     assert!(out.contains("select"), "{out}");
 }
 
-/// `select (x > -1), a, b` is `select (x < 0), b, a` (`opt` agrees): QB `exec_loop` had 26 `icmp sgt i32 %x, -1`
-/// where the pin has `icmp slt i32 %x, 0`, so every sign-bit select read differently from the pin's. Not with a
+/// `select (x > -1), a, b` is `select (x < 0), b, a` (`opt` agrees): QB
+/// `exec_loop` had 26 `icmp sgt i32 %x, -1` where the pin has `icmp slt i32 %x,
+/// 0`, so every sign-bit select read differently from the pin's. Not with a
 /// constant arm, nor when the compare has another user.
 #[test]
 fn a_select_on_greater_than_minus_one_swaps_to_less_than_zero() {
@@ -145,7 +149,8 @@ fn a_select_on_greater_than_minus_one_swaps_to_less_than_zero() {
     assert!(out.contains("icmp slt i16 %x, 0"), "{out}");
     assert!(out.contains("select i1 %0, i16 %b, i16 %a"), "{out}");
     assert!(!out.contains("sgt"), "{out}");
-    let constant = combined("i16 %x, i16 %b", "  %c = icmp sgt i16 %x, -1\n  %r = select i1 %c, i16 7, i16 %b\n  ret i16 %r\n");
+    let constant =
+        combined("i16 %x, i16 %b", "  %c = icmp sgt i16 %x, -1\n  %r = select i1 %c, i16 7, i16 %b\n  ret i16 %r\n");
     assert!(constant.contains("icmp sgt i16 %x, -1"), "a constant arm is left alone:\n{constant}");
     let shared = combined(
         "i16 %x, i16 %a, i16 %b",

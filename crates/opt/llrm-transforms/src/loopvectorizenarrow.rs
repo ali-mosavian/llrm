@@ -17,7 +17,8 @@
 //! to a narrow `vec.ind`.
 //!
 //! # Runs
-//! Inside `loopvectorize`, on the integer chains of a loop's induction before the plan is costed.
+//! Inside `loopvectorize`, on the integer chains of a loop's induction before
+//! the plan is costed.
 //!
 //! # Example
 //! `(i & 15) + 1` with `i: i64` feeding a 16-bit multiply becomes
@@ -33,6 +34,11 @@ use llrm_mir::opcode::{BinaryOp, CastOp, Flags, Opcode};
 /// The narrowest lane the chain is narrowed to: the vector of an `i8` chain
 /// would be half a register.
 const NARROWEST: u32 = 16;
+
+/// The widest result a chain is narrowed to: an operation whose result fits 16
+/// or 32 bits is done at that width (the module's rule); a wider one keeps the
+/// counter's type. No pin twin: part of DEVIATE LV-NARROW-IV.
+const WIDEST: u32 = 32;
 
 /// The lane a chain of `bits` is narrowed to: not under the narrowest access of
 /// the loop, whose vector factor fills the registers with that lane; a narrower
@@ -145,7 +151,7 @@ pub(crate) fn narrow_induction_chains(
         .min(wide);
         bits_of.insert(result, bits);
         rooted.insert(result, reads_counter);
-        if reads_counter && bits <= 32 && lane_width(bits, floor) < wide {
+        if reads_counter && bits <= WIDEST && lane_width(bits, floor) < wide {
             members.push(Member { inst, bits });
         } else {
             // Not narrowed: its operands may still be members, which keep the

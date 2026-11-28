@@ -249,8 +249,8 @@ fn test_the_folded_branch_carries_the_merged_weights() {
     assert!(out.contains("branch_weights\", i32 11, i32 9"), "{out}");
 }
 
-/// Weights on both branches merge to the pin's pair; a check that weighted only the
-/// first branch could not tell that the second's were dropped.
+/// Weights on both branches merge to the pin's pair; a check that weighted only
+/// the first branch could not tell that the second's were dropped.
 #[test]
 fn test_weights_on_both_branches_merge() {
     let both = WEIGHTED.replace("label %t, label %e\n", "label %t, label %e, !prof !1\n");

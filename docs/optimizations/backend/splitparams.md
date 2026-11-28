@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/splitparams.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/splitparams.rs); edit the header, not this file.
-<!-- src: crates/codegen/llrm-codegen/src/backend/splitparams.rs sha256:9f1956e01102c9049de8324c1decc247edef3dc2fdceccb46a3f85c62624d585 -->
+<!-- src: crates/codegen/llrm-codegen/src/backend/splitparams.rs sha256:7793d6b1781a2df8ced7cc4b4d1524eae3492e436fac1832eac19baf09fe0aa2 -->
 
 # splitparams
 
@@ -38,4 +38,5 @@ elsewhere). The coalescer keeps the copy it makes
 [`crate::backend::shrinkwrap`](shrinkwrap.md), which places the set-up this makes possible.
 
 ## Example
-`fib(n)` tests `n < 2` and returns; the block of its calls reads `m = mov n`, so the entry sets up no frame.
+`fib(n)` tests `n < 2` and returns; the block of its calls reads `m = mov
+n`, so the entry sets up no frame.

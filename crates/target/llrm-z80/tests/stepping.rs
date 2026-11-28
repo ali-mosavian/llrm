@@ -3,10 +3,7 @@
 
 use std::process::Command;
 
-fn assembly(
-    name: &str,
-    ir: &str,
-) -> String {
+fn assembly(ir: &str) -> String {
     let guard = tempfile::tempdir().unwrap();
     let dir = guard.path().to_path_buf();
     let source = dir.join("g.ll");
@@ -27,7 +24,7 @@ fn assembly(
 /// `p + 2` was `ld bc, #2; add hl, bc` (4 B, 21 T, bc lost).
 #[test]
 fn a_pointer_moved_by_two_is_two_incs() {
-    let text = assembly("two", "define ptr @g(ptr %p) {\n  %q = getelementptr i8, ptr %p, i16 2\n  ret ptr %q\n}\n");
+    let text = assembly("define ptr @g(ptr %p) {\n  %q = getelementptr i8, ptr %p, i16 2\n  ret ptr %q\n}\n");
     assert!(!text.contains("add hl") && text.matches("inc ").count() == 2, "{text}");
 }
 
@@ -36,7 +33,6 @@ fn a_pointer_moved_by_two_is_two_incs() {
 #[test]
 fn a_word_fill_loop_steps_its_pointer_with_incs() {
     let text = assembly(
-        "fill",
         "@a = global [64 x i16] zeroinitializer\n\
          define void @g(i16 %n, i16 %v) {\n\
          entry:\n  %c = icmp sgt i16 %n, 0\n  br i1 %c, label %loop, label %exit\n\

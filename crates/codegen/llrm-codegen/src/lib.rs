@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 
-// Lets the emitter's source, compiled in for this crate's tests, name its own crate as `llrm_codegen`.
+// Lets the emitter's source, compiled in for this crate's tests, name its own
+// crate as `llrm_codegen`.
 extern crate self as llrm_codegen;
 
 pub mod abi;

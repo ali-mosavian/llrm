@@ -35,8 +35,8 @@
 //! `allocate::RegAlloc` at -O0.
 //!
 //! # Example
-//! At -O0 a value that may live out of its block is stored to its slot after its
-//! def and reloaded where the next block uses it.
+//! At -O0 a value that may live out of its block is stored to its slot after
+//! its def and reloaded where the next block uses it.
 //!
 //! ```text
 //! bb0:  %0 = mov 1            bb0:  eax = mov 1 ; store [slot0], eax

@@ -41,13 +41,6 @@ fn function(
         .collect()
 }
 
-fn count(
-    body: &[String],
-    mnemonic: &str,
-) -> usize {
-    body.iter().filter(|line| line.split_whitespace().next() == Some(mnemonic)).count()
-}
-
 /// The `fld`, `fadd` and `fstp` ran on every trip though the exponent test
 /// decided 16 of 400: 400 `fadd` against gcc's 384 (sfm16_dbg -O1 +291 clk).
 /// A size build keeps the one block.

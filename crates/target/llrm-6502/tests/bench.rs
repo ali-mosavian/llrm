@@ -11,8 +11,8 @@
 //! is. The result is checked against a hand-derived value first.
 //!
 //! Needs cc65, clang (msp430 front end), LLVM 20 `opt`, cl65 and sim65.
-//! `the_bars_at_every_level` grades ours at O1, O2, O3 and Os against the smallest
-//! external at that level (`bench/bars.rs`).
+//! `the_bars_at_every_level` grades ours at O1, O2, O3 and Os against the
+//! smallest external at that level (`bench/bars.rs`).
 
 #[path = "bench/bars.rs"]
 mod bars;

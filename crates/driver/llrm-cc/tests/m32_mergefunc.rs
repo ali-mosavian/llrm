@@ -1,5 +1,6 @@
-//! Identical exported functions are one body at `-Os` on m32 (DEVIATE MERGEFUNC-OS): the second is a `jmp` to the first.
-//! sfm16 `__gtsf2` was a 16-byte copy of `__gesf2`; gcc folds them (`-fipa-icf`).
+//! Identical exported functions are one body at `-Os` on m32 (DEVIATE
+//! MERGEFUNC-OS): the second is a `jmp` to the first. sfm16 `__gtsf2` was a
+//! 16-byte copy of `__gesf2`; gcc folds them (`-fipa-icf`).
 
 #[path = "common/target_dir.rs"]
 mod target_dir;
@@ -43,7 +44,11 @@ fn test_at_os_the_second_of_two_identical_functions_jumps_to_the_first() {
     let twin = function(&asm, "twin_b");
     assert!(twin.iter().any(|line| *line == "jmp twin_a"), "twin_b is a jmp to twin_a:\n{}", twin.join("\n"));
     let other = function(&asm, "other");
-    assert!(!other.iter().any(|line| line.starts_with("jmp twin")), "a different body stays a body:\n{}", other.join("\n"));
+    assert!(
+        !other.iter().any(|line| line.starts_with("jmp twin")),
+        "a different body stays a body:\n{}",
+        other.join("\n")
+    );
 }
 
 #[test]

@@ -71,8 +71,8 @@ const COUNTGT: &str = include_str!("../../bench/kernels/countgt.ll");
 fn countgt_at_68020_saves_its_registers_with_moves() {
     let module = llrm_mir::parse::module(COUNTGT).expect("parses");
     let out = text_with(&module, "k", Cpu::M68020, Options::default()).expect("compiles");
-    // which registers it saves is the allocator's choice (d3, then a2 and d2 after the spill fold); the push is
-    // one `move.l` each, never a `movem`
+    // which registers it saves is the allocator's choice (d3, then a2 and d2
+    // after the spill fold); the push is one `move.l` each, never a `movem`
     let pushes = out.lines().filter(|line| line.starts_with("\tmove.l\t%") && line.ends_with(", -(%sp)")).count();
     assert!(pushes >= 2 && !out.contains("movem"), "{out}");
 }

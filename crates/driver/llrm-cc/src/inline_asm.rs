@@ -9,6 +9,8 @@
 //! slot nothing stored) is the function's result, as Borland leaves it in
 //! `dx:ax`.
 
+use llrm_target::inline_asm::InlineAsm;
+
 /// A displacement no real instruction of the block carries; operand `k` takes
 /// `PLACE + 4 * k`.
 const PLACE: u32 = 0x7001;
@@ -25,8 +27,10 @@ struct Call {
 /// (16-bit code) into bytes.
 pub fn translate(
     text: &str,
+    facts: &InlineAsm,
     assemble: &mut dyn FnMut(&str) -> Result<Vec<u8>, String>,
 ) -> Result<String, String> {
+    let asm = llrm_target::registers::asm_names(&facts.registers);
     let lines: Vec<&str> = text.lines().collect();
     let mut out: Vec<String> = Vec::new();
     let mut declares: Vec<String> = Vec::new();
@@ -37,7 +41,7 @@ pub fn translate(
             continue;
         }
         if is_register_asm(lines[at]) {
-            let (call, declare) = register_block(lines[at], assemble)?;
+            let (call, declare) = register_block(lines[at], facts, &asm, assemble)?;
             out.push(call);
             // Equal blocks share a name, which is declared once.
             if !declares.contains(&declare) {
@@ -62,7 +66,7 @@ pub fn translate(
         if result.is_some() {
             at += 1;
         }
-        let (call, declare) = block(&run, result.as_ref(), declares.len(), assemble)?;
+        let (call, declare) = block(&run, result.as_ref(), declares.len(), facts, assemble)?;
         out.extend(call);
         declares.push(declare);
     }
@@ -89,9 +93,9 @@ pub fn translate(
 /// The register file a flat block's mode names: the registers its target's
 /// `@asm` line lists, with the family each belongs to.
 struct Flat {
-    /// 32 or 64: the mode, the width of an address register, the prefix of the
-    /// block's name; [`llrm_mir::intrinsics::AARCH64`] for AArch64.
-    bits: u8,
+    /// `facts.bits` is the mode, the width of an address register, the prefix
+    /// of the block's name; [`llrm_mir::intrinsics::AARCH64`] for AArch64.
+    facts: InlineAsm,
     asm: Vec<String>,
     registers: Vec<llrm_target::registers::Register>,
     /// The registers a pool operand may take (the target's `@scratch`): the
@@ -100,48 +104,27 @@ struct Flat {
 }
 
 impl Flat {
-    fn of(bits: u8) -> &'static Flat {
-        static FLAT32: std::sync::LazyLock<Flat> =
-            std::sync::LazyLock::new(|| Flat::parse(32, &llrm_target::Target::registers_text(&llrm_x86_m32::M32)));
-        static FLAT64: std::sync::LazyLock<Flat> =
-            std::sync::LazyLock::new(|| Flat::parse(64, &llrm_target::Target::registers_text(&llrm_x86_m64::M64)));
-        static FLATA64: std::sync::LazyLock<Flat> = std::sync::LazyLock::new(|| {
-            Flat::parse(llrm_mir::intrinsics::AARCH64, include_str!("../../../target/llrm-arm64/src/registers.regs"))
-        });
-        match bits {
-            llrm_mir::intrinsics::AARCH64 => &FLATA64,
-            64 => &FLAT64,
-            _ => &FLAT32,
-        }
-    }
-
     fn a64(&self) -> bool {
-        self.bits == llrm_mir::intrinsics::AARCH64
+        self.facts.bits == llrm_mir::intrinsics::AARCH64
     }
 
-    fn parse(
-        bits: u8,
-        text: &str,
-    ) -> Flat {
+    fn new(facts: InlineAsm) -> Flat {
+        let text = &facts.registers;
         Flat {
-            bits,
             asm: llrm_target::registers::asm_names(text),
             registers: llrm_target::registers::parse(text).expect("a target's register file parses"),
             scratch: llrm_target::registers::scratch(text),
+            facts,
         }
     }
 
-    /// A constraint's register as the block's name carries it: `st` is `st0`,
-    /// `st(1)` is `st1`.
+    /// A constraint's register as the block's name carries it, an alias
+    /// resolved.
     fn register(
         &self,
         name: &str,
     ) -> Result<String, String> {
-        let name = match name {
-            "st" | "st(0)" => "st0",
-            "st(1)" => "st1",
-            other => other,
-        };
+        let name = self.facts.aliases.iter().find(|(alias, _)| *alias == name).map_or(name, |(_, register)| register);
         if self.asm.iter().any(|one| one == name) {
             Ok(name.to_owned())
         } else {
@@ -174,11 +157,18 @@ impl Flat {
                 ("float", _) => 32,
                 ("double", _) => 64,
                 ("ptr", _) => 64,
+                // The narrowest view that holds the integer.
                 (_, Some(bits @ 1..=64)) => {
-                    if bits <= 32 {
-                        32
-                    } else {
-                        64
+                    let root = self.root(name);
+                    match self
+                        .registers
+                        .iter()
+                        .filter(|one| one.root == root && one.bits >= bits && self.asm.contains(&one.name))
+                        .map(|one| one.bits)
+                        .min()
+                    {
+                        Some(width) => width,
+                        None => return Ok(name.to_owned()),
                     }
                 }
                 ("", _) => return Ok(name.to_owned()),
@@ -187,7 +177,7 @@ impl Flat {
         } else {
             match int {
                 Some(bits) => bits,
-                None if ty == "ptr" => u32::from(self.bits),
+                None if ty == "ptr" => u32::from(self.facts.bits),
                 None => return Ok(name.to_owned()),
             }
         };
@@ -254,7 +244,7 @@ impl Flat {
         }
         self.registers
             .iter()
-            .filter(|one| u8::try_from(one.bits) == Ok(self.bits) && self.asm.contains(&one.name))
+            .filter(|one| u8::try_from(one.bits) == Ok(self.facts.bits) && self.asm.contains(&one.name))
             .map(|one| one.name.as_str())
             .collect()
     }
@@ -266,13 +256,10 @@ enum Place {
     Register(String, String),
     /// An address register the pointer argument is passed in.
     Memory(String),
-    /// A constant the block's text carries (`i`, `n`, `I`..`O`, `e`, `Z`), at
-    /// the width of its type: no register, no argument of the call.
-    Immediate(i128, u32),
+    /// A constant the block's text carries (`i`, `n`, `I`..`O`, `e`, `Z`),
+    /// signed at the width of its type: no register, no argument of the call.
+    Immediate(i128),
 }
-
-/// The constraint letters that take a constant (`g` is `rim`).
-const IMMEDIATE_LETTERS: &[u8] = b"iInJKLMNOeZg";
 
 /// An integer literal operand `ty value` as (its zero-extended value, its
 /// width).
@@ -289,29 +276,6 @@ fn integer_constant(
     Some((value.rem_euclid(1 << width), width))
 }
 
-/// `X86TargetLowering::LowerAsmOperandForConstraint`: whether the constant
-/// `zero_extended` (of `width` bits) is one the immediate letter takes.
-fn immediate_fits(
-    letter: u8,
-    zero_extended: i128,
-    width: u32,
-    mode64: bool,
-) -> bool {
-    let signed = if zero_extended >= 1 << (width - 1) { zero_extended - (1 << width) } else { zero_extended };
-    match letter {
-        b'I' => zero_extended <= 31,
-        b'J' => zero_extended <= 63,
-        b'K' => (-128..=127).contains(&signed),
-        b'L' => matches!(zero_extended, 0xff | 0xffff) || mode64 && zero_extended == 0xffff_ffff,
-        b'M' => zero_extended <= 3,
-        b'N' => zero_extended <= 255,
-        b'O' => zero_extended <= 127,
-        b'e' => (i128::from(i32::MIN)..=i128::from(i32::MAX)).contains(&signed),
-        b'Z' => zero_extended <= 0xffff_ffff,
-        _ => matches!(letter, b'i' | b'n' | b'g'),
-    }
-}
-
 /// What an immediate operand prints as: its value sign-extended from its width
 /// (a bool, the zero-extended one).
 fn immediate_value(
@@ -321,23 +285,26 @@ fn immediate_value(
     if width > 1 && zero_extended >= 1 << (width - 1) { zero_extended - (1 << width) } else { zero_extended }
 }
 
-/// The letters of an input constraint that takes a constant, when the item is
-/// only such letters and register letters (`i`, `Ir`, `Nd` after clang's
-/// rewrite is `N{dx}`: not this).
-fn immediate_letters(item: &str) -> Option<Vec<u8>> {
-    let letters = item.bytes().all(|one| IMMEDIATE_LETTERS.contains(&one) || b"rqm".contains(&one));
-    let taken: Vec<u8> = item.bytes().filter(|one| IMMEDIATE_LETTERS.contains(one)).collect();
+/// The letters of an input constraint that takes a constant (`immediates`),
+/// when the item is only such letters and register letters (`i`, `Ir`, `Nd`
+/// after clang's rewrite is `N{dx}`: not this).
+fn immediate_letters(
+    item: &str,
+    immediates: &[u8],
+) -> Option<Vec<u8>> {
+    let letters = item.bytes().all(|one| immediates.contains(&one) || b"rqm".contains(&one));
+    let taken: Vec<u8> = item.bytes().filter(|one| immediates.contains(one)).collect();
     (letters && !taken.is_empty()).then_some(taken)
 }
 
-/// `text` with every asm call of flat code replaced by a call of its
-/// `llrm.ia32.asm.*` (`bits` 32) or `llrm.ia64.asm.*` (64) block.
+/// `text` with every asm call of flat code replaced by a call of its block
+/// (`llrm.ia32.asm.*`, named by `facts.bits`).
 pub fn translate_flat(
     text: &str,
-    bits: u8,
+    facts: InlineAsm,
     assemble: &mut dyn FnMut(&str) -> Result<Vec<u8>, String>,
 ) -> Result<String, String> {
-    let flat = Flat::of(bits);
+    let flat = &Flat::new(facts);
     let mut out: Vec<String> = Vec::new();
     let mut declares: Vec<String> = Vec::new();
     for line in text.lines() {
@@ -491,14 +458,14 @@ fn flat_block(
     for item in constraints.split(',') {
         let original = item;
         let mut item = item.to_owned();
-        if let Some(letters) = immediate_letters(&item).filter(|_| !flat.a64()) {
+        if let Some(immediates) = flat.facts.immediates
+            && let Some(letters) = immediate_letters(&item, immediates.letters)
+        {
             let argument = arguments.get(next_argument).ok_or("asm: an operand without an argument")?;
             match integer_constant(&argument.0, &argument.1) {
-                Some((value, width))
-                    if letters.iter().any(|letter| immediate_fits(*letter, value, width, flat.bits == 64)) =>
-                {
+                Some((value, width)) if letters.iter().any(|letter| (immediates.fits)(*letter, value, width)) => {
                     next_argument += 1;
-                    operands.push((item, Some(Place::Immediate(immediate_value(value, width), width))));
+                    operands.push((item, Some(Place::Immediate(immediate_value(value, width)))));
                     continue;
                 }
                 _ => {
@@ -610,7 +577,10 @@ fn flat_block(
     let mut source = String::new();
     if !flat.a64() {
         source.push_str(if intel { ".intel_syntax noprefix\n" } else { "" });
-        source.push_str(if flat.bits == 64 { ".code64\n" } else { ".code32\n" });
+        if let Some(mode) = flat.facts.mode {
+            source.push_str(mode);
+            source.push('\n');
+        }
     }
     let chars: Vec<char> = text.chars().collect();
     let mut at = 0;
@@ -652,7 +622,7 @@ fn flat_block(
                 return Err(format!("asm: operand modifier {modifier} is not carried"));
             }
             source.push_str(&match (place, intel) {
-                (Place::Immediate(value, _), _) => match modifier.as_deref() {
+                (Place::Immediate(value), _) => match modifier.as_deref() {
                     Some("c" | "P") => value.to_string(),
                     Some("n") => (-value).to_string(),
                     Some(other) => return Err(format!("asm: operand modifier {other} is not carried")),
@@ -675,15 +645,16 @@ fn flat_block(
         }
     }
     source.push('\n');
-    // An x87 input in st(1) that the block neither clobbers nor returns stays
-    // on the stack after it (`fscale` leaves it): `fstp st(1)` pops it, as
-    // `reg-stack` pops a dead stack input.
-    if inputs.iter().any(|one| one == "st1") && !clobbers.iter().chain(&outputs).any(|one| one == "st1") {
-        source.push_str(if intel { "fstp st(1)\n" } else { "fstp %st(1)\n" });
+    if let Some(pop) = flat.facts.dead_stack_input
+        && inputs.iter().any(|one| one == pop.register)
+        && !clobbers.iter().chain(&outputs).any(|one| one == pop.register)
+    {
+        source.push_str(if intel { pop.intel } else { pop.att });
+        source.push('\n');
     }
     let bytes = assemble(&source)?;
     let name = llrm_mir::intrinsics::asm_name(&llrm_mir::intrinsics::AsmBlock {
-        bits: flat.bits,
+        bits: flat.facts.bits,
         code: bytes,
         inputs,
         outputs,
@@ -717,28 +688,21 @@ fn is_register_asm(line: &str) -> bool {
     constraints.split(',').any(|one| one.starts_with("={") || one.starts_with('{'))
 }
 
-/// The registers inline asm may name, from the 16-bit target's register file
-/// (`@asm`): the one description that says, not a list here.
-fn asm_registers() -> &'static [String] {
-    static NAMES: std::sync::LazyLock<Vec<String>> = std::sync::LazyLock::new(|| {
-        llrm_target::registers::asm_names(&llrm_target::Target::registers_text(&llrm_x86_m16::M16))
-    });
-    &NAMES
-}
-
-/// A register's name as the backend takes it: its width is the name's.
-fn register_name(name: &str) -> Result<&str, String> {
-    if asm_registers().iter().any(|one| one == name) {
-        Ok(name)
-    } else {
-        Err(format!("asm: register {name} is not carried"))
-    }
+/// A register's name as the backend takes it, among those the target's `@asm`
+/// line lists (`asm`): its width is the name's.
+fn register_name<'a>(
+    name: &'a str,
+    asm: &[String],
+) -> Result<&'a str, String> {
+    if asm.iter().any(|one| one == name) { Ok(name) } else { Err(format!("asm: register {name} is not carried")) }
 }
 
 /// One register-declared asm call as a call of `llrm.ia16.asm.*`, and the
 /// declaration of that.
 fn register_block(
     line: &str,
+    facts: &InlineAsm,
+    asm: &[String],
     assemble: &mut dyn FnMut(&str) -> Result<Vec<u8>, String>,
 ) -> Result<(String, String), String> {
     let line = line.trim();
@@ -770,22 +734,22 @@ fn register_block(
     let (mut inputs, mut outputs, mut clobbers, mut memory) = (Vec::new(), Vec::new(), Vec::new(), false);
     for item in constraints.split(',') {
         if let Some(name) = item.strip_prefix("={").and_then(|one| one.strip_suffix('}')) {
-            outputs.push(register_name(name)?.to_owned());
+            outputs.push(register_name(name, asm)?.to_owned());
         } else if let Some(name) = item.strip_prefix('{').and_then(|one| one.strip_suffix('}')) {
-            inputs.push(register_name(name)?.to_owned());
+            inputs.push(register_name(name, asm)?.to_owned());
         } else if let Some(name) = item.strip_prefix("~{").and_then(|one| one.strip_suffix('}')) {
             if name == "memory" {
                 memory = true;
             } else if !["dirflag", "fpsr", "flags"].contains(&name) {
-                clobbers.push(register_name(name)?.to_owned());
+                clobbers.push(register_name(name, asm)?.to_owned());
             }
         } else {
             return Err(format!("asm: constraint {item} is not carried"));
         }
     }
-    let bytes = assemble(&format!(".intel_syntax noprefix\n.code16\n{}\n", unescape(text)?))?;
+    let bytes = assemble(&format!("{}{}\n", intel_source(facts), unescape(text)?))?;
     let name = llrm_mir::intrinsics::asm_name(&llrm_mir::intrinsics::AsmBlock {
-        bits: 16,
+        bits: facts.bits,
         code: bytes,
         inputs,
         outputs,
@@ -804,6 +768,14 @@ fn register_block(
         destination.map_or(String::new(), |one| format!("{one} = "))
     );
     Ok((call, format!("declare {ret} @\"{name}\"({types})")))
+}
+
+/// `text` without its empty asm calls: all a target without inline-assembly
+/// facts takes of its asm.
+pub fn without_empty_asm(text: &str) -> String {
+    let mut kept = text.lines().filter(|line| !is_empty_asm(line)).collect::<Vec<_>>().join("\n");
+    kept.push('\n');
+    kept
 }
 
 /// `asm volatile ("" : : "g" (p) : "memory")`: no instruction, only an
@@ -910,15 +882,21 @@ fn parse(line: &str) -> Result<Call, String> {
     Ok(Call { text: unescape(text)?, constraints: constraints.to_owned(), operands })
 }
 
+/// The start of a 16-bit block's source: Intel syntax, in the target's mode.
+fn intel_source(facts: &InlineAsm) -> String {
+    format!(".intel_syntax noprefix\n{}\n", facts.mode.unwrap_or_default())
+}
+
 /// The call lines replacing a run, and the declaration of what they call.
 fn block(
     run: &[Call],
     result: Option<&(String, String)>,
     number: usize,
+    facts: &InlineAsm,
     assemble: &mut dyn FnMut(&str) -> Result<Vec<u8>, String>,
 ) -> Result<(Vec<String>, String), String> {
     let mut operands: Vec<&(String, String)> = Vec::new();
-    let mut source = String::from(".intel_syntax noprefix\n.code16\n");
+    let mut source = intel_source(facts);
     for call in run {
         let base = operands.len();
         operands.extend(call.operands.iter());
@@ -1014,13 +992,18 @@ mod tests {
     /// segment register.
     #[test]
     fn a_register_constraint_names_what_the_target_description_lists() {
+        let asm = llrm_target::registers::asm_names(&m16().registers);
         for name in ["ax", "dl", "esi", "edi", "bx"] {
-            assert_eq!(register_name(name), Ok(name));
+            assert_eq!(register_name(name, &asm), Ok(name));
         }
         for name in ["bp", "sp", "ah", "ds", "xmm0", ""] {
-            assert!(register_name(name).unwrap_err().contains("not carried"), "{name}");
+            assert!(register_name(name, &asm).unwrap_err().contains("not carried"), "{name}");
         }
-        assert_eq!(asm_registers().len(), 16);
+        assert_eq!(asm.len(), 16);
+    }
+
+    pub(super) fn m16() -> InlineAsm {
+        crate::inline_asm_facts("x86-m16").expect("m16 takes inline asm")
     }
 
     fn fake(source: &str) -> Result<Vec<u8>, String> {
@@ -1033,14 +1016,14 @@ mod tests {
         // pr56866: `asm volatile ("" : : "g" (array))` refused with "an operand
         // that is not a memory place"
         let ir = "define i32 @f() {\n  %1 = alloca [4 x i32]\n  call void asm sideeffect \"\", \"imr,~{memory}\"(ptr %1) #1, !srcloc !6\n  ret i32 0\n}\n";
-        let out = translate(ir, &mut fake).unwrap();
+        let out = translate(ir, &m16(), &mut fake).unwrap();
         assert!(!out.contains("asm") && out.contains("ret i32 0"), "{out}");
     }
 
     #[test]
     fn a_local_operand_is_a_frame_place_of_inline_code() {
         let ir = "define i32 @f() {\n  %1 = alloca i16\n  call void asm sideeffect inteldialect \"mov word ptr $0, sp\", \"=*m\"(ptr elementtype(i16) %1)\n  %2 = load i32, ptr %9, align 2\n  ret i32 %2\n}\n";
-        let out = translate(ir, &mut fake).unwrap();
+        let out = translate(ir, &m16(), &mut fake).unwrap();
         assert!(out.contains("%2 = call i32 @\"llrm.ia16.code.89a60170c3.2p0\"(ptr %1)"), "{out}");
         assert!(
             out.contains("ret i32 %2")
@@ -1053,7 +1036,7 @@ mod tests {
     #[test]
     fn a_global_operand_is_a_symbol_fixup_of_inline_asm() {
         let ir = "define void @g() {\n  call void asm sideeffect inteldialect \"mov $0, sp\", \"=*m\"(ptr elementtype(i16) @sp_now) #1, !srcloc !3\n  ret void\n}\n";
-        let out = translate(ir, &mut fake).unwrap();
+        let out = translate(ir, &m16(), &mut fake).unwrap();
         assert!(out.contains("call void @\"llrm.ia16.asm.89a60170c3.-.-.-.m.f2_offset_0\"(ptr @sp_now)"), "{out}");
     }
 
@@ -1065,7 +1048,7 @@ mod tests {
             seen = source.to_owned();
             fake(source)
         };
-        translate(ir, &mut record).unwrap();
+        translate(ir, &m16(), &mut record).unwrap();
         assert!(seen.contains("push ebx\n") && seen.contains("mov [bp+0x7001], ax"), "{seen}");
     }
 }
@@ -1081,7 +1064,7 @@ mod register_tests {
     #[test]
     fn a_call_with_registers_is_a_register_declared_block() {
         let ir = "  %2 = call addrspace(0) { i16, i16, i16 } asm sideeffect inteldialect \"cwd\\0Aidiv cx\\0A\", \"={dx},={ax},={cx},{ax},{cx},~{memory}\"(i16 %0, i16 %1)\n";
-        let out = translate(ir, &mut |source: &str| {
+        let out = translate(ir, &super::tests::m16(), &mut |source: &str| {
             assert!(source.contains("cwd\nidiv cx"), "{source}");
             Ok(vec![0x99, 0xf7, 0xf9])
         })
@@ -1095,7 +1078,7 @@ mod register_tests {
     #[test]
     fn a_byte_register_keeps_its_width_in_the_name() {
         let ir = "  %2 = call addrspace(0) i8 asm sideeffect inteldialect \"add al,bl\\0A\", \"={al},{al},{bl},~{memory}\"(i8 %0, i8 %1)\n";
-        let out = translate(ir, &mut |_| Ok(vec![0x00, 0xd8])).unwrap();
+        let out = translate(ir, &super::tests::m16(), &mut |_| Ok(vec![0x00, 0xd8])).unwrap();
         assert!(out.contains("llrm.ia16.asm.00d8.al_bl.al.-.m"), "{out}");
     }
 }
@@ -1120,13 +1103,12 @@ fn register_alternative(item: &str) -> Option<String> {
 
 #[cfg(test)]
 mod a64_tests {
-    use llrm_mir::intrinsics::AARCH64;
-
     use super::*;
 
     fn run(ir: &str) -> (Result<String, String>, String) {
         let mut seen = String::new();
-        let out = translate_flat(ir, AARCH64, &mut |source: &str| {
+        let facts = crate::inline_asm_facts("arm64").expect("arm64 takes inline asm");
+        let out = translate_flat(ir, facts, &mut |source: &str| {
             seen.push_str(source);
             Ok(vec![0x20, 0x08, 0xc2, 0x9a])
         });

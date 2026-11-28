@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/vastart.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/vastart.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/vastart.rs sha256:4126b1e6cea9b85b809f285791b26523170a2aa73c67a1da9fb83be49cd61d3e -->
+<!-- src: crates/opt/llrm-transforms/src/vastart.rs sha256:60a57700c8173850280c0f5694765db73810483fdf20b7aa771a1801dd412d8f -->
 
 # vastart
 
@@ -18,10 +18,10 @@ instruction (m68k: `Tti::va_arg_slot`), it is the load, the load of the
 value, the step by its size and the store the selector's `expandVAArg`
 makes, written here so the list slot has no user SROA cannot see through.
 
-DEVIATE VASTART-PROMOTE (owner x86-m32, exit 2026-11-27; users: x86-m32, m68k with `va_arg_slot` = 4): the pin lowers
-the intrinsics in selection only. Off unless
-`Tuning::promote_va_list`. Exit: the target states `va_list` as a value
-the pin's mem2reg understands, or the pin does.
+DEVIATE VASTART-PROMOTE (owner x86-m32, exit 2026-11-27; users: x86-m32,
+m68k with `va_arg_slot` = 4): the pin lowers the intrinsics in selection
+only. Off unless `Tuning::promote_va_list`. Exit: the target states
+`va_list` as a value the pin's mem2reg understands, or the pin does.
 
 ## Example
 ```text

@@ -138,6 +138,32 @@ pub fn hidden(module: &mut Module) -> Result<(), String> {
     Ok(())
 }
 
+/// The call target that stands for `info` on `signature`, made if the module
+/// has none: the name's `t{n}` is the first that no other signature holds.
+pub fn hidden_callee(
+    module: &mut Module,
+    info: AtomicInfo,
+    signature: TypeId,
+) -> Result<Operand, String> {
+    let mut n = 0;
+    let callee = loop {
+        let name = name_of(info, n);
+        match module.named(&name) {
+            None => break module.add_function(&name, signature, Linkage::External)?,
+            Some(id)
+                if matches!(
+                    &module.globals[id.0 as usize].kind,
+                    GlobalKind::Function(f) if f.ty == signature
+                ) =>
+            {
+                break id;
+            }
+            Some(_) => n += 1,
+        }
+    };
+    Ok(Operand::Constant(module.reference(callee)))
+}
+
 /// The inverse of [`hidden`]: every call of a `llrm.atomic.*` function is the
 /// atomic instruction again. For printing a module the pin's `llc` reads.
 pub fn restored(module: &mut Module) -> Result<(), String> {
@@ -183,6 +209,7 @@ pub fn lowered(
     tso: bool,
     locked: bool,
     rmw: bool,
+    cas: bool,
 ) -> Result<(), String> {
     let mut found: Vec<(usize, InstId, AtomicInfo)> = Vec::new();
     let mut kept = vec![false; module.globals.len()];
@@ -215,6 +242,12 @@ pub fn lowered(
         let exchange = matches!(info.kind, AtomicKind::Rmw(RmwOp::Xchg))
             || (info.kind == AtomicKind::Store && info.ordering == AtomicOrdering::SeqCst);
         if locked && exchange {
+            kept[callee] = true;
+            continue;
+        }
+        // `cas`: a target with a compare-and-swap instruction and no other
+        // read-modify-write (a 68020's `cas`)
+        if cas && matches!(info.kind, AtomicKind::CmpXchg { .. }) {
             kept[callee] = true;
             continue;
         }
@@ -464,8 +497,8 @@ fn libcall(
 }
 
 /// The `__sync_*` function the pin's M68k selects for a read-modify-write or a
-/// compare-exchange of `bytes` below a 68020 (`ATOMIC_LOAD_*`, `ATOMIC_SWAP` and
-/// `ATOMIC_CMP_SWAP` are `LibCall`): `T __sync_fetch_and_OP_N(ptr, T)`, `T
+/// compare-exchange of `bytes` below a 68020 (`ATOMIC_LOAD_*`, `ATOMIC_SWAP`
+/// and `ATOMIC_CMP_SWAP` are `LibCall`): `T __sync_fetch_and_OP_N(ptr, T)`, `T
 /// __sync_lock_test_and_set_N(ptr, T)`, `T __sync_val_compare_and_swap_N(ptr,
 /// expected, new)`; each returns the old value.
 fn sync_name(
@@ -485,13 +518,15 @@ fn sync_name(
 
 /// Every read-modify-write and compare-exchange of at most `native` bits
 /// `hidden` made calls of, as the `__sync_*` call a target with no such
-/// instruction makes of it; run before [`lowered`]. A compare-exchange's
+/// instruction makes of it (`cas`: the compare-exchange it has an instruction
+/// for is left); run before [`lowered`]. A compare-exchange's
 /// `{ T, i1 }` is the old value and whether it was the expected one. The
 /// operations the runtime has no `__sync_` function for (`max`, `min`, `umax`,
 /// `umin`) are refused.
 pub fn sync_libcalled(
     module: &mut Module,
     native: u32,
+    cas: bool,
 ) -> Result<(), String> {
     let mut found: Vec<(usize, InstId, AtomicInfo)> = Vec::new();
     for (at, global) in module.globals.iter().enumerate() {
@@ -499,7 +534,8 @@ pub fn sync_libcalled(
         for (_, inst) in function.walk() {
             let Some(callee) = crate::memory::callee(&module.context, function, inst) else { continue };
             if let Some(info) = module.globals[callee.0 as usize].name.as_deref().and_then(decode)
-                && matches!(info.kind, AtomicKind::Rmw(_) | AtomicKind::CmpXchg { .. })
+                && (matches!(info.kind, AtomicKind::Rmw(_))
+                    || (!cas && matches!(info.kind, AtomicKind::CmpXchg { .. })))
             {
                 found.push((at, inst, info));
             }
@@ -512,7 +548,10 @@ pub fn sync_libcalled(
         let value = function.operand_type(&module.context, operands[1]).ok_or("an operand has a type")?;
         let Some(bits) = module.context.types.int_bits(value).filter(|&bits| bits <= native) else { continue };
         let name = sync_name(info, bits / 8).ok_or_else(|| {
-            format!("`{}` is not lowered for this target: AtomicExpandPass's compare-exchange loop is not translated", kind_name(info.kind))
+            format!(
+                "`{}` is not lowered for this target: AtomicExpandPass's compare-exchange loop is not translated",
+                kind_name(info.kind)
+            )
         })?;
         let pointer = module.context.types.ptr(0);
         let parameters = if matches!(info.kind, AtomicKind::CmpXchg { .. }) {
@@ -520,8 +559,7 @@ pub fn sync_libcalled(
         } else {
             vec![pointer, value]
         };
-        let signature =
-            module.context.types.intern(Type::Function { returns: value, parameters, variadic: false });
+        let signature = module.context.types.intern(Type::Function { returns: value, parameters, variadic: false });
         let callee = match module.named(&name) {
             Some(id) => id,
             None => module.add_function(&name, signature, Linkage::External)?,
@@ -529,7 +567,9 @@ pub fn sync_libcalled(
         let reference = module.reference(callee);
         let flag = module.context.types.int(1);
         let poison = Operand::Constant(
-            module.context.constant(crate::context::Constant { ty: call.ty, kind: crate::context::ConstantKind::Poison }),
+            module
+                .context
+                .constant(crate::context::Constant { ty: call.ty, kind: crate::context::ConstantKind::Poison }),
         );
         let GlobalKind::Function(function) = &mut module.globals[at].kind else { continue };
         let place = crate::edit::Position::Before(inst);
@@ -586,9 +626,11 @@ pub fn sync_libcalled(
     Ok(())
 }
 
-/// Every load and store `hidden` made calls of, of at most `native` bits and of any ordering, as the plain volatile
-/// access: a target whose selector has one pattern for `atomic_load_N` and `atomic_store_N` whatever the ordering
-/// (M68kInstrAtomics.td: a single in-order bus, `move`). Run before [`lowered`], which refuses the ordered ones.
+/// Every load and store `hidden` made calls of, of at most `native` bits and of
+/// any ordering, as the plain volatile access: a target whose selector has one
+/// pattern for `atomic_load_N` and `atomic_store_N` whatever the ordering
+/// (M68kInstrAtomics.td: a single in-order bus, `move`). Run before
+/// [`lowered`], which refuses the ordered ones.
 pub fn ordered_accesses_plain(
     module: &mut Module,
     native: u32,
@@ -614,10 +656,16 @@ pub fn ordered_accesses_plain(
         };
         // a pointer or a float is as wide as the layout says
         let bits = accessed.and_then(|ty| {
-            module.context.types.int_bits(ty).or_else(|| {
-                let layout = crate::datalayout::DataLayout::parse(module.datalayout.as_deref()?).ok()?;
-                u32::try_from(layout.size_bits(&module.context.types, ty)).ok()
-            })
+            module
+                .context
+                .types
+                .int_bits(ty)
+                .or_else(
+                    || {
+                        let layout = crate::datalayout::DataLayout::parse(module.datalayout.as_deref()?).ok()?;
+                        u32::try_from(layout.size_bits(&module.context.types, ty)).ok()
+                    },
+                )
         });
         if bits.is_none_or(|bits| bits > native) {
             continue;
@@ -651,7 +699,8 @@ pub fn generic_accesses_plain(
     module: &mut Module,
     native: u32,
 ) -> Result<(), String> {
-    let Some(layout) = module.datalayout.as_deref().and_then(|text| crate::datalayout::DataLayout::parse(text).ok()) else {
+    let Some(layout) = module.datalayout.as_deref().and_then(|text| crate::datalayout::DataLayout::parse(text).ok())
+    else {
         return Ok(());
     };
     let mut found: Vec<(usize, InstId, bool, u32)> = Vec::new();
@@ -671,9 +720,10 @@ pub fn generic_accesses_plain(
             if operands.len() != 5 || !matches!(bits, 8 | 16 | 32) || bits > native {
                 continue;
             }
-            // the access the selector would make of any `iN` load: the address must be as aligned as the layout's
-            // ABI alignment of `iN` (an odd address is an address error on a 68000), and a pointer whose alignment
-            // is not known keeps the call
+            // the access the selector would make of any `iN` load: the address
+            // must be as aligned as the layout's ABI alignment of
+            // `iN` (an odd address is an address error on a 68000), and a
+            // pointer whose alignment is not known keeps the call
             let needed = layout.align(&module.context.types, module.context.types.int(bits));
             let pointer = |at: usize| operands[at];
             if known_alignment(module, function, pointer(1), &layout) < needed
@@ -702,8 +752,9 @@ pub fn generic_accesses_plain(
     Ok(())
 }
 
-/// The alignment `generic_accesses_plain` can prove of `pointer`: a global variable's, or a local's; 0 for any other
-/// pointer (a parameter, a pointer loaded or stepped).
+/// The alignment `generic_accesses_plain` can prove of `pointer`: a global
+/// variable's, or a local's; 0 for any other pointer (a parameter, a pointer
+/// loaded or stepped).
 fn known_alignment(
     module: &Module,
     function: &crate::module::Function,

@@ -271,9 +271,10 @@ pub fn pin_signed_division16_image() -> u64 {
         .expect("pin.division16 has a signed image")
 }
 
-/// Whether the speed routines in `image` (the routines a module links) include a
-/// signed 16-bit division and link no more than the pin does for it. The
-/// unsigned kind is not admitted here (k_itoa -Os 200 -> 325 B, over sdcc's 288).
+/// Whether the speed routines in `image` (the routines a module links) include
+/// a signed 16-bit division and link no more than the pin does for it. The
+/// unsigned kind is not admitted here (k_itoa -Os 200 -> 325 B, over sdcc's
+/// 288).
 pub fn within_pin_division16_image(image: &std::collections::BTreeSet<String>) -> bool {
     let signed = ["__divhi3", "__modhi3", "__divmodhi4"].iter().any(|one| image.contains(*one));
     signed && crate::mulimage::image_bytes(image) as u64 <= pin_signed_division16_image()

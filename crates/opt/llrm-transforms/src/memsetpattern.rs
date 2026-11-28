@@ -147,7 +147,8 @@ fn expand(
             };
             function.insert(entry, Position::End(pre)).map_err(|why| why.to_string())?;
             let phi_type = if stepping { pointer_type } else { length_type };
-            let phi = function.create_instruction(Opcode::Phi, phi_type, Vec::new(), Flags::default(), Some("loop-index"));
+            let phi =
+                function.create_instruction(Opcode::Phi, phi_type, Vec::new(), Flags::default(), Some("loop-index"));
             let index = Operand::Value(function.instruction(phi).result.ok_or("a phi result")?);
             let address = function.create_instruction(
                 Opcode::GetElementPtr { source: element },
@@ -201,7 +202,8 @@ fn expand(
                 Flags::default(),
                 None,
             );
-            let body: &[_] = if stepping { &[phi, store, next, again, back] } else { &[phi, address, store, next, again, back] };
+            let body: &[_] =
+                if stepping { &[phi, store, next, again, back] } else { &[phi, address, store, next, again, back] };
             for &inst in body {
                 function.insert(inst, Position::End(main)).map_err(|why| why.to_string())?;
             }

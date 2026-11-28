@@ -57,13 +57,20 @@ impl<P: Fn(i64, i64) -> Option<f64>> EdgeProbabilities for Bpi<'_, P> {
 /// that does not.
 fn has_sink_edge(function: &Function) -> bool {
     let sink = |block: &BlockId| {
-        function.terminator(*block).is_some_and(|last| function.instruction(last).opcode == llrm_mir::opcode::Opcode::Unreachable)
+        function
+            .terminator(*block)
+            .is_some_and(|last| function.instruction(last).opcode == llrm_mir::opcode::Opcode::Unreachable)
     };
-    function.layout().iter().any(|&block| {
-        let children = function.children(block);
-        let sinks = children.iter().filter(|one| sink(one)).count();
-        sinks != 0 && sinks != children.len()
-    })
+    function
+        .layout()
+        .iter()
+        .any(
+            |&block| {
+                let children = function.children(block);
+                let sinks = children.iter().filter(|one| sink(one)).count();
+                sinks != 0 && sinks != children.len()
+            },
+        )
 }
 
 /// Edge probabilities in which a successor that ends in `unreachable` has none
@@ -198,9 +205,8 @@ impl BlockFrequencies {
         let sink_free = has_sink_edge(function).then(|| {
             let edges = WithoutSinks { function, inner: bpi.edges(function) };
             let bfi = BlockFrequencyInfo::calculate(function, &edges, &ci);
-            let freqs = (0..function.block_capacity() as u32)
-                .map(|b| bfi.get_block_freq(BlockId(b)).get_frequency())
-                .collect();
+            let freqs =
+                (0..function.block_capacity() as u32).map(|b| bfi.get_block_freq(BlockId(b)).get_frequency()).collect();
             (freqs, if function.entry().is_some() { bfi.get_entry_freq().get_frequency() } else { 0 })
         });
         Self { freqs, entry, sink_free }
@@ -225,7 +231,9 @@ impl BlockFrequencies {
         block: BlockId,
     ) -> f64 {
         match &self.sink_free {
-            Some((freqs, entry)) if *entry > 0 => freqs.get(block.0 as usize).copied().unwrap_or(0) as f64 / *entry as f64,
+            Some((freqs, entry)) if *entry > 0 => {
+                freqs.get(block.0 as usize).copied().unwrap_or(0) as f64 / *entry as f64
+            }
             _ => self.relative_to_entry(block),
         }
     }

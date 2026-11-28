@@ -5,7 +5,7 @@
 use llrm_mir::passes::PassManager;
 
 use super::LoopClosedSSA;
-use crate::testing::{closed, f, parsed, printed, results};
+use crate::testing::{closed, parsed, printed, results};
 
 /// A counted loop whose carried value is read after it.
 pub const LOOP_WITH_EXIT_USE: &str = "define i16 @f(i16 %seed, i16 %n) {

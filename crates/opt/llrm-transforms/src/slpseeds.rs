@@ -49,7 +49,6 @@
 //! %q0 = extractelement <2 x i64> %v, i64 0 ...
 //! ```
 
-use llrm_analysis::memory::Unit as MemUnit;
 use llrm_mir::blockorder::reverse_post_order_traversal;
 use llrm_mir::context::{ConstantKind, Context};
 use llrm_mir::datalayout::DataLayout;

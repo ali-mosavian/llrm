@@ -60,7 +60,9 @@ pub fn copied_masks_as_extensions(
     for block in &mut function.blocks {
         let mut at = 0;
         while at + 1 < block.insts.len() {
-            let (Kind::Copy, [Operand::Def(copy), Operand::Use(source)]) = (block.insts[at].kind, &block.insts[at].operands[..]) else {
+            let (Kind::Copy, [Operand::Def(copy), Operand::Use(source)]) =
+                (block.insts[at].kind, &block.insts[at].operands[..])
+            else {
                 at += 1;
                 continue;
             };
@@ -149,7 +151,9 @@ pub fn narrow_logic_immediates(
             let word = i64::from(value as u32 & 0xFFFF);
             // `and.w #0` is `clr.w`: 2 B for 4, 4 clk for 8, the same codes
             if ones && word == 0 {
-                if let (Some(clear), Some(low)) = (local::code_of("CLR16dd").and_then(local::desc), REGISTER_INFO.view(register(&def), 16)) {
+                if let (Some(clear), Some(low)) =
+                    (local::code_of("CLR16dd").and_then(local::desc), REGISTER_INFO.view(register(&def), 16))
+                {
                     block.insts[at] = op_inst("CLR16dd", clear, vec![Operand::Def(Reg::Phys(low))]);
                     continue;
                 }
@@ -265,8 +269,9 @@ pub fn merge_logic_immediates(
                     next = Some((later, bits_b, b, sets_b));
                     break;
                 }
-                // A row that only sets the codes is passed: the second row sets them again
-                // (and `flags_read_after` guards a second that does not).
+                // A row that only sets the codes is passed: the second row sets
+                // them again (and `flags_read_after` guards a
+                // second that does not).
                 if mentions(inst, root) || inst.reads_flags() || inst.call || inst.terminator {
                     break;
                 }

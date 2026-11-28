@@ -37,7 +37,8 @@
 //! no operand bundles, so no `dereferenceable` bundle keeps a sink away);
 //! `isEHPad` is `landingpad` (MIR has no funclet pads); debug records are not
 //! moved (MIR has none); a float is not sunk to a block that only ends the
-//! function where the target has an x87 stack (`floats_across_blocks`, DEVIATE SINK-X87).
+//! function where the target has an x87 stack (`floats_across_blocks`, DEVIATE
+//! SINK-X87).
 //!
 //! # Example
 //! `%x` is read only in `b1`, whose only predecessor is `b0`:
