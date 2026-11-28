@@ -1250,7 +1250,7 @@ fn items_once(
     counted(|runs| runs.allocations += 1);
     let allocating = llrm_support::debug::span("m68k allocate");
     let a6_for_calls = options.short && options.call_targets && crate::calltarget::pays(&function, cpu);
-    let (assignment, slots) = if std::env::var_os("LLRM_M68K_SPIKE").is_some() {
+    let (assignment, slots) = if llrm_support::env_set("LLRM_M68K_SPIKE") {
         crate::regalloc::allocate_spilling_by_frequency(&mut function, first_slot)?
     } else {
         crate::spillfold::scoped(options.spill_fold, || {

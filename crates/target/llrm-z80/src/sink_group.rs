@@ -79,7 +79,7 @@ fn sink_one(function: &mut MFunction) -> bool {
             }
             let dominated = dominated_by(function, &next, s);
             let Some(group) = closed_group(function, b, &dominated, &defs, &uses) else { continue };
-            if std::env::var_os("LLRM_Z80_SINK_WHY").is_some() {
+            if llrm_support::env_set("LLRM_Z80_SINK_WHY") {
                 eprintln!(
                     "sink: bb{} -> bb{}: {:?}",
                     function.blocks[b].id,

@@ -51,7 +51,7 @@ const CONST_LIMIT: usize = 10;
 /// `LLRM_Z80_UPDATE_WHY`: one line a candidate access, merged or why not (the
 /// premise count).
 fn why_enabled() -> bool {
-    std::env::var_os("LLRM_Z80_UPDATE_WHY").is_some()
+    llrm_support::env_set("LLRM_Z80_UPDATE_WHY")
 }
 
 /// Why an access is not merged: not a candidate at all, or a candidate the

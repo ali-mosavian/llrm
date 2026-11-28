@@ -4635,7 +4635,7 @@ fn emit_with<const STACK: bool>(
     }
     keep_carry_in_c(&mut function);
     // `LLRM_6502_NO_LICM` is the kill switch, for an A/B of one binary
-    if std::env::var_os("LLRM_6502_NO_LICM").is_none() {
+    if !llrm_support::env_set("LLRM_6502_NO_LICM") {
         crate::licm::hoist(&mut function);
     }
     let sunk = sink && machine_sink_in_place::<Mos<STACK>>(&mut function);
@@ -5523,7 +5523,7 @@ fn emit_with<const STACK: bool>(
         }
         starts[b].push(out.lines.len());
     }
-    if std::env::var_os("LLRM_6502_CHECK_FLAGS").is_some() {
+    if llrm_support::env_set("LLRM_6502_CHECK_FLAGS") {
         crate::flagcheck::verify(&function, &starts, &out.lines)?;
     }
     let slots: Vec<(String, usize)> =
@@ -5788,7 +5788,7 @@ fn with_lines(
 /// Whether `LLRM_6502_SPIKE` asks for the spike graph-colouring allocator, to
 /// measure against.
 fn spike_asked() -> bool {
-    SPIKE.with(|one| one.get()) || std::env::var_os("LLRM_6502_SPIKE").is_some()
+    SPIKE.with(|one| one.get()) || llrm_support::env_set("LLRM_6502_SPIKE")
 }
 
 /// `f` with the spike allocator doing the allocation: the tests of its spill
@@ -5897,7 +5897,7 @@ fn allocate_greedy<T: Target<Class = Class>>(
             }
         }
     }
-    if std::env::var_os("LLRM_6502_CHECK").is_some() {
+    if llrm_support::env_set("LLRM_6502_CHECK") {
         llrm_spike_mf::regalloc::GraphColoring::<T>::by_frequency(false).check(function, &assignment)?;
     }
     Ok((assignment, slots))

@@ -142,7 +142,7 @@ fn convert(f: &Function) -> MFunction<Class> {
 
 /// Joins the copies of `f`; the number of values it joined.
 pub fn coalesce(f: &mut Function) -> usize {
-    if std::env::var_os("LLRM_WASM_MIR").is_some() {
+    if llrm_support::env_set("LLRM_WASM_MIR") {
         eprintln!("{}", dump(f));
     }
     let machine = convert(f);
@@ -150,7 +150,7 @@ pub fn coalesce(f: &mut Function) -> usize {
     let mut converted = match to_lir::<WasmLocals>(&machine, registers) {
         Ok(converted) => converted,
         Err(why) => {
-            if std::env::var_os("LLRM_WASM_COALESCE_DEBUG").is_some() {
+            if llrm_support::env_set("LLRM_WASM_COALESCE_DEBUG") {
                 eprintln!("{}: not converted: {why}", f.name);
             }
             return 0;
@@ -204,7 +204,7 @@ pub fn coalesce(f: &mut Function) -> usize {
                 ))
         });
     }
-    if std::env::var_os("LLRM_WASM_MIR").is_some() {
+    if llrm_support::env_set("LLRM_WASM_MIR") {
         eprintln!("after:\n{}", dump(f));
     }
     joined
