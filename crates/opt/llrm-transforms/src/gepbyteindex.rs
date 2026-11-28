@@ -160,7 +160,7 @@ fn rewrite(
     };
     let i8 = context.types.int(8);
     let width = context.types.int_bits(candidate.index).expect("an integer index");
-    let mut make = |function: &mut Function, opcode, ty, operands: Vec<Operand>, flags| {
+    let make = |function: &mut Function, opcode, ty, operands: Vec<Operand>, flags| {
         let inst = function.create_instruction(opcode, ty, operands, flags, None);
         function.insert(inst, Position::Before(gep)).expect("a position before the address");
         Operand::Value(function.instruction(inst).result.expect("a value"))

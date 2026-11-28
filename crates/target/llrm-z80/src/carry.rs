@@ -149,13 +149,6 @@ struct Found {
     chained: Option<usize>,
 }
 
-fn virt(operand: &Operand) -> Option<u32> {
-    match operand {
-        Operand::Def(Reg::Virt(v)) | Operand::Use(Reg::Virt(v)) => Some(*v),
-        _ => None,
-    }
-}
-
 fn defines(
     inst: &Inst,
     register: Reg,

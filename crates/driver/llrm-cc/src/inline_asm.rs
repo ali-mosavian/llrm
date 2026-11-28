@@ -256,9 +256,9 @@ enum Place {
     Register(String, String),
     /// An address register the pointer argument is passed in.
     Memory(String),
-    /// A constant the block's text carries (`i`, `n`, `I`..`O`, `e`, `Z`), at
-    /// the width of its type: no register, no argument of the call.
-    Immediate(i128, u32),
+    /// A constant the block's text carries (`i`, `n`, `I`..`O`, `e`, `Z`),
+    /// signed at the width of its type: no register, no argument of the call.
+    Immediate(i128),
 }
 
 /// An integer literal operand `ty value` as (its zero-extended value, its
@@ -465,7 +465,7 @@ fn flat_block(
             match integer_constant(&argument.0, &argument.1) {
                 Some((value, width)) if letters.iter().any(|letter| (immediates.fits)(*letter, value, width)) => {
                     next_argument += 1;
-                    operands.push((item, Some(Place::Immediate(immediate_value(value, width), width))));
+                    operands.push((item, Some(Place::Immediate(immediate_value(value, width)))));
                     continue;
                 }
                 _ => {
@@ -622,7 +622,7 @@ fn flat_block(
                 return Err(format!("asm: operand modifier {modifier} is not carried"));
             }
             source.push_str(&match (place, intel) {
-                (Place::Immediate(value, _), _) => match modifier.as_deref() {
+                (Place::Immediate(value), _) => match modifier.as_deref() {
                     Some("c" | "P") => value.to_string(),
                     Some("n") => (-value).to_string(),
                     Some(other) => return Err(format!("asm: operand modifier {other} is not carried")),

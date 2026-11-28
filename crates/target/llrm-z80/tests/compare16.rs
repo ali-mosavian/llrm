@@ -3,7 +3,6 @@
 use std::process::Command;
 
 fn assembly(
-    name: &str,
     ir: &str,
 ) -> String {
     let guard = tempfile::tempdir().unwrap();
@@ -28,7 +27,6 @@ fn assembly(
 #[test]
 fn two_words_are_compared_for_equality_with_sbc_hl() {
     let text = assembly(
-        "ne",
         "declare void @f()\n\
          define void @g(i16 %a, i16 %b) {\n  %c = icmp ne i16 %a, %b\n  br i1 %c, label %t, label %e\n\
          t:\n  call void @f()\n  ret void\n\
@@ -56,7 +54,6 @@ fn a_biased_copy_the_compare_no_longer_reads_is_not_loaded() {
 #[test]
 fn a_word_compared_with_a_constant_of_a_zero_low_byte_tests_the_high_byte_only() {
     let text = assembly(
-        "low_zero",
         "declare void @f()\n\
          define void @g(i16 %a) {\n  %c = icmp slt i16 %a, 256\n  br i1 %c, label %t, label %e\n\
          t:\n  call void @f()\n  ret void\n\
@@ -73,7 +70,6 @@ fn a_word_compared_with_a_constant_of_a_zero_low_byte_tests_the_high_byte_only()
 fn an_equality_test_steps_a_byte_by_one_instead_of_subtracting_it() {
     let one = |constant: &str| {
         assembly(
-            "step",
             &format!(
                 "declare void @f()\n\
                  define void @g(i16 %a) {{\n  %c = icmp eq i16 %a, {constant}\n  br i1 %c, label %t, label %e\n\

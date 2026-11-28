@@ -7,7 +7,6 @@ const HEAD: &str = "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64
 /// The driver's stderr; the compile must exit
 /// 1 and write no object.
 fn refusal(
-    tag: &str,
     body: &str,
 ) -> String {
     let scratch = tempfile::tempdir().unwrap();
@@ -30,7 +29,6 @@ fn refusal(
 #[test]
 fn an_object_aligned_past_the_stack_is_refused() {
     let why = refusal(
-        "static",
         "define i64 @f() \"frame-pointer\"=\"all\" {\n  %a = alloca [64 x i8], align 64\n  store i8 1, ptr %a\n  %i = ptrtoint ptr %a to i64\n  ret i64 %i\n}\n",
     );
     assert!(why.contains("aligned to 64 needs stack realignment"), "{why}");
@@ -39,7 +37,6 @@ fn an_object_aligned_past_the_stack_is_refused() {
 #[test]
 fn a_dynamic_object_aligned_past_the_stack_is_refused() {
     let why = refusal(
-        "dynamic",
         "define i64 @f(i64 %n) \"frame-pointer\"=\"all\" {\n  %a = alloca i8, i64 %n, align 64\n  store i8 1, ptr %a\n  %i = ptrtoint ptr %a to i64\n  ret i64 %i\n}\n",
     );
     assert!(why.contains("aligned to 64 needs stack realignment"), "{why}");

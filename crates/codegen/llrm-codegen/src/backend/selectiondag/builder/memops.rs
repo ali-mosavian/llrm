@@ -81,7 +81,6 @@ use super::super::mvt::{EVT, MVT};
 use super::super::target_calling::TargetCalling;
 use super::LoweringNodes;
 use super::{Builder, Refused, convention_for};
-use crate::backend::isel::Convention;
 use crate::backend::memcpycall::inline_widths;
 
 /// `X86Subtarget::getMaxInlineSizeThreshold`.

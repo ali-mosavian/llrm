@@ -9,13 +9,6 @@ use std::process::Command;
 /// bench/mandel's kernel: three multiplies a trip.
 const SOURCE: &str = "long f(long cx, long cy)\n{\n    long x = 0, y = 0;\n    short i;\n    for (i = 0; i < 32; ++i) {\n        long xx = (x * x) >> 8;\n        long yy = (y * y) >> 8;\n        if (xx + yy > 1024) break;\n        y = ((x * y) >> 7) + cy;\n        x = xx - yy + cx;\n    }\n    return i;\n}\n";
 
-fn asm(
-    level: &str,
-    tag: &str,
-) -> String {
-    asm_of(SOURCE, level, tag)
-}
-
 fn asm_of(
     source: &str,
     level: &str,

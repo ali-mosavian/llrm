@@ -1207,7 +1207,7 @@ fn items_once(
     let (mut function, mut touched) =
         prefixes.late.get_or((selection, format!("{:?}", before_late_stage(options))), || {
             counted(|runs| runs.late += 1);
-            let (mut function, mut touched) = (function, touched);
+            let (mut function, touched) = (function, touched);
             machine_sink(&mut function);
             // The pin's second `DeadMachineInstructionElim`, after sinking and
             // before PHI elimination: what they left unread.

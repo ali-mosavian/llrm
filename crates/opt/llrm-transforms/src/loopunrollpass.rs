@@ -408,9 +408,6 @@ impl UnrollCostEstimator {
 struct EstimatedUnrollCost {
     unrolled_cost: u32,
     rolled_dynamic_cost: u32,
-    /// PL6: what the first iteration's instructions cost once counted (those a
-    /// later iteration or a side effect needs), zero where not priced.
-    first_iteration: u32,
     /// The bytes of the instructions the copies keep (the analysis folds the
     /// rest): the unit costs above are SizeAndLatency, and a call is about 8 of
     /// them and 8 bytes.
@@ -418,11 +415,6 @@ struct EstimatedUnrollCost {
     /// A call was priced through (`through_calls`): the pin's analysis would
     /// have given up.
     through_call: bool,
-    /// The multiplies and divides of one rolled trip, and of the first trip
-    /// once counted: what the entry values make cheaper there is the peel's
-    /// gain.
-    heavy_rolled: u32,
-    heavy_first: u32,
     /// PL6: the clocks the first trip's multiplies and divides lose to its
     /// entry values (folded away, or priced by a constant operand).
     heavy_folded: u32,
@@ -623,11 +615,8 @@ fn analyze_loop_unroll_cost(
     let kind = if run.options.min_size { CostKind::CodeSize } else { CostKind::SizeAndLatency };
     let mut simplified_values = IdMap::<llrm_mir::module::ValueId, Operand>::new();
     let mut unrolled_cost = Cost::FREE;
-    let mut first_iteration = Cost::FREE;
     let mut unrolled_bytes = 0_i64;
     let mut through_call = false;
-    let mut heavy_rolled = Cost::FREE;
-    let mut heavy_first = Cost::FREE;
     let mut heavy_folded = 0_i64;
     let mut rolled_dynamic_cost = Cost::FREE;
     let mut rolled_of = llrm_support::hash::HashMap::<InstId, Cost>::default();
@@ -697,17 +686,8 @@ fn analyze_loop_unroll_cost(
                 }
 
                 // Track this instruction's expected baseline cost when
-                // executing the rolled loop form.
-                if is_heavy(&run.function.instruction(inst).opcode) {
-                    heavy_rolled = heavy_rolled
-                        + clocks
-                            .and_then(|costs| {
-                                simplified_clocks(run, inst, &run.function.instruction(inst).operands, costs)
-                            })
-                            .map_or(Cost::FREE, Cost::of);
-                }
-                // the same instruction costs the same in every trip: priced
-                // once
+                // executing the rolled loop form; the same instruction costs
+                // the same in every trip: priced once.
                 let rolled = *rolled_of.entry(inst).or_insert_with(|| {
                     ROLLED_PRICED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                     clocks
@@ -813,9 +793,7 @@ fn analyze_loop_unroll_cost(
                         &simplified_values,
                         &mut inst_cost_map,
                         &mut unrolled_cost,
-                        &mut first_iteration,
                         &mut unrolled_bytes,
-                        &mut heavy_first,
                         kind,
                         clocks,
                         inst,
@@ -912,9 +890,7 @@ fn analyze_loop_unroll_cost(
                 &simplified_values,
                 &mut inst_cost_map,
                 &mut unrolled_cost,
-                &mut first_iteration,
                 &mut unrolled_bytes,
-                &mut heavy_first,
                 kind,
                 clocks,
                 terminator,
@@ -948,9 +924,7 @@ fn analyze_loop_unroll_cost(
                     &simplified_values,
                     &mut inst_cost_map,
                     &mut unrolled_cost,
-                    &mut first_iteration,
                     &mut unrolled_bytes,
-                    &mut heavy_first,
                     kind,
                     clocks,
                     def,
@@ -965,11 +939,8 @@ fn analyze_loop_unroll_cost(
     Some(EstimatedUnrollCost {
         unrolled_cost: unrolled_cost.value as u32,
         rolled_dynamic_cost: rolled_dynamic_cost.value as u32,
-        first_iteration: first_iteration.value as u32,
         unrolled_bytes,
         through_call,
-        heavy_rolled: heavy_rolled.value as u32,
-        heavy_first: heavy_first.value as u32,
         heavy_folded: heavy_folded as u32,
     })
 }
@@ -1014,9 +985,7 @@ fn add_cost_recursively(
     simplified_values: &IdMap<llrm_mir::module::ValueId, Operand>,
     inst_cost_map: &mut llrm_support::hash::HashMap<(InstId, u32), InstState>,
     unrolled_cost: &mut Cost,
-    first_iteration: &mut Cost,
     unrolled_bytes: &mut i64,
-    heavy_first: &mut Cost,
     kind: CostKind,
     clocks: Option<&llrm_mir::target::OperationCosts>,
     root: InstId,
@@ -1100,12 +1069,6 @@ fn add_cost_recursively(
                     *unrolled_bytes +=
                         crate::profit::operation(run.context, run.layout, run.function, run.callees, inst, &size)
                             .unwrap_or(size.add);
-                }
-                if iteration == 0 {
-                    *first_iteration = *first_iteration + price;
-                    if is_heavy(&operation.opcode) {
-                        *heavy_first = *heavy_first + price;
-                    }
                 }
             }
 
@@ -2249,11 +2212,9 @@ fn try_to_unroll_loop(
         remade = Some(Analyzed::of(run));
     }
     let runtime = remade.is_some();
-    let (analyzed, lp) = match &remade {
-        Some(analyzed) => {
-            (analyzed, analyzed.loops.get_loop_for(header).expect("the loop is still headed by its block"))
-        }
-        None => (analyzed, lp),
+    let lp = match &remade {
+        Some(analyzed) => analyzed.loops.get_loop_for(header).expect("the loop is still headed by its block"),
+        None => lp,
     };
 
     why(

@@ -1012,7 +1012,7 @@ fn emit_vector_comparison(
     vt: EVT,
 ) -> Option<SDValue> {
     use super::lowering::cc;
-    let mut compare = |dag: &mut SelectionDAG, opcode: u16, a: SDValue, b: SDValue| {
+    let compare = |dag: &mut SelectionDAG, opcode: u16, a: SDValue, b: SDValue| {
         Some(dag.get_node(ISD::Target(opcode), vt, &[a, b]))
     };
     match code {

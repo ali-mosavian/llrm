@@ -114,7 +114,7 @@ use llrm_mir::blockfrequency::BranchProbability;
 use crate::backend::liveness;
 use crate::liveness::blockfrequency::{Graph, MachineBlockFrequencyInfo, MachineBranchProbabilityInfo};
 use crate::liveness::cfg::{Cfg, DomTree};
-use crate::model::ir::{Held, Imm, Loc, Operation};
+use crate::model::ir::{Imm, Loc, Operation};
 use crate::model::lir::{Block, Insn, LirBody};
 use crate::model::passes::LIRTransform;
 use crate::support::hash::{HashMap, HashSet, IndexMap};
@@ -262,16 +262,8 @@ pub(crate) fn ordered_access(one: &Insn) -> bool {
 
 /// `TII->isAsCheapAsAMove`: a copy or a move of a constant, the constant as
 /// the target judges it (`Target::cheap_move_immediate`; x86's refuses the
-/// `movabs`, AArch64's a constant of more than two instructions).
-pub(crate) fn as_cheap_as_a_move(
-    one: &Insn,
-    cheap_immediate: fn(u8, i64) -> bool,
-) -> bool {
-    as_cheap_as_a_move_named(one, cheap_immediate, |_| false)
-}
-
-/// [`as_cheap_as_a_move`] with the rows a target flags `isAsCheapAsAMove`
-/// besides its moves (`Target::cheap_move_rows`: M68k's `SWAP`).
+/// `movabs`, AArch64's a constant of more than two instructions), and the rows
+/// a target flags besides its moves (`Target::cheap_move_rows`: M68k's `SWAP`).
 pub(crate) fn as_cheap_as_a_move_named(
     one: &Insn,
     cheap_immediate: fn(u8, i64) -> bool,
@@ -2299,7 +2291,7 @@ mod tests {
         assert_eq!(moved.blocks.len(), 3);
     }
 
-    /// `as_cheap_as_a_move` asked x86's rule of every target: `movabs` was
+    /// `isAsCheapAsAMove` asked x86's rule of every target: `movabs` was
     /// never cheap, so AArch64's `movz x0, #1, lsl #32` (one instruction)
     /// was split out at any probability. The target's rule decides now.
     #[test]
@@ -2316,9 +2308,9 @@ mod tests {
             )
         };
         let one_move = wide(0x1_0000_0000);
-        assert!(!as_cheap_as_a_move(&one_move, llrm_target::x86_cheap_move_immediate), "x86: a movabs");
-        assert!(as_cheap_as_a_move(&one_move, |_, _| true), "a target whose constant is one instruction");
-        assert!(as_cheap_as_a_move(&wide(7), llrm_target::x86_cheap_move_immediate));
+        assert!(!as_cheap_as_a_move_named(&one_move, llrm_target::x86_cheap_move_immediate, |_| false), "x86: a movabs");
+        assert!(as_cheap_as_a_move_named(&one_move, |_, _| true, |_| false), "a target whose constant is one instruction");
+        assert!(as_cheap_as_a_move_named(&wide(7), llrm_target::x86_cheap_move_immediate, |_| false));
     }
 
     /// The sink asked a graph of the body for its frequencies, another for its

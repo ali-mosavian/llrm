@@ -22,7 +22,7 @@
 
 use llrm_mir::dense::IdMap;
 use llrm_mir::module::ValueDef;
-use llrm_mir::target::{OperationCosts, Throughput};
+use llrm_mir::target::Throughput;
 
 use super::*;
 use crate::loopidioms::{counted, trip_clocks};
@@ -72,14 +72,6 @@ pub(super) fn trip(
         })
         .collect();
     Trip { load, chain: chain(run, blocks, tp) }
-}
-
-/// What `operation` of each of `costs` fields a loop's control and folded work remove: `pick` reads the one operation.
-pub(super) fn per_resource(
-    tp: &Throughput,
-    pick: &dyn Fn(&OperationCosts) -> i64,
-) -> Vec<i64> {
-    tp.resources.iter().map(|resource| pick(&resource.costs)).collect()
 }
 
 /// The critical path of one trip: `computeLoopCosts` over two iterations, a value's cost the instruction's latency
@@ -139,7 +131,7 @@ pub(super) fn saved(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use llrm_mir::target::Resource;
+    use llrm_mir::target::{OperationCosts, Resource};
 
     fn model() -> Throughput {
         let costs = OperationCosts::default();

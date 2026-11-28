@@ -41,7 +41,7 @@ use std::sync::Arc;
 use llrm_lir::registers::{RegId, Regs};
 
 use crate::backend::classes::RegisterClasses;
-use crate::backend::genericdriver::{RegionPolicy, Scheduler, ZonePressure};
+use crate::backend::genericdriver::{Scheduler, ZonePressure};
 use crate::backend::genericsched::Reason;
 use crate::backend::liveness;
 use crate::backend::liverows::{LiveAt, live_rows};
@@ -1483,7 +1483,7 @@ mod tests {
     use std::sync::Arc;
 
     use super::{graph, regions};
-    use crate::backend::schedmodel::{GenericModel, SchedulingModel};
+    use crate::backend::schedmodel::GenericModel;
     use crate::model::ir::{Held, Loc, Mem, Operation, Semantics};
     use crate::model::lir::Insn;
 

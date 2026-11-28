@@ -218,7 +218,7 @@ pub fn expand_is_fp_class(
     let result_inversion_mask = dag.get_constant(inversion_mask, result_vt);
 
     let mut res: Option<SDValue> = None;
-    let mut append_result = |dag: &mut SelectionDAG, partial: SDValue, res: &mut Option<SDValue>| {
+    let append_result = |dag: &mut SelectionDAG, partial: SDValue, res: &mut Option<SDValue>| {
         *res = Some(match *res {
             Some(previous) => dag.get_node(ISD::Or, result_vt, &[previous, partial]),
             None => partial,

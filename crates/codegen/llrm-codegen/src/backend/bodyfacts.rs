@@ -284,17 +284,14 @@ pub(crate) fn _stable_loads_from(
     result
 }
 
-/// The blocks of a body by address, and each one's predecessors.
-pub(crate) struct Flow<'a> {
-    predecessors: IndexMap<i64, Vec<i64>>,
-    blocks: IndexMap<i64, &'a Block>,
-    /// The same by position in `body.blocks`.
+/// Each block's predecessors, by position in `body.blocks`.
+pub(crate) struct Flow {
     parents: Vec<Vec<usize>>,
     entry: usize,
 }
 
-impl<'a> Flow<'a> {
-    pub(crate) fn of(body: &'a LirBody) -> Self {
+impl Flow {
+    pub(crate) fn of(body: &LirBody) -> Self {
         let predecessors = _predecessors(body);
         let blocks: IndexMap<i64, &Block> = body.blocks.iter().map(|block| (block.at, block)).collect();
         let parents = body
@@ -303,7 +300,7 @@ impl<'a> Flow<'a> {
             .map(|block| predecessors[&block.at].iter().filter_map(|at| blocks.get_index_of(at)).collect())
             .collect();
         let entry = blocks.get_index_of(&body.entry).unwrap_or(0);
-        Self { predecessors, blocks, parents, entry }
+        Self { parents, entry }
     }
 }
 

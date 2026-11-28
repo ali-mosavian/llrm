@@ -24,7 +24,7 @@
 //! # Used by
 //! `combine` (its `visit_call`, the `llvm.abs` intrinsic).
 
-use llrm_mir::module::{InstId, Operand};
+use llrm_mir::module::InstId;
 use llrm_mir::opcode::{BinaryOp, CastOp, Flags, Opcode};
 use llrm_mir::valuetracking::pattern;
 

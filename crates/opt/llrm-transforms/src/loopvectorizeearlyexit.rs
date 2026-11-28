@@ -97,14 +97,6 @@ enum Step {
     ICmp { inst: InstId, predicate: IntPredicate, operand_element: TypeId, operands: [Source; 2] },
 }
 
-impl Step {
-    fn inst(&self) -> InstId {
-        match self {
-            Step::Load { inst, .. } | Step::Binary { inst, .. } | Step::ICmp { inst, .. } => *inst,
-        }
-    }
-}
-
 /// The loop of several blocks and what the vector loop and the blocks around
 /// it are made of.
 #[derive(Clone, Debug)]

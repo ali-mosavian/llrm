@@ -26,7 +26,7 @@ use llrm_codegen::backend::selectiondag::{SDValue, SelectionDAG};
 use llrm_dagisel::generated::aarch64::ids::isd as a64;
 
 use super::lowering::{
-    cc, cond_const, cond_of, emit_comparison, emit_fcmp, fp_cc, int_cc, is_cmn, is_equality, signed_constant,
+    cc, cond_const, cond_of, emit_comparison, fp_cc, int_cc, is_cmn, is_equality, signed_constant,
 };
 
 /// What `canEmitConjunction` reports about a subtree.

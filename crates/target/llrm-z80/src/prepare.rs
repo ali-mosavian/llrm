@@ -282,7 +282,7 @@ pub fn mark_word_chains(module: &mut Module) {
             if crate::dagisel::pipeline::pin_decomposes(c) {
                 continue;
             }
-            let Some((_, (bytes, _), (call, _))) = crate::dagisel::pipeline::word_chain(c as i64, true, false, true)
+            let Some((_, (bytes, _), (call, _))) = crate::dagisel::pipeline::word_chain(c as i64, true, true)
             else {
                 return;
             };

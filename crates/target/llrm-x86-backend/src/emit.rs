@@ -160,18 +160,9 @@ struct Select {
     result: u32,
 }
 
-/// The LIR blocks for `units` of `dag`, in order: one, plus the three a
-/// `select` without `cmov` makes.
-pub fn emit(
-    dag: &SelectionDAG,
-    units: &[Unit],
-    ctx: &EmitContext<'_>,
-) -> Result<Emitted, EmitError> {
-    emit_in(dag, units, ctx, &mut EmitState::default(), 0)
-}
-
-/// [`emit`] for one MIR block of a function: values and addresses continue
-/// from `state`, and the first block made is at `first_at`.
+/// The LIR blocks for `units` of `dag` in one MIR block of a function, in
+/// order: one, plus the three a `select` without `cmov` makes. Values and
+/// addresses continue from `state`, and the first block made is at `first_at`.
 pub fn emit_in(
     dag: &SelectionDAG,
     units: &[Unit],

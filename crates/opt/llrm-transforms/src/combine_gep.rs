@@ -288,7 +288,7 @@ impl Combiner<'_> {
 
     /// `emitGEPOffset` of a `GEPOperator`: the offset of `gep`, an
     /// instruction's view or a constant expression's, computed before `at`.
-    pub fn emit_gep_offset_of(
+    pub(crate) fn emit_gep_offset_of(
         &mut self,
         at: InstId,
         gep: &Gep,

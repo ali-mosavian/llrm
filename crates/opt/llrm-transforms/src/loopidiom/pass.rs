@@ -144,14 +144,6 @@ impl FunctionPass for LoopIdiom {
             unit.function,
             unit.declared.assume_declared(&outer.globals),
         );
-        let env = Env {
-            globals: &outer.globals,
-            metadata: unit.metadata,
-            layout: unit.layout,
-            loops: &loops,
-            tree: &tree,
-            assumptions: &assumptions,
-        };
         let tti = outer.target().tti();
         let mark = unit.function.mark();
         let held = analyses.get::<Scevs>(unit.context, unit.layout, unit.function);

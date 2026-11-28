@@ -400,7 +400,7 @@ fn _basic_segment_classes(
 pub fn _basic_listing(
     procedure: &masm::Procedure,
     number: usize,
-) -> Result<Vec<masm::Item>, String> {
+) -> Result<Vec<masm::Item<'_>>, String> {
     let listing = masm::listing(procedure, number).map_err(|error| error.0)?;
     // Whichever entry the runtime states: B$ENRA, or the checking B$ENRD, which
     // builds the same frame.

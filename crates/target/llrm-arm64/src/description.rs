@@ -14,7 +14,7 @@ use llrm_target::calling::{Calling, Convention};
 use llrm_target::{CostModel, Target};
 
 use crate::machine::{Arm64Machine, Platform};
-use crate::{REGISTER_INFO, reg};
+use crate::REGISTER_INFO;
 
 static CALLING: LazyLock<Calling> =
     LazyLock::new(|| Calling::parse(include_str!("machines/calling.toml")).expect("calling.toml parses"));
@@ -342,6 +342,7 @@ impl Target for Arm64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::reg;
 
     /// The existing data files must read under `llrm_target`'s schemas, or the
     /// shared stages would see a different arm64 than the private driver.

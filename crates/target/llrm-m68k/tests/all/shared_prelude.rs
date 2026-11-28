@@ -82,7 +82,6 @@ fn through(
     let mut body = converted.body.clone();
     let mut stages = Vec::new();
     for phase in phases.iter_mut() {
-        use llrm_codegen::model::passes::LIRTransform;
         body = phase.transform(body).unwrap_or_else(|why| panic!("{} refuses: {why}", phase.class_name()));
         stages.push((phase.class_name(), body.clone()));
         if phase.class_name() == last {

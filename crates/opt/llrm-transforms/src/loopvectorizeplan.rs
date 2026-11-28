@@ -571,14 +571,6 @@ pub(crate) fn cheaper_per_lane(
     new.0 * i64::from(old.1) < old.0 * i64::from(new.1)
 }
 
-/// `expectedCost(VF=1)`: the scalar loop's price.
-pub(crate) fn scalar_loop_cost(
-    tti: &dyn Tti,
-    recipes: &[Recipe],
-) -> i64 {
-    iteration_cost(tti, recipes, 1, false, false).expect("the scalar loop is priced")
-}
-
 /// `isMoreProfitable` (L709) for fixed VFs, the throughput kind: `a` against
 /// `b` by the cost per lane, then, for a known trip count, by the cost of the
 /// whole loop; a tie is not better.

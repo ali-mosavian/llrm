@@ -612,7 +612,7 @@ mod tests {
         for regs in
             [Regs(&llrm_x86_m16::REGISTER_INFO), Regs(&llrm_x86_m32::REGISTER_INFO), Regs(&llrm_x86_m64::REGISTER_INFO)]
         {
-            for (id, entry) in regs.entries().filter(|(_, entry)| entry.classes & llrm_lir::registers::class::INT != 0) {
+            for (id, _) in regs.entries().filter(|(_, entry)| entry.classes & llrm_lir::registers::class::INT != 0) {
                 assert_eq!(regs.bytes(id), Some(id.size() as i64), "{id:?}");
             }
         }

@@ -4609,7 +4609,7 @@ fn lower_mul_v4i32(
 ) -> SDValue {
     let (four, two) = (EVT::Simple(MVT::V4I32), EVT::Simple(MVT::V2I64));
     let (a, b) = (dag.operand(node, 0), dag.operand(node, 1));
-    let mut shuffle = |dag: &mut SelectionDAG, value: SDValue, order: u128| {
+    let shuffle = |dag: &mut SelectionDAG, value: SDValue, order: u128| {
         let by = dag.get_constant_with(order, EVT::I8, true, false);
         dag.get_node(x86isd::PSHUFD, four, &[value, by])
     };
