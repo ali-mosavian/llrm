@@ -6,6 +6,8 @@
 #   FILE -LEVEL n/a (reason)     the corpus says the program is not for wasm32 (`// targets:`, corpus_targets.py): no cell
 set -u
 D=$1; L=${2#-}; shift 2
+# DIST is the commit LLRM_EXPECT_SHA names, built clean (stamp.py require_named).
+python3 "$(dirname "$0")/../stamp.py" --require-clean sha "$D" || exit 2
 here=$(cd "$(dirname "$0")" && pwd); P=${LLRM_CLANG_WASM:-$HOME/scratch/llvm-build-clang-wasm/bin/clang}
 w=$(mktemp -d); trap 'rm -rf "$w"' EXIT
 code() { wasm-objdump -h "$1" | sed -n 's/.*Code.*size=0x\([0-9a-f]*\).*/\1/p' | while read -r h; do echo $((16#$h)); done; }

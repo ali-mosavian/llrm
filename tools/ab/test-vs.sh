@@ -4,6 +4,8 @@
 # and print n/a for a declared program. Run from the repo root.
 here=$(cd "$(dirname "$0")" && pwd); d=$(mktemp -d); trap 'rm -rf "$d"' EXIT; mkdir -p "$d/dist"
 printf '#!/bin/sh\nexit 1\n' > "$d/dist/llrm-cc"; chmod +x "$d/dist/llrm-cc"
+# A stamped build (stamp.py require_named): the tool refuses a dist whose compilers name no commit.
+printf '#!/bin/sh\necho "llrm-llc aaaa1111"\n' > "$d/dist/llrm-llc"; chmod +x "$d/dist/llrm-llc"; export LLRM_EXPECT_SHA=aaaa1111
 printf '// targets: dos\nint main(void){return 0;}\n' > "$d/dos.c"
 printf 'int main(void){return 0;}\n' > "$d/ok.c"
 out=$(bash "$here/vs.sh" "$d/dist" O2 "$d/dos.c" "$d/ok.c")

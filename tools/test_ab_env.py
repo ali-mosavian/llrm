@@ -6,6 +6,8 @@ import unittest
 
 TOOLS = os.path.dirname(__file__)
 DRIVERS = ["identity.sh", "ab/cells.sh", "wasm_identity.sh", "wasm_corpus.sh", "llc_backend_diff.sh", "llc_check.sh", "cc_check.sh"]
+# The drivers that compare two builds; the others take one.
+AB_DRIVERS = ["identity.sh", "ab/cells.sh", "wasm_identity.sh", "wasm_corpus.sh"]
 
 
 def run(script, **extra):
@@ -21,6 +23,20 @@ class DriversRefuseSwitches(unittest.TestCase):
             done = run(script, LLRM_WASM_BACKEND_ONLY="1")
             self.assertEqual(done.returncode, 2, (script, done.stderr))
             self.assertIn("LLRM_WASM_BACKEND_ONLY", done.stderr, script)
+
+    def test_every_ab_driver_refuses_one_llc_for_both_sides(self):
+        """llrm-cc runs LLRM_LLC instead of the llc beside it: exported over two dists it made both sides one backend, and a wrapper read
+        240 of 240 objects SAME where 231 differ (2026-11-28). cells.sh checked only that the binaries differ, so it would have read
+        "no change" with LLRM_LLC naming the other side's llc."""
+        for script in AB_DRIVERS:
+            done = run(script, LLRM_LLC="/other/side/llrm-llc")
+            self.assertEqual(done.returncode, 2, (script, done.stderr))
+            self.assertIn("LLRM_LLC=/other/side/llrm-llc changes the pipeline", done.stderr, script)
+
+    def test_a_one_build_tool_still_takes_the_llc_under_test(self):
+        for script in ("llc_backend_diff.sh", "llc_check.sh", "cc_check.sh"):
+            done = run(script, LLRM_LLC="/one/llrm-llc")
+            self.assertNotIn("changes the pipeline", done.stderr, script)
 
     def test_a_value_with_spaces_is_kept_whole(self):
         done = run("identity.sh", LLRM_NO_COMBINE="a b")

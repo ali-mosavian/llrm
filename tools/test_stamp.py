@@ -81,3 +81,54 @@ def test_an_incremental_build_is_refused_for_a_count_unless_allowed(tmp_path, mo
         stamp.refuse_incremental(warm)
     monkeypatch.setenv("LLRM_ALLOW_INCREMENTAL", "1")
     stamp.refuse_incremental(warm)
+
+
+def dist(tmp_path, name, **stamps):
+    """A dist directory of stub compilers, each printing its stamp."""
+    folder = tmp_path / name
+    folder.mkdir()
+    for binary, line in stamps.items():
+        stub(folder, binary.replace("_", "-"), f"{binary.replace('_', '-')} {line}")
+    return folder
+
+
+def test_a_dist_is_refused_unless_every_compiler_is_the_sha_clean(tmp_path):
+    """ab-rs7 stood for b6541d3901 in every b6541 A/B and was e83149f+dirty: a dist is the sha only when each compiler in it says so."""
+    assert stamp.require_clean(dist(tmp_path, "ok", llrm_llc="aaaa1111", llrm_nib="aaaa1111"), "aaaa1111") == "aaaa1111"
+    with pytest.raises(SystemExit, match="llrm-nib.*with changes"):
+        stamp.require_clean(dist(tmp_path, "dirty", llrm_llc="aaaa1111", llrm_nib="aaaa1111+dirty"), "aaaa1111")
+    with pytest.raises(SystemExit, match="llrm-qb was built from bbbb2222, not aaaa1111"):
+        stamp.require_clean(dist(tmp_path, "other", llrm_llc="aaaa1111", llrm_qb="bbbb2222"), "aaaa1111")
+    with pytest.raises(SystemExit, match="no stamped compiler"):
+        stamp.require_clean(dist(tmp_path, "empty"), "aaaa1111")
+
+
+def test_a_backend_without_a_stamp_counts_only_as_part_of_llrm_llcs_build(tmp_path, capsys):
+    """A tree from before a backend printed a stamp (llrm-6502-llc) was refused outright, so no pre-stamp base could be measured;
+    let through on its own, an old unstamped backend copied into a fresh dist would stand for the sha. It is the sha only when
+    written in llrm-llc's build run, and every figure names it."""
+    fresh = dist(tmp_path, "fresh", llrm_llc="aaaa1111")
+    stub(fresh, "llrm-6502-llc", "")
+    assert stamp.require_clean(fresh, "aaaa1111") == "aaaa1111"
+    assert "unstamped (pre-stamp tree): llrm-6502-llc" in capsys.readouterr().err
+    copied = dist(tmp_path, "copied", llrm_llc="aaaa1111")
+    old = stub(copied, "llrm-6502-llc", "")
+    day_before = (copied / "llrm-llc").stat().st_mtime - 86400
+    os.utime(old, (day_before, day_before))
+    with pytest.raises(SystemExit, match="llrm-6502-llc prints no stamp and is not from llrm-llc's build"):
+        stamp.require_clean(copied, "aaaa1111")
+
+
+def test_identity_refuses_a_dist_that_is_not_the_named_sha(tmp_path):
+    """The identity gate names the commits it compares (LLRM_EXPECT_BASE_SHA, LLRM_EXPECT_SHA) and refuses a dirty build before compiling."""
+    base = dist(tmp_path, "base", llrm_llc="aaaa1111")
+    new = dist(tmp_path, "new", llrm_llc="bbbb2222+dirty")
+    for folder in (base, new):
+        stub(folder, "llrm-cc", f"cc {folder.name}")
+    script = Path(__file__).parent / "identity.sh"
+    env = {**os.environ, "LLRM_EXPECT_BASE_SHA": "aaaa1111", "LLRM_EXPECT_SHA": "bbbb2222", "TMPDIR": str(tmp_path)}
+    done = subprocess.run([str(script), "c", str(base / "llrm-cc"), str(new / "llrm-cc")], env=env, capture_output=True, text=True)
+    assert done.returncode == 2 and "with changes" in done.stderr, done.stdout + done.stderr
+    env.pop("LLRM_EXPECT_SHA")
+    done = subprocess.run([str(script), "c", str(base / "llrm-cc"), str(new / "llrm-cc")], env=env, capture_output=True, text=True)
+    assert done.returncode == 2 and "LLRM_EXPECT_SHA names no commit" in done.stderr, done.stdout + done.stderr
