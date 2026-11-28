@@ -605,7 +605,7 @@ pub fn optimized(
     program
         .modules
         .iter_mut()
-        .try_for_each(|module| llrm_mir::atomic::lowered(module, native, tso, tso, rmw, false))?;
+        .try_for_each(|module| llrm_mir::atomic::lowered(module, native, tso, tso, rmw, false, false))?;
     timed("mir markers", || program.modules.iter_mut().for_each(llrm_transforms::dead::markers_dropped));
     timed("mir ehprepare", || {
         program
