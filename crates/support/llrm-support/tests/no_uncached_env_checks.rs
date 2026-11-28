@@ -13,10 +13,10 @@ fn sources(
         let path = entry.path();
         let name = path.file_name().expect("a name").to_string_lossy().into_owned();
         if path.is_dir() {
-            if !matches!(
-                name.as_str(),
-                "target" | "tests" | "llrm-mir" | "llrm-support"
-            ) {
+            // A build's `target` sits beside a `Cargo.toml`; `crates/target`
+            // holds the targets' sources.
+            let build = name == "target" && dir.join("Cargo.toml").exists();
+            if !build && !matches!(name.as_str(), "tests" | "llrm-mir" | "llrm-support") {
                 sources(&path, out);
             }
         } else if name.ends_with(".rs")
@@ -29,10 +29,23 @@ fn sources(
     }
 }
 
-#[test]
-fn no_switch_is_asked_of_the_environment_by_name_in_a_loop() {
+fn crate_sources() -> Vec<std::path::PathBuf> {
     let mut files = Vec::new();
     sources(&std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../.."), &mut files);
+    files
+}
+
+/// The walk skipped every directory named `target`, so the whole of
+/// `crates/target` went unscanned and 44 uncached switches passed.
+#[test]
+fn the_scan_reaches_the_target_crates() {
+    let driver = std::path::Path::new("target/llrm-6502/src/driver.rs");
+    assert!(crate_sources().iter().any(|path| path.ends_with(driver)));
+}
+
+#[test]
+fn no_switch_is_asked_of_the_environment_by_name_in_a_loop() {
+    let files = crate_sources();
     let found: Vec<String> = files
         .iter()
         .filter(|path| {
