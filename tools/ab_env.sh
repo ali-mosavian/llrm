@@ -3,8 +3,10 @@
 # A switch that changes the pipeline on one side gave a false second cause (LLRM_WASM_BACKEND_ONLY skipped the mid-end).
 # LLRM_DEBUG (unroll, runs, time, counts, checks) and LLRM_MIR_STAGES print only: objects md5-equal with and without, 4 programs, -O2, tip dist 533a91b1b8,
 # 2026-11-05 (stderr 0.5-80 KB and 45-51 stage files, so the var acted). Other LLRM_DEBUG values are not proven.
+# LLRM_LLC is not here: llrm-cc runs it instead of the llc beside it, so an A/B with it exported ran one backend on both sides and read SAME
+# (2026-11-28, a wrapper over two dists: 240 of 240 objects "same" where 231 differ). A tool of one build allows it itself.
 # llrmbin.assert_clean_env reads this list: keep it one quoted line.
-AB_ENV_OK=" LLRM_ARM64_SYSROOT LLRM_BIN LLRM_CC LLRM_CC_DIR LLRM_CC_OPT LLRM_CC_REF_CLANG LLRM_CC_REF_FLAGS LLRM_CC_REF_LINK LLRM_CC_REF_TRIPLE LLRM_CC_RUN LLRM_CC_TARGET LLRM_CLANG_M16 LLRM_CLANG_WASM LLRM_DEBUG LLRM_EXPECT_SHA LLRM_LLC LLRM_MEMORY_LIMIT_KB LLRM_MIR_STAGES LLRM_NO_BUILD LLRM_PIN_BIN LLRM_PIN_CLANG LLRM_PIN_LLC LLRM_TRIPLE "
+AB_ENV_OK=" LLRM_ARM64_SYSROOT LLRM_BIN LLRM_CC LLRM_CC_DIR LLRM_CC_OPT LLRM_CC_REF_CLANG LLRM_CC_REF_FLAGS LLRM_CC_REF_LINK LLRM_CC_REF_TRIPLE LLRM_CC_RUN LLRM_CC_TARGET LLRM_CLANG_M16 LLRM_CLANG_WASM LLRM_DEBUG LLRM_EXPECT_SHA LLRM_MEMORY_LIMIT_KB LLRM_MIR_STAGES LLRM_NO_BUILD LLRM_PIN_BIN LLRM_PIN_CLANG LLRM_PIN_LLC LLRM_TRIPLE "
 
 ab_env_check() {
   _lines=$(env | sort | grep '^LLRM_') || return 0

@@ -4,6 +4,8 @@
 # recipe (DOS) runs its build under it and is checked against the host build of the same file; DOS programs print with
 # `report(long)` set LLRM_CC_DIR to a directory of freestanding programs.
 set -u
+# One build: LLRM_LLC names the llc under test (ab_env.sh refuses it for an A/B).
+AB_ALLOW_ENV="${AB_ALLOW_ENV:-} LLRM_LLC"
 . "$(dirname "$0")/ab_env.sh"; ab_env_check || exit 2
 root=$(cd "$(dirname "$0")/.." && pwd)
 # The segmented DOS/Watcom/Borland rows read `#pragma aux` link names only in the pinned fork clang (toolchain/clang/pin, line 2).
