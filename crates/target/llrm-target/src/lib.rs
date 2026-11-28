@@ -426,6 +426,13 @@ pub trait BuilderArch {
     fn x87_stack_top(&self) -> Option<RegId> {
         None
     }
+    /// [`Target::asm_register`].
+    fn asm_register(
+        &self,
+        name: &str,
+    ) -> inline_asm::AsmRegister {
+        inline_asm::AsmRegister::Register(self.register_named(name))
+    }
 }
 
 impl<T: Target> BuilderArch for T {
@@ -459,6 +466,12 @@ impl<T: Target> BuilderArch for T {
     fn x87_stack_top(&self) -> Option<RegId> {
         Target::x87_stack_top(self)
     }
+    fn asm_register(
+        &self,
+        name: &str,
+    ) -> inline_asm::AsmRegister {
+        Target::asm_register(self, name)
+    }
 }
 
 impl BuilderArch for &dyn Target {
@@ -488,6 +501,12 @@ impl BuilderArch for &dyn Target {
     }
     fn x87_stack_top(&self) -> Option<RegId> {
         Target::x87_stack_top(*self)
+    }
+    fn asm_register(
+        &self,
+        name: &str,
+    ) -> inline_asm::AsmRegister {
+        Target::asm_register(*self, name)
     }
     fn full(&self) -> Option<&dyn Target> {
         Some(*self)
@@ -780,6 +799,15 @@ pub trait Target {
     /// `FP0`), where the target has an x87 unit.
     fn x87_stack_top(&self) -> Option<RegId> {
         None
+    }
+
+    /// Where a register an inline block names lives: by default the register
+    /// `name` is.
+    fn asm_register(
+        &self,
+        name: &str,
+    ) -> inline_asm::AsmRegister {
+        inline_asm::AsmRegister::Register(self.register_named(name))
     }
 
     /// The target's facts for GCC inline assembly, where it takes it.

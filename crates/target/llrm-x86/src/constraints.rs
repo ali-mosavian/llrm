@@ -1,7 +1,7 @@
 //! What x86 says of GCC inline assembly: clang's `X86TargetInfo` and the
 //! constraint hooks of `X86TargetLowering`.
 
-use llrm_target::inline_asm::{Immediates, InlineAsm, StackPop};
+use llrm_target::inline_asm::{AsmRegister, Immediates, InlineAsm, StackPop};
 
 /// The inline-assembly facts of an x86 target of mode `bits` (16, 32 or 64)
 /// whose register file is `registers`.
@@ -62,5 +62,16 @@ fn immediate_fits(
         b'e' => (i128::from(i32::MIN)..=i128::from(i32::MAX)).contains(&signed),
         b'Z' => zero_extended <= 0xffff_ffff,
         _ => matches!(letter, b'i' | b'n' | b'g'),
+    }
+}
+
+/// `X86TargetLowering::getRegForInlineAsmConstraint`: `{st}` and `{st(1)}` are
+/// `FP0` and `FP1`, which `X86FloatingPoint` makes the stack's top and the
+/// next.
+pub fn asm_register(name: &str) -> AsmRegister {
+    let register = crate::calling::register(name);
+    match crate::select::STACK_REGISTERS.iter().position(|one| *one == register) {
+        Some(depth) => AsmRegister::Stack(depth),
+        None => AsmRegister::Register(register),
     }
 }

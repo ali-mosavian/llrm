@@ -3,6 +3,8 @@
 //! mode, the constants an immediate constraint takes. The translation is the
 //! C driver's; each target crate states one [`InlineAsm`].
 
+use llrm_lir::registers::RegId;
+
 /// A target's facts for GCC inline assembly.
 #[derive(Clone, Debug)]
 pub struct InlineAsm {
@@ -41,4 +43,14 @@ pub struct StackPop {
     pub register: &'static str,
     pub att: &'static str,
     pub intel: &'static str,
+}
+
+/// Where a register an inline block names lives
+/// (`TargetLowering::getRegForInlineAsmConstraint`).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum AsmRegister {
+    Register(RegId),
+    /// A position on the x87 stack, 0 its top: an operand of the block's node,
+    /// an `f80`.
+    Stack(usize),
 }
