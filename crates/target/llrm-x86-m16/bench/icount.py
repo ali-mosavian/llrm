@@ -46,6 +46,9 @@ class Counts:
     # `pad_nops` are the executed ones, read from the bytes (`0E E8 rel16 90`); `clocks` stays raw, `layout_clocks` is it without them.
     pad_nops: int = 0
     pad_clocks: int = 0
+    # Executed operands that cross a dword boundary: the 486 adds 3 clocks to each (i486 data sheet 240440-002, 10.1, assumption 2).
+    # Not in `clocks`, which assumes every access aligned as vsgcc's table does.
+    misaligned: int = 0
 
     @property
     def layout_clocks(self) -> int:
@@ -81,16 +84,34 @@ class Run:
 _NAME = {value: name for name, value in vars(Register).items() if name.isupper() and isinstance(value, int)}  # iced's Register is a module of ints
 
 
-def _segmented(uc, one):
-    """The multiplier of a MUL/IMUL whose operand is memory, read the way real mode addresses it: the effective segment register's base plus the
-    16-bit (or, with an address-size prefix, 32-bit) offset, and the operand's own width (vsgcc's reader takes 4 flat bytes of a 32-bit form)."""
+def _linear(uc, one):
+    """The linear address of `one`'s memory operand, the way real mode addresses it: the effective segment register's base plus the 16-bit
+    (or, with an address-size prefix, 32-bit) offset."""
     offset = one.memory_displacement
     for register, scale in ((one.memory_base, 1), (one.memory_index, one.memory_index_scale)):
         if register != Register.NONE:
             offset += uc.reg_read(getattr(x86_const, f"UC_X86_REG_{_NAME[register]}")) * scale
     wide = any(RegisterExt.is_gpr32(r) for r in (one.memory_base, one.memory_index))
     segment = uc.reg_read(getattr(x86_const, f"UC_X86_REG_{_NAME[one.memory_segment]}"))
-    return int.from_bytes(bytes(uc.mem_read(segment * 16 + (offset & (0xFFFFFFFF if wide else 0xFFFF)), MemorySizeExt.size(one.memory_size))), "little")
+    return segment * 16 + (offset & (0xFFFFFFFF if wide else 0xFFFF))
+
+
+def _segmented(uc, one):
+    """The multiplier of a MUL/IMUL whose operand is memory, read through its segment (_linear) at the operand's own width (vsgcc's reader
+    takes 4 flat bytes of a 32-bit form)."""
+    return int.from_bytes(bytes(uc.mem_read(_linear(uc, one), MemorySizeExt.size(one.memory_size))), "little")
+
+
+def _misaligned(uc, one) -> bool:
+    """Whether `one`'s explicit memory operand touches more dwords than its size needs: a word split across two, a dword or wider not on a
+    multiple of 4."""
+    if one.mnemonic == Mnemonic.LEA or not any(one.op_kind(at) == OpKind.MEMORY for at in range(one.op_count)):
+        return False
+    size = MemorySizeExt.size(one.memory_size)
+    if size < 2:
+        return False
+    at = _linear(uc, one) % 4
+    return (at + size + 3) // 4 > (size + 3) // 4
 
 
 def _multiplier(multiplier_of, uc, one):
@@ -207,6 +228,8 @@ def run(exe: Path, entry: int | None, cwd: Path, limit: int = LIMIT, watch: set 
         state["before"] = (address, one, memory, factor, prefixes[address])
         counts.instructions += 1
         counts.memory_operands += memory
+        if memory and _misaligned(uc, one):
+            counts.misaligned += 1
         if address in pads:
             counts.pad_nops += 1
             counts.pad_clocks += price(one, False, True, 0, None, prefixes[address])
