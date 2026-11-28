@@ -49,6 +49,9 @@ class Counts:
     # Executed operands that cross a dword boundary: the 486 adds 3 clocks to each (i486 data sheet 240440-002, 10.1, assumption 2).
     # Not in `clocks`, which assumes every access aligned as vsgcc's table does.
     misaligned: int = 0
+    # The same on the P5's 64-bit bus, 3 clocks each too (Pentium Developer's Manual Vol. 3, 24.2.2): a 2- or 4-byte operand across
+    # a 4-byte boundary, an 8-byte one across an 8-byte boundary (p. 3-6); a 10-byte one as its 8 and 2 bytes.
+    misaligned_p5: int = 0
 
     @property
     def layout_clocks(self) -> int:
@@ -102,16 +105,24 @@ def _segmented(uc, one):
     return int.from_bytes(bytes(uc.mem_read(_linear(uc, one), MemorySizeExt.size(one.memory_size))), "little")
 
 
-def _misaligned(uc, one) -> bool:
-    """Whether `one`'s explicit memory operand touches more dwords than its size needs: a word split across two, a dword or wider not on a
-    multiple of 4."""
+def _crosses(at: int, size: int, unit: int) -> bool:
+    """Whether `size` bytes at `at` touch more `unit`-byte units than their size needs."""
+    at %= unit
+    return (at + size + unit - 1) // unit > (size + unit - 1) // unit
+
+
+def _misaligned(uc, one) -> tuple[bool, bool]:
+    """Whether `one`'s explicit memory operand is misaligned on the 486 (more dwords than its size needs) and on the P5 (an 8-byte
+    part across an 8-byte boundary, or what is left of it, under 8 bytes, across a 4-byte one)."""
     if one.mnemonic == Mnemonic.LEA or not any(one.op_kind(at) == OpKind.MEMORY for at in range(one.op_count)):
-        return False
+        return False, False
     size = MemorySizeExt.size(one.memory_size)
     if size < 2:
-        return False
-    at = _linear(uc, one) % 4
-    return (at + size + 3) // 4 > (size + 3) // 4
+        return False, False
+    at = _linear(uc, one)
+    eights, rest = divmod(size, 8)
+    p5 = any(_crosses(at + 8 * part, 8, 8) for part in range(eights)) or (rest > 1 and _crosses(at + 8 * eights, rest, 4))
+    return _crosses(at, size, 4), p5
 
 
 def _multiplier(multiplier_of, uc, one):
@@ -228,8 +239,10 @@ def run(exe: Path, entry: int | None, cwd: Path, limit: int = LIMIT, watch: set 
         state["before"] = (address, one, memory, factor, prefixes[address])
         counts.instructions += 1
         counts.memory_operands += memory
-        if memory and _misaligned(uc, one):
-            counts.misaligned += 1
+        if memory:
+            on486, onp5 = _misaligned(uc, one)
+            counts.misaligned += on486
+            counts.misaligned_p5 += onp5
         if address in pads:
             counts.pad_nops += 1
             counts.pad_clocks += price(one, False, True, 0, None, prefixes[address])

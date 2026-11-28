@@ -332,3 +332,39 @@ class MisalignedTests(unittest.TestCase):
             subprocess.run([str(BIN / "jwlink"), "option", "quiet", "format", "dos", "name", str(directory / "M.EXE"), "file", str(directory / "M.OBJ")], check=True)
             result = icount.run(directory / "M.EXE", None, directory, whole=True)
         self.assertEqual((result.error, result.region.memory_operands, result.region.misaligned), ("", 7, 3))
+
+
+ACROSS_EIGHT = """\
+.model small
+.386
+.387
+.stack 256
+D segment para public 'FAR_DATA'
+buf db 32 dup (0)
+D ends
+.code
+start:
+    mov ax, D
+    mov ds, ax
+    fld qword ptr ds:[buf+4]
+    fld qword ptr ds:[buf+8]
+    mov eax, dword ptr ds:[buf+2]
+    mov ah, 4Ch
+    int 21h
+end start
+"""
+
+
+@unittest.skipUnless((BIN / "jwasm").exists(), "needs jwasm and jwlink beside llrm's binaries (cargo build)")
+class AcrossEightTests(unittest.TestCase):
+    def test_a_double_at_four_mod_eight_is_misaligned_on_the_p5_only(self):
+        """The 486 counter could not price a double at 4 mod 8 on the P5's 64-bit bus, which splits it (Pentium Developer's
+        Manual Vol. 3, p. 3-6: an 8-byte operand that crosses an 8-byte boundary). At +4: 0 on the 486, 1 on the P5; at +8: 0 on both. A
+        dword at +2, m16's word-aligned case, crosses a dword boundary on both."""
+        with tempfile.TemporaryDirectory() as temp:
+            directory = Path(temp)
+            (directory / "E.ASM").write_text(ACROSS_EIGHT)
+            subprocess.run([str(BIN / "jwasm"), "-q", "-c", "-Cp", "-Zg", "-omf", f"-Fo{directory}/E.OBJ", str(directory / "E.ASM")], check=True)
+            subprocess.run([str(BIN / "jwlink"), "option", "quiet", "format", "dos", "name", str(directory / "E.EXE"), "file", str(directory / "E.OBJ")], check=True)
+            result = icount.run(directory / "E.EXE", None, directory, whole=True)
+        self.assertEqual((result.error, result.region.misaligned, result.region.misaligned_p5), ("", 1, 2))
