@@ -99,6 +99,8 @@ def test_a_dist_is_refused_unless_every_compiler_is_the_sha_clean(tmp_path):
         stamp.require_clean(dist(tmp_path, "dirty", llrm_llc="aaaa1111", llrm_nib="aaaa1111+dirty"), "aaaa1111")
     with pytest.raises(SystemExit, match="llrm-qb was built from bbbb2222, not aaaa1111"):
         stamp.require_clean(dist(tmp_path, "other", llrm_llc="aaaa1111", llrm_qb="bbbb2222"), "aaaa1111")
+    with pytest.raises(SystemExit, match="llrm-m68k-llc was built from bbbb2222, not aaaa1111"):
+        stamp.require_clean(dist(tmp_path, "other_llc", llrm_llc="aaaa1111", llrm_m68k_llc="bbbb2222"), "aaaa1111")
     with pytest.raises(SystemExit, match="no stamped compiler"):
         stamp.require_clean(dist(tmp_path, "empty"), "aaaa1111")
 

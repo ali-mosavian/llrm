@@ -1,9 +1,11 @@
-# dist_extra_bins WORKTREE: the binaries a commit builds beyond the four every dist has (llrm-cc, llrm-llc, llrm-arm64-llc), one name per word; older commits have none, and a `--bin` that does not exist fails the build.
+# dist_extra_bins WORKTREE: the binaries a commit builds beyond the four every dist has: llrm-cc, llrm-llc and every backend's llc (llrm-*-llc),
+# one name per word; older commits have fewer, and a `--bin` that does not exist fails the build. A dist without a backend's llc measured that
+# target with whatever llc was beside it, and its `ok` record could not vouch for one (tools/stamp.py same_build).
 dist_extra_bins() {
-  local w=$1 b out=
-  for b in llrm-cc llrm-llc llrm-arm64-llc; do
-    grep -qs "^name = \"$b\"" "$w/Cargo.toml" "$w"/crates/driver/*/Cargo.toml "$w"/crates/driver/*/*/Cargo.toml "$w"/crates/target/*/Cargo.toml && out="$out $b"
-  done
+  local w=$1 out=
+  grep -qs '^name = "llrm-cc"' "$w/Cargo.toml" "$w"/crates/driver/*/Cargo.toml "$w"/crates/driver/*/*/Cargo.toml && out="$out llrm-cc"
+  grep -qs '^name = "llrm-llc"' "$w/Cargo.toml" "$w"/crates/driver/*/Cargo.toml "$w"/crates/driver/*/*/Cargo.toml && out="$out llrm-llc"
+  out="$out $(cat "$w"/crates/target/*/Cargo.toml 2>/dev/null | sed -n 's/^name = "\(llrm-[a-z0-9]*-llc\)"$/\1/p' | sort -u | tr '\n' ' ')"
   echo $out
 }
 

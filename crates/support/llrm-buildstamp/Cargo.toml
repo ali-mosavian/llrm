@@ -1,0 +1,9 @@
+[package]
+name = "llrm-buildstamp"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "The build script half of `--version`: one stamp for every compiler binary"
+
+# A build dependency of every package with a compiler binary: no dependencies.
+[dependencies]

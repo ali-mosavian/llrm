@@ -26,6 +26,16 @@ fn known_switch(switch: &str) -> Result<(), String> {
 static ALLOCATOR: llrm_alloc::Slab = llrm_alloc::Slab;
 
 fn main() {
+    let argv: Vec<String> = std::env::args().skip(1).collect();
+    if llrm_codegen::support::version::asked(
+        &argv,
+        "llrm-6502-llc",
+        env!("LLRM_BUILD_SHA"),
+        env!("LLRM_BUILD_DIRTY"),
+        env!("LLRM_BUILD_INCREMENTAL"),
+    ) {
+        return;
+    }
     // The mid-end recurses along dependency chains: run on a thread with room.
     let worker = std::thread::Builder::new().stack_size(1 << 30).spawn(run).expect("a thread");
     std::process::exit(worker.join().unwrap_or(101));

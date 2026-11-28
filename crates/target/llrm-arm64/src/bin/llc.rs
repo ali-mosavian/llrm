@@ -14,6 +14,16 @@ use llrm_arm64::driver;
 static ALLOCATOR: llrm_alloc::Slab = llrm_alloc::Slab;
 
 fn main() {
+    let argv: Vec<String> = std::env::args().skip(1).collect();
+    if llrm_codegen::support::version::asked(
+        &argv,
+        "llrm-arm64-llc",
+        env!("LLRM_BUILD_SHA"),
+        env!("LLRM_BUILD_DIRTY"),
+        env!("LLRM_BUILD_INCREMENTAL"),
+    ) {
+        return;
+    }
     // The mid-end recurses along dependency chains (a 3,000-line function
     // overflowed the main thread's 8 MB): the compile runs on a thread with
     // room.

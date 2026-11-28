@@ -33,6 +33,18 @@ pub fn asked(
     asked
 }
 
+/// A test's check that `binary` answers `--version` with `name` and the commit its package was built from (`sha`, the
+/// package's `LLRM_BUILD_SHA`). A backend whose llc printed nothing could not be told from another build's in a dist.
+pub fn assert_answers(
+    binary: &str,
+    name: &str,
+    sha: &str,
+) {
+    let out = std::process::Command::new(binary).arg("--version").output().expect("the binary runs");
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(out.status.success() && text.starts_with(&format!("{name} {sha}")), "{binary} --version: {text:?} {}", String::from_utf8_lossy(&out.stderr));
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

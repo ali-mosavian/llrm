@@ -25,6 +25,7 @@ llrm-cgen = { workspace = true }
 tempfile = { workspace = true }
 
 [build-dependencies]
+llrm-buildstamp = { workspace = true }
 llrm-target = { workspace = true }
 llrm-lir = { workspace = true }
 
