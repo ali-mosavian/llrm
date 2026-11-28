@@ -818,9 +818,16 @@ def test_interval_and_total_perf_files_are_counted_alike():
     assert ps.instructions_of("<not counted>,,instructions:u,0,0.00,,\n") is None
 
 
-def test_a_cut_unit_step_says_what_cut_it(monkeypatch):
-    """Both unit steps of the 6a73 smoke read "no ranking yet, cut at 3.0 s": they were cut at their instruction share (llrm-m68k's whole lib is 6.4 G)."""
-    monkeypatch.setattr(ps, "run_cut", lambda *a, **k: (None, ""))
+def test_a_cut_unit_step_says_what_cut_it_and_how_far_it_got_not_ok(monkeypatch):
+    """Both unit steps of the 6a73 smoke read "ok ... no ranking yet, cut at 3.0 s": they were cut at their instruction share (llrm-m68k's whole lib is 6.4 G) and
+    "ok" hid that most of their tests never ran."""
+    monkeypatch.setattr(ps, "run_cut", lambda *a, **k: (None, "\nrunning 40 tests\n..........\n"))
     monkeypatch.setattr(ps, "unit_tests", lambda *a: ["a::b"])
     verdict, detail = ps.unit_step("llrm-m68k", 3.0)(Path("."), 3_000_000_000)[:2]
-    assert verdict == "ok" and "3.0 G" in detail and "no ranking" not in detail, detail
+    assert verdict == "cut" and "cut at 3.0 G (10/40 tests ran), none failed" in detail, (verdict, detail)
+
+
+def test_a_cut_unit_step_with_a_failure_before_the_cut_fails(monkeypatch):
+    monkeypatch.setattr(ps, "run_cut", lambda *a, **k: (None, "\nrunning 40 tests\n....F.\n"))
+    monkeypatch.setattr(ps, "unit_tests", lambda *a: ["a::b"])
+    assert ps.unit_step("llrm-m68k", 3.0)(Path("."), 3_000_000_000)[0] == "fail"

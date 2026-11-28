@@ -162,20 +162,22 @@ def run_cut(
                         raise
                     last = now
     except subprocess.TimeoutExpired:
+        out = ""
         for sig in (signal.SIGINT, signal.SIGKILL):
             try:
                 os.killpg(child.pid, sig)
             except ProcessLookupError:  # it ended between the timeout and the signal
                 break
             try:
-                child.communicate(timeout=CUT_GRACE if sig == signal.SIGINT else None)
+                out, _ = child.communicate(timeout=CUT_GRACE if sig == signal.SIGINT else None)
                 break
             except subprocess.TimeoutExpired:
                 continue
         _charged[0] += seconds
         if interval:
             interval.unlink(missing_ok=True)
-        return None, ""
+        # what it printed before the cut: how far it got
+        return None, out or ""
     if interval:
         interval.unlink(missing_ok=True)
     return child.returncode, out
@@ -841,6 +843,18 @@ def run_cases(bins: Path) -> tuple[str, str]:
     return "ok", f"{len(names)} programs"
 
 
+def cut_progress(output: str) -> tuple[int, int | None, bool]:
+    """(tests that ran, tests it was to run, whether one failed) of a `cargo test -q` cut before it ended: `running N tests` and a character per finished test."""
+    total, ran, failed = None, 0, False
+    for line in output.splitlines():
+        if match := re.match(r"running (\d+) tests?$", line.strip()):
+            total = (total or 0) + int(match.group(1))
+        elif line and set(line.strip()) <= set(".Fi") and line.strip():
+            ran += len(line.strip())
+            failed |= "F" in line
+    return ran, total, failed
+
+
 def unit_step(package: str, allowance: float):
     def step(bins: Path, instructions: int | None = None) -> tuple[str, str]:
         ranking = selection().get("units", {})
@@ -850,8 +864,11 @@ def unit_step(package: str, allowance: float):
         env = None if names else {**os.environ, "RUST_TEST_THREADS": "1"}
         code, output = run_cut(slotted(command), allowance + CARGO_OVERHEAD, ROOT, env=env, instructions=instructions)
         if code is None:
-            limit = f"{instructions / 1e9:.1f} G, its share" if instructions is not None else f"{allowance:.1f} s"
-            return "ok", f"{package}: {len(names) or 'all'} tests{'' if names else ' (no ranking yet)'}, cut at {limit}, without a failure before it"
+            limit = f"{instructions / 1e9:.1f} G" if instructions is not None else f"{allowance:.1f} s"
+            ran, total, failed_before = cut_progress(output)
+            if failed_before:
+                return "fail", f"{package}: a test failed before the cut at {limit}"
+            return "cut", f"{package}: cut at {limit} ({ran}/{total if total is not None else '?'} tests ran), none failed{'' if names else ' (no ranking yet)'}"
         listed = xfail.load_for(ROOT)
         failed = {f"unit {package}::{test}" for test in failed_tests(output)}
         ran = {f"unit {package}::{name}" for name in names} if names else {one for one in listed if one.startswith(f"unit {package}::")}
