@@ -706,10 +706,7 @@ impl super::splitkit::SplitEnv for BodySplitEnv<'_> {
             at,
             covers,
             defines: vec![to],
-            what: Some(Semantics {
-                dests: vec![Loc::Held(Held { value: to, width: defined.width, offset: 0 })],
-                ..what
-            }),
+            what: Some(super::remat::remade(&what, to)),
             spill_reload: true,
             rematerialized: true,
             ..def.clone()

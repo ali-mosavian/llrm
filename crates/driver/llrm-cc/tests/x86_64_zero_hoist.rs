@@ -3,22 +3,30 @@
 //! trivially rematerializable instruction. MachineLICM took no xmm value on
 //! that path, so `widen` zeroed a register on every trip, and with the zero
 //! exported to a phi (WSZ-CG) mem_length_boundaries_m32 spilled its loop
-//! accumulators (+86 B). Needs `LLRM_LLC`.
+//! accumulators (+86 B).
+
+#[path = "common/target_dir.rs"]
+mod target_dir;
 
 use std::path::Path;
 use std::process::Command;
 
-fn assembly(source: &str) -> String {
-    let llc = std::env::var_os("LLRM_LLC").expect("LLRM_LLC is not set: this test needs it and does not skip");
-    let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("zero-hoist-{}", std::process::id()));
+fn assembly(
+    source: &Path,
+    level: &str,
+) -> String {
+    let llc = target_dir::llc(&Path::new(env!("CARGO_MANIFEST_DIR")).join("../../.."));
+    // Tests run in parallel: a directory of its own for each source.
+    let stem = source.file_stem().and_then(|stem| stem.to_str()).unwrap_or("source");
+    let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("zero-hoist-{}-{stem}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let asm = dir.join("a.s");
     let run = Command::new(env!("CARGO_BIN_EXE_llrm-cc-bin"))
         .env("LLRM_CC_TARGET", "x86_64-linux")
         .env("LLRM_LLC", llc)
-        .args(["-O2", "-w", "-S", "-o"])
+        .args([level, "-w", "-S", "-o"])
         .arg(&asm)
-        .arg(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/c").join(source))
+        .arg(source)
         .output()
         .unwrap();
     assert!(run.status.success(), "{}", String::from_utf8_lossy(&run.stderr));
@@ -36,8 +44,20 @@ fn loop_body(text: &str) -> Vec<&str> {
 
 #[test]
 fn the_zero_a_loop_unpacks_against_is_made_before_it() {
-    let text = assembly("widen_bytes.c");
+    let text = assembly(&Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/c/widen_bytes.c"), "-O2");
     let body = loop_body(&text);
     assert!(body.iter().any(|line| line.starts_with("punpcklbw")), "premise: the loop unpacks: {body:?}");
     assert!(!body.iter().any(|line| line.starts_with("xorps")), "zeroed on every trip: {body:?}");
+}
+
+/// A hoisted zero that must live across a call is made again after it
+/// (`remat_shape` has the zero idiom). It was spilled and reloaded instead:
+/// pattern_fill -O1 `main` +3 B, int64_divmod_edges -Os +20 B.
+#[test]
+fn a_hoisted_zero_is_made_again_after_a_call_not_spilled() {
+    let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../tests/run/c/pattern_fill.c");
+    let text = assembly(&source, "-O1");
+    assert!(text.contains("xorps") && text.contains("call"), "premise: a zero and a call");
+    let spills: Vec<&str> = text.lines().filter(|line| line.contains("xmmword ptr [rsp")).collect();
+    assert!(spills.is_empty(), "a zero spilled: {spills:?}");
 }
