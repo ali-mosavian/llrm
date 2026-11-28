@@ -216,7 +216,7 @@ fn effective_level(
                 Request { level: Level::Os, optsize_only: true, ..request.clone() },
             ];
             let sizes: Vec<Result<u32, String>> = candidates.iter().map(|one| module_bytes(ir, one)).collect();
-            if std::env::var_os("LLRM_DEBUG_BESTOF").is_some() {
+            if llrm_support::env_set("LLRM_DEBUG_BESTOF") {
                 eprintln!("best-of oz, os, os without minsize: {sizes:?}");
             }
             let mut best = 0;
@@ -268,7 +268,7 @@ pub fn effective(
     } else {
         let other = Request { refuse_loop_copies: true, ..base.clone() };
         let sizes = (module_priced(ir, &base), module_priced(ir, &other));
-        if std::env::var_os("LLRM_DEBUG_LOOP_COPIES").is_some() {
+        if llrm_support::env_set("LLRM_DEBUG_LOOP_COPIES") {
             eprintln!("loop copies {copies}: with {:?}, refused {:?}", sizes.0, sizes.1);
         }
         let chosen = match sizes {
@@ -313,7 +313,7 @@ fn lsr_choice(
     }
     let other = Request { lsr_alternate: true, ..request.clone() };
     let prices = (module_priced(ir, &request), module_priced(ir, &other));
-    if std::env::var_os("LLRM_DEBUG_LSR_KEY").is_some() {
+    if llrm_support::env_set("LLRM_DEBUG_LSR_KEY") {
         eprintln!("lsr key: {} loops differ, held {:?}, alternate {:?}", decisions.lsr_orders, prices.0, prices.1);
     }
     let chosen = match prices {
@@ -375,7 +375,7 @@ fn unroll_choice(
         // a variant whose mid-end leaves the module as it is gives the same
         // object: not selected again
         let price = crate::driver::with_unroll_base(fingerprint, || module_priced(ir, &other));
-        if std::env::var_os("LLRM_DEBUG_UNROLL").is_some() && price.is_err() {
+        if llrm_support::env_set("LLRM_DEBUG_UNROLL") && price.is_err() {
             eprintln!("unroll {variant:?}: {price:?}");
         }
         // the policy's refusal alone leaks where the SZ2 trial inlined growth
@@ -385,7 +385,7 @@ fn unroll_choice(
             variants.push(SpeedUnroll::NoInlineGrowthAll);
         }
         let Ok(price) = price else { continue };
-        if std::env::var_os("LLRM_DEBUG_UNROLL").is_some() {
+        if llrm_support::env_set("LLRM_DEBUG_UNROLL") {
             eprintln!("unroll {variant:?}: {price:?}, held {:?}", best.0);
         }
         // an unswitch that buys clocks is kept even where the module is
@@ -1690,7 +1690,7 @@ fn allocate_once_with(
     level: Level,
     want_apart: bool,
 ) -> Result<(Allocated, bool, Option<Allocated>), String> {
-    if std::env::var_os("LLRM_NO_Z80_MEMO").is_some() {
+    if llrm_support::env_set("LLRM_NO_Z80_MEMO") {
         return allocate_once_computed(function, name, strict, level, want_apart);
     }
     let key = allocation_key(&function, name, strict, level, want_apart);
@@ -2226,7 +2226,7 @@ fn settle(
         let mut candidate = if nest { nested.clone() } else { function.clone() };
         let report = stack_slot_report_by(&mut candidate, &assignment, peek, by_conflicts);
         if peek && !by_conflicts && !nest {
-            if std::env::var_os("LLRM_Z80_STACK_WHY").is_some() {
+            if llrm_support::env_set("LLRM_Z80_STACK_WHY") {
                 for (slot, (stores, loads)) in &report.accesses {
                     let verdict = match report.refused.iter().find(|(one, _)| one == slot) {
                         Some((_, why)) => format!("refused {why:?}"),
@@ -2250,7 +2250,7 @@ fn settle(
         }
         let stacked = (candidate, assignment.clone(), slots, reads.clone(), frequencies.clone());
         let now = priced_in_loops(&stacked, level);
-        if std::env::var_os("LLRM_Z80_STACK_PRICE").is_some() {
+        if llrm_support::env_set("LLRM_Z80_STACK_PRICE") {
             eprintln!(
                 "stack-price {name} {level:?} peek {peek} conflicts {by_conflicts} nest {nest} best {best_price:?} stacked {now:?}"
             );

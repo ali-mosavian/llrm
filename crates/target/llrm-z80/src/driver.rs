@@ -195,7 +195,7 @@ pub fn program(
         );
     FINGERPRINT.with(|held| held.set(printed));
     if let (Some(variant), Some(base), Some(now)) = (request.unroll_variant, base, printed) {
-        if std::env::var_os("LLRM_DEBUG_UNROLL").is_some() {
+        if llrm_support::env_set("LLRM_DEBUG_UNROLL") {
             eprintln!("unroll {variant:?}: {} instructions against {}", now.instructions, base.instructions);
         }
         if now.hash == base.hash {

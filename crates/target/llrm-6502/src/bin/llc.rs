@@ -77,7 +77,7 @@ fn run() -> i32 {
         request.platform.zero_page = bytes;
     }
     // the test profile: check every spill-slot sharing, panic on a wrong one
-    if std::env::var_os("LLRM_6502_VERIFY_SLOTS").is_some() {
+    if llrm_support::env_set("LLRM_6502_VERIFY_SLOTS") {
         llrm_spike_mf::spill::VERIFY_SLOTS.store(true, std::sync::atomic::Ordering::Relaxed);
     }
     let Some(input) = input else {

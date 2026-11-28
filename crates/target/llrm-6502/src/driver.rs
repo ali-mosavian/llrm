@@ -243,7 +243,7 @@ fn program(
         let dump = std::env::var_os("LLRM_MIR_STAGES").filter(|one| !one.is_empty()).map(Into::into);
         let mut options = request.level.options();
         options.second_inline = !request.passes.iter().any(|flag| flag == "-fno-second-inline")
-            && std::env::var_os("LLRM_6502_NO_ROUND2").is_none();
+            && !llrm_support::env_set("LLRM_6502_NO_ROUND2");
         for flag in &request.passes {
             apply_pass_flag(&mut options, flag);
         }
@@ -257,7 +257,7 @@ fn program(
     llrm_transforms::pipeline::constrain_allocas(&mut program)?;
     if request.level != Level::O0 {
         let static_locals = !request.passes.iter().any(|flag| flag == "-fno-static-locals")
-            && std::env::var_os("LLRM_6502_NO_STATIC_LOCALS").is_none();
+            && !llrm_support::env_set("LLRM_6502_NO_STATIC_LOCALS");
         if static_locals {
             for module in &mut program.modules {
                 crate::staticlocals::applied(module)?;
@@ -320,7 +320,7 @@ fn save_drop_trial(
     request: &Request,
 ) -> Result<Assembled, String> {
     // a chain the outliner shares needs two sites
-    if drops < 2 || request.level == Level::O0 || std::env::var_os("LLRM_6502_NO_SAVE_TRIAL").is_some() {
+    if drops < 2 || request.level == Level::O0 || llrm_support::env_set("LLRM_6502_NO_SAVE_TRIAL") {
         return Ok(kept);
     }
     let Ok(other) = crate::alloc::with_early_save_drop(false, || tail(kept.source.clone(), request, false, false))
@@ -329,7 +329,7 @@ fn save_drop_trial(
     };
     crate::alloc::take_save_drops();
     let (kept_bytes, other_bytes) = (image_bytes_of(&kept.text, request)?, image_bytes_of(&other.text, request)?);
-    if std::env::var_os("LLRM_DEBUG_TRIAL").is_some() {
+    if llrm_support::env_set("LLRM_DEBUG_TRIAL") {
         eprintln!("trial save drop: {drops} drops; {other_bytes} B after allocation against {kept_bytes} B before");
     }
     Ok(if other_bytes < kept_bytes { other } else { kept })
@@ -366,10 +366,10 @@ fn long_step_trial(
     steps: usize,
     request: &Request,
 ) -> Result<Assembled, String> {
-    if steps == 0 || request.level == Level::O0 || std::env::var_os("LLRM_6502_NO_STEP_TRIAL").is_some() {
+    if steps == 0 || request.level == Level::O0 || llrm_support::env_set("LLRM_6502_NO_STEP_TRIAL") {
         return Ok(kept);
     }
-    let debug = std::env::var_os("LLRM_DEBUG_TRIAL").is_some();
+    let debug = llrm_support::env_set("LLRM_DEBUG_TRIAL");
     let Ok(other) = crate::dagisel::function::with_long_steps(false, || backend_flow(&kept, request)) else {
         return Ok(kept);
     };
@@ -418,11 +418,11 @@ fn speed_unroll_trial(
     let tried = matches!(request.level, Level::O2 | Level::O3)
         && made > 0
         && machine().tti().is_some_and(|tti| tti.unroll_speed_trial())
-        && std::env::var_os("LLRM_6502_NO_SPEED_UNROLL_TRIAL").is_none();
+        && !llrm_support::env_set("LLRM_6502_NO_SPEED_UNROLL_TRIAL");
     if !tried {
         return Ok(kept);
     }
-    let debug = std::env::var_os("LLRM_DEBUG_TRIAL").is_some();
+    let debug = llrm_support::env_set("LLRM_DEBUG_TRIAL");
     let variant = |text: &str| -> Result<Option<Assembled>, String> {
         let built = program(text, request)?;
         if debug {
@@ -489,7 +489,7 @@ fn trial_inlined(
         return Ok((built, Vec::new(), None, false));
     }
     if instructions(&built) > limit {
-        if std::env::var_os("LLRM_DEBUG_TRIAL").is_some() {
+        if llrm_support::env_set("LLRM_DEBUG_TRIAL") {
             eprintln!(
                 "trial inline: skipped, {} sites in {} instructions (limit {limit})",
                 sites.len(),
@@ -499,7 +499,7 @@ fn trial_inlined(
         return Ok((built, Vec::new(), None, false));
     }
     let kept_unroll = trial::take();
-    let debug = std::env::var_os("LLRM_DEBUG_TRIAL").is_some();
+    let debug = llrm_support::env_set("LLRM_DEBUG_TRIAL");
     let chain = |program: &Program,
                  cut: &std::collections::BTreeSet<String>|
      -> Option<std::collections::BTreeMap<String, i64>> {
@@ -587,7 +587,7 @@ fn judged_inlines(
     use llrm_transforms::trial;
     let sites = trial::take_refused();
     let limit = inline_trial_limit(&built);
-    let debug = std::env::var_os("LLRM_DEBUG_TRIAL").is_some();
+    let debug = llrm_support::env_set("LLRM_DEBUG_TRIAL");
     if sites.is_empty() || instructions(&built) > limit {
         if debug && !sites.is_empty() {
             eprintln!("trial inline: skipped, {} sites past {limit} instructions", sites.len());
@@ -954,7 +954,7 @@ fn tail(
     // `llrm-cc` (which does not take the flag)
     let outlined = request.level != Level::O0
         && !request.passes.iter().any(|flag| flag == "-fno-outline")
-        && std::env::var_os("LLRM_6502_NO_OUTLINE").is_none();
+        && !llrm_support::env_set("LLRM_6502_NO_OUTLINE");
     // A place in a loop is given up for its clocks at -O1 and -Os: at -O2 and
     // -O3 that takes div_constants_long and div_constants_ulong out of the
     // bytes that beat the other compilers', and bytes come first (row
@@ -1029,7 +1029,7 @@ fn tail(
     // constants none (tail_calls `framed`: kept at -6 B, then put back at +10 B
     // against a rolled copy 89 B larger once linked).
     // `LLRM_6502_MODEL_BYTES` is the kill switch, for an A/B of one binary
-    if price && std::env::var_os("LLRM_6502_MODEL_BYTES").is_none() {
+    if price && !llrm_support::env_set("LLRM_6502_MODEL_BYTES") {
         if let Ok(finished) = image_bytes_of(&text, request) {
             bytes = finished + data_bytes(&data.0);
         }
@@ -1073,7 +1073,7 @@ fn trial_unrolled(
     if !level_tried || (eligible.is_empty() && !joint) {
         return kept_text(built, assembled);
     }
-    let debug = std::env::var_os("LLRM_DEBUG_TRIAL").is_some();
+    let debug = llrm_support::env_set("LLRM_DEBUG_TRIAL");
     if debug {
         eprintln!("trial candidates: {} functions, {units} units", eligible.len());
     }
@@ -1295,7 +1295,7 @@ fn cheaper(
         Some((priced.cycles, u64::from(priced.bytes) + library))
     };
     let (alt_cost, kept_cost) = (cost(alt_module, alt), cost(module, selected));
-    if std::env::var_os("LLRM_DEBUG_TRIAL").is_some() {
+    if llrm_support::env_set("LLRM_DEBUG_TRIAL") {
         eprintln!("cheaper {name}: alternative (clocks, bytes) {alt_cost:?} against kept {kept_cost:?}");
     }
     Ok(match (alt_cost, kept_cost) {

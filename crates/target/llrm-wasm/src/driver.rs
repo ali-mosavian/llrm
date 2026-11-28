@@ -93,7 +93,7 @@ fn optimized(
     // through it (`LLRM_WASM_IR`) is compared with the pin's `llc` as it
     // stands. A second run is no fixed point (it inlined `gcd` in recgcd
     // -O1).
-    let mut options = if std::env::var_os("LLRM_WASM_BACKEND_ONLY").is_some() {
+    let mut options = if llrm_support::env_set("LLRM_WASM_BACKEND_ONLY") {
         MidEnd::none()
     } else {
         MidEnd { library: c_library(), ..level.mid_end() }
@@ -110,7 +110,7 @@ fn optimized(
     program.modules.iter_mut().try_for_each(llrm_transforms::memsetpattern::expanded)?;
     let module = program.modules.remove(0);
     // `LLRM_WASM_IR=1`: the module the backend gets, on standard error.
-    if std::env::var_os("LLRM_WASM_IR").is_some() {
+    if llrm_support::env_set("LLRM_WASM_IR") {
         eprintln!("{}", llrm_mir::print::module(&module));
     }
     Ok(module)

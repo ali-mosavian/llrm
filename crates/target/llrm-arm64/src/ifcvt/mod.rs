@@ -1208,7 +1208,7 @@ pub fn run(
     let order = dominator_post_order(&cfg);
     let mut converted = 0;
     let mut position = 0;
-    let log = std::env::var_os("LLRM_ARM64_IFCVT_LOG").is_some();
+    let log = llrm_support::env_set("LLRM_ARM64_IFCVT_LOG");
     // The traces live until a conversion changes the body they read.
     'epoch: loop {
         let func = if mode == Mode::Stress { None } else { Some(build_func(function, &cfg, &model)) };
