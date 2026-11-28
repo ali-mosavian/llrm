@@ -34,6 +34,11 @@ use llrm_mir::opcode::{BinaryOp, CastOp, Flags, Opcode};
 /// would be half a register.
 const NARROWEST: u32 = 16;
 
+/// The widest result a chain is narrowed to: an operation whose result fits 16
+/// or 32 bits is done at that width (the module's rule); a wider one keeps the
+/// counter's type.
+const WIDEST: u32 = 32;
+
 /// The lane a chain of `bits` is narrowed to: not under the narrowest access of
 /// the loop, whose vector factor fills the registers with that lane; a narrower
 /// chain is a half-register vector and the conversions to the wide lanes.
@@ -145,7 +150,7 @@ pub(crate) fn narrow_induction_chains(
         .min(wide);
         bits_of.insert(result, bits);
         rooted.insert(result, reads_counter);
-        if reads_counter && bits <= 32 && lane_width(bits, floor) < wide {
+        if reads_counter && bits <= WIDEST && lane_width(bits, floor) < wide {
             members.push(Member { inst, bits });
         } else {
             // Not narrowed: its operands may still be members, which keep the
